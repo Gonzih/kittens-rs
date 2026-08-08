@@ -11,8 +11,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy,rustfmt
           targets: thumbv7em-none-eabi
@@ -26,10 +26,8 @@ jobs:
   rust-1-85:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.85.0
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.85.0
       - run: cargo +1.85.0 check -p kittens --no-default-features --features macros
       - run: cargo +1.85.0 check -p kittens --all-features
       - run: cargo +1.85.0 check -p kittens-renamed-dependency-fixture
