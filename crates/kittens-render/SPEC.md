@@ -1,202 +1,102 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: controlling contract for the first two kittens-render slices only — **K2R-0A** (completion-delivery feasibility gate) and **K2R-0** (adversarial host protocol suite). Board bring-up (K2R-1) and DMA overlap (K2R-2) are explicitly **not specified here**; they are research-gated in [`RESEARCH.md`](RESEARCH.md) section 9 and graduate into this document only with measured evidence, per the external review verdict recorded in RESEARCH section 10.
-- Parent contracts: root [`SPEC.md`](../../SPEC.md) (kernel semantics; section 9.4 profile rules; section 2.1 coverage thesis), [`RESEARCH.md`](RESEARCH.md) revision 2 (this profile's evidence, including the adopted 14-finding external review), [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (the open generic-gate comparison; this profile is its second arm and deliberately does not resolve it).
-- Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 revision — SH8601 display driver, FT3168 capacitive touch, ESP32-S3 LX7 dual-core, 368×448** — schematic facts revision-keyed in RESEARCH section 2 (`LCD_TE` = GPIO13, `TP_INT` = GPIO21). Everything in this spec is written so that this exact board is the first place the stack runs.
-- The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, and **MAY** are normative within this crate's K2R-0A/K2R-0 boundary only; the root spec controls on conflict.
+- Status: revision 2, 2026-08-08. Revision 1 was reviewed by the same external reviewer as the research (Codex `gpt-5.6-sol`, ultra effort): 12 blocking, 5 important, 1 minor finding; verdict — *K2R-0A may start only as a non-freezing feasibility experiment; K2R-0 must not start yet.* This revision adopts that verdict and all findings (disposition log in section 12). The controlling consequence: **section 6 is a provisional candidate surface, not a normative API.** K2R-0A selects and demonstrates the real shapes; this spec is then amended before K2R-0 freezes anything.
+- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
+- Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
+- Normativity: **MUST/SHOULD** language binds only sections 5, 7, 8, 9, 10, and 11 (the experiment design, protocols-as-rules, and gates). Section 6 is explicitly provisional throughout.
 
 ## 1. One-sentence definition
 
-`kittens-render` is the embedded rendering/interaction profile of Kittens: transport capabilities with resource-carrying results (`write_region` blocking, `start_region` owning-async), typestate stripe overlap, epoch-snapshotted frame reconstruction, a generation-latched touch protocol, and frame-demand policy — so that a bare-metal application's display and input pipelines are declared reactor topology in the same vocabulary as its backend, and one frame in flight is *possession*, not a runtime counter.
+`kittens-render` is the embedded rendering/interaction profile of Kittens: transport capabilities with resource-carrying results, epoch-snapshotted full-panel sweeps with a consuming progress token, a generation-latched touch protocol with honest latest-state semantics, and frame-demand policy — so a bare-metal application's display and input pipelines are declared reactor topology in the same vocabulary as its backend.
 
-## 2. Problem statement (condensed; evidence in RESEARCH sections 2–6)
+## 2. Problem statement
 
-On the anchor board: a full RGB565 frame is 329,728 bytes with a ~16.5 ms wire floor at 40 MHz QSPI, so frame pacing, TE phase, and write granularity are correctness concerns, not tuning; the maintained display driver's framebuffer is private, so region streaming requires an explicit transport capability; the HAL's owning-DMA completion future borrows the transfer and is generally `!Unpin`, which the sealed `Unpin` kernel source contract cannot admit today; the touch controller's multi-transaction I²C reads tear under interrupt interleavings; and two stripe buffers are scratch, not spatial history, so partial redraw without epoch discipline paints stale pixels. Each of these is a defect class this profile turns into a type, a protocol rule, or a named gate.
+Unchanged from revision 1 in substance; evidence in RESEARCH sections 2–6. On the anchor board: 329,728-byte frames with a ~16.5 ms QSPI wire floor; a display driver whose framebuffer is private; a HAL completion that is borrowing and `!Unpin` — and, sharpened by this revision's review, *unnameable as a stable associated type without allocation*; touch reads that tear across I²C transactions; stripe buffers that carry no history. Each becomes a type, a rule, or a named gate — in that order of preference, and only after its gate passes.
 
-## 3. Consumers and the merge plan
+## 3. Consumers and the merge seam
 
-Three consumers, in order of immediacy:
+1. **The sibling harness workstream** (`kittens-code`). Its current contract negotiates a protocol-event frontend seam and owns one reactor per session; it does not yet authorize renderer task loops. The merge is therefore a **bilateral gate** (section 10): one seam section, mirrored in both specs, agreed by both workstreams — this spec does not assume loop ownership, and every fact it emits must be an ordinary typed event a foreign reactor arm can consume.
+2. **Application authors** on the anchor board.
+3. **Component/engine libraries** above the (K2R-0A-selected) draw-surface contract; widgets/layout/scenes are never owned here.
 
-1. **The sibling harness effort.** A parallel workstream is building the Kittens-based harness design (`kittens-code`); the two merge into one stack: *harness backend + this renderer on one reactor*. This spec therefore treats its API as a merge surface: every type is constructible from explicit values, every protocol fact is an ordinary event a reactor arm can consume, and nothing assumes it owns the loop — the harness declares the topology; this profile supplies sources, transports, and protocols. Per root section 9.4, profile APIs MUST be emittable by programs: stable spellings, no context-dependent sugar.
-2. **Application authors** building an interactive app on the anchor board.
-3. **Component/engine libraries** above: widgets, layout, scenes, styling are all built *on* the `DrawTarget`-facing contracts here and are never owned here.
+Emittability rule (root 9.4) stands: explicit constructors, stable spellings, no context-dependent sugar — revision 1 violated this by showing typestates with private fields and no constructors; the K2R-0A amendment MUST specify complete construction/transition/teardown APIs for whatever shapes it selects.
 
 ## 4. Non-goals
 
-`kittens-render` is not, and this slice especially is not:
+As revision 1 (no widgets; no driver internals; not the generic-gate resolution; no power/AOD — board-coordinator slice; no DMA overlap — K2R-2 gate; no TE synchronization claim), plus review-sharpened exclusions:
 
-- a widget, layout, scene-graph, styling, or asset framework;
-- a display driver — it defines transport *capabilities* that a driver integration implements; `sh8601-rs` internals stay upstream;
-- a resolution of the generic render-gate question (tui SPEC section 10): only `request` is shared vocabulary with `kittens-tui`; the protocols are deliberately not unified (RESEARCH finding 12);
-- a power/AOD/brightness manager — panel command serialization and the shared-I²C/expander coordinator are a separate, later slice (RESEARCH finding 10); Off/AOD semantics are **out** of this profile until then;
-- a DMA-overlap implementation — K2R-2 has a conditional gate (measured frame-time or p99 input-latency win) and is not authorized by this document;
-- a claim that TE synchronization is handled — TE facts are recorded, the TE experiment is a K2R-1 gate, and cadence eligibility is kept strictly distinct from TE write-phase safety.
+- **no `BusIdle` or `FramePresented` facts in these slices** — both transports expose exactly one observable completion boundary; physical presentation and bus-idle milestones wait for hardware evidence (finding 17). The facts are `StripeWritten { epoch, region }` and `SweepWritten { epoch }` only;
+- **no lossless touch-transition promise** — this slice's touch semantics are *latest-state-with-coalescing, complete untorn reports*; a bounded transition queue with explicit overflow policy is a separately gated follow-on (finding 11);
+- **no damage/partial sweeps** — K2R-0 uses one validated, fixed full-panel sweep plan; damage history is deferred (finding 9).
 
-## 5. Architecture and enforcement layers
+## 5. What is stable in this revision (normative)
 
-| Component (this slice) | Provides | Guarantee | Enforcement layer |
-|---|---|---|---|
-| transport capabilities (§6.2) | `BlockingRegionWrite`, `OwningRegionWrite` | resources (transport + buffer) always come back, on success *and* failure; the two start/completion protocols are never conflated | ownership + resource-carrying result types |
-| stripe typestates (§6.3) | `PreparedStripe` → `StripeInFlight` | the in-flight transfer owns the completion and sent buffer; the spare buffer stays independently writable; a second submission of held resources is unwritable | typestate + move semantics |
-| frame epochs (§6.4) | `FrameEpoch`, sweep rules | every transmitted stripe is reconstructed from one immutable scene snapshot; any failure or discontinuity forces full repaint | protocol rules + K2R-0 pixel-equivalence oracles |
-| frame demand (§6.5) | `FrameDemand` | request coalescing, one sweep in flight, throttle eligibility (`eligible_at`), cadence kept separate | private runtime state + deterministic tests |
-| touch protocol (§6.6) | generation latch + snapshot contract | no lost or fabricated input across IRQ/read interleavings; declared coalescing semantics | protocol rules + K2R-0 adversarial interleaving oracles |
-| completion delivery (§7) | the K2R-0A decision | a `!Unpin` completion can wake the reactor without dropping its listener | **gate, not yet a guarantee** — K2R-0A decides the mechanism |
+1. **Resource-carrying results.** Success and failure values carry every consumed resource back (`Returned`/`Failed` shapes, whatever their final spelling). Ordinary `drop` of an in-flight completion is a **documented non-returning boundary** — the HAL cancels and drops; nothing comes back through `Future::Output`. Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain transition that is driven to settlement and returns transport, sent buffer, and spare (finding 3).
+2. **Sealed capabilities.** The transport capability traits are sealed; only reviewed backend adapters implement them, because ownership alone cannot distinguish a blocking `start_region` from an honest one (finding 8). Raw backend access remains the documented compiling escape surface.
+3. **Epoch discipline.** One immutable snapshot per sweep; every transmitted stripe fully reconstructed from it; any failure terminates the current epoch and forces a full repaint. Sweep completion is decided **only** by a consuming progress token over a fixed, validated full-panel plan — never by caller assertion (finding 9).
+4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
+5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
+6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
 
-The crate core is `#![no_std]`, no-alloc, `#![forbid(unsafe_code)]`; host tests use std. Nothing here redefines kernel semantics.
+## 6. Provisional candidate surface (NOT normative — K2R-0A input)
 
-## 6. Public API (normative in shape for this slice)
+Everything in this section is a *candidate* the K2R-0A experiment is free to reject (finding 1). Shown to make the experiment concrete, retained from revision 1 with the review's corrections noted:
 
-Names freeze after the K2R-0 suite passes and the Codex spec review disposition is recorded; shapes below are the contract.
+- `Region` (global panel coordinates), `FrameEpoch` (monotonic, minted by demand policy only).
+- `Returned<T, B>` / `Failed<T, B, E>`; `BlockingRegionWrite`/`OwningRegionWrite` split — **with the caveats**: `type Completion` cannot name the safe ESP-HAL adapter on stable Rust without allocation (`impl Trait` in associated types is unstable; boxing violates no-alloc; hand-rolled owner-plus-borrower is the rejected self-reference), so the owning capability's final shape is exactly what K2R-0A must demonstrate — RPITIT, an upstream named transfer state, or another compiled shape (finding 2). `BlockingRegionWrite` does not freeze unless a no-allocation adapter compiles against an exact fork/upstream `write_region` SHA — stock `sh8601-rs` cannot honor it (finding 7).
+- Stripe typestates (`PreparedStripe`/`StripeInFlight`) — incomplete as drafted (no constructors, `StartFailed` undefined, region dropped, no spare access or pin projection); the K2R-0A amendment MUST deliver the complete outcome-specific transition API or replace the shape (finding 6).
+- `FrameDemand` — revised candidate per finding 10 and 18: an unforgeable **active-sweep token** replaces raw epoch callbacks; one `finish(token, now, outcome)` transition; `begin_sweep(now)` is the sole acknowledgment of elapsed eligibility (`on_eligible` removed); a complete state table (request-during-sweep, stale/duplicate outcomes, initial and clearing rules for the full-repaint obligation) is a K2R-0 deliverable.
+- A crate-owned `Sweep<S>` value binding the immutable snapshot, target geometry, and repaint mode, plus a crate-owned monotonic tick representation, replacing revision 1's hand-waved `DrawTarget` and host/target `Instant` split (finding 16).
 
-### 6.1 Geometry and identity
+## 7. K2R-0A: the feasibility experiment (normative design)
 
-```rust
-/// A rectangular panel region in global panel coordinates (never
-/// stripe-local; RESEARCH finding 6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Region { pub x: u16, pub y: u16, pub width: u16, pub height: u16 }
+A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists.
 
-/// Identity of one immutable scene snapshot. Monotonic; minted by
-/// `FrameDemand::begin_sweep`, never by transports.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct FrameEpoch(u64);
-```
+**Candidate matrix (exhaustive per finding 4):**
 
-### 6.2 Transport capabilities
+| Candidate | Mechanism |
+|---|---|
+| A — kernel pin admission | `poll_next(self: Pin<&mut Self>, ...)` reviewed kernel path (root 37.6 reserved comparison) |
+| A′ — outer-`Unpin` adapter, caller-pinned inner storage | admitted `Unpin` adapter over storage the caller has pinned (root 37.6's other arm) |
+| B — named executor-task boundary | caller-owned `run` future + fixed-capacity, close-semantic channel endpoints + a sealed no-std wake-capable channel adapter (which is itself a kernel admission change — finding 5) |
+| C — custom interrupt-backed transfer state | hand-built completion state driven by the transfer-done interrupt, no compiler-generated future |
+| ∅ — no viable shape | recorded as a falsifier outcome; the profile redesigns rather than forces |
 
-```rust
-/// Successful completion: everything consumed comes back.
-pub struct Returned<T, B> { pub transport: T, pub buffer: B }
+**Selection rule (ordered):** first candidate that passes all criteria wins; if multiple pass, prefer the one with the smallest kernel change (A′ before A before C before B); ties broken by generated-code size then by diagnostic quality, measured, not asserted.
 
-/// Failure: everything consumed still comes back, plus the error. Panel
-/// GRAM/cursor state after a failure is uncertain by contract — §6.4 rule 5
-/// forces a full repaint; the value carries no "partial success" claim.
-pub struct Failed<T, B, E> { pub transport: T, pub buffer: B, pub error: E }
+**Pass criteria, decidable (finding 4):** against exact pinned SHAs recorded at spike start, over the named finite trace set of section 8: (1) an exact, safe, no-alloc **target compile probe** of the completion shape (finding 2); (2) completion wake reaches the reactor in both selection-loss positions (polled-then-lost and unpolled-below-winner); (3) the explicit cancel-and-drain transition returns transport, sent buffer, and spare on every trace; (4) busy-poll/self-waking completions are rejected by inspection of the wake trace (finding 2); (5) zero allocation after init; (6) no unsafe self-reference; (7) for B: task ownership (spawn/stop/join), per-display-vs-per-transfer identity, capacity, and close semantics are all specified in the artifact.
 
-/// Synchronous region write: when `write_region` returns, the
-/// application-visible transfer is complete (controller scanout may
-/// continue). This is the sh8601-class boundary.
-pub trait BlockingRegionWrite<B>: Sized {
-    type Error;
-    fn write_region(self, region: Region, pixels: B)
-        -> Result<Returned<Self, B>, Failed<Self, B, Self::Error>>;
-}
+**Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
 
-/// Owning asynchronous region write: `start_region` consumes transport and
-/// buffer into a completion future. The completion MAY be `!Unpin`; how it
-/// is polled from a reactor is exactly the K2R-0A question (§7).
-pub trait OwningRegionWrite<B>: Sized {
-    type Error;
-    type Completion: Future<Output = Result<Returned<Self, B>, Failed<Self, B, Self::Error>>>;
-    fn start_region(self, region: Region, pixels: B)
-        -> Result<Self::Completion, Failed<Self, B, Self::Error>>;
-}
-```
+## 8. K2R-0: protocol suite (design frozen only after the K2R-0A amendment)
 
-Normative: implementations MUST NOT fake one capability with the other — a `start_region` that blocks to completion before returning is a contract violation, not an adapter choice (RESEARCH finding 1). An integration exposes whichever capabilities its underlying API honestly has.
+K2R-0 MUST NOT begin until this spec is amended with K2R-0A's selected shapes. Its suite is then built as a **named trace matrix** (finding 14) — each trace enumerated, each state transition and transport boundary independently observable — covering at minimum:
 
-### 6.3 Stripe overlap typestates
+- both selection-loss positions for completion; completion before first poll; completion during waker registration;
+- cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
+- sweep-plan coverage: the consuming progress token is the only path to `SweepWritten`; failure aborts the epoch; full-repaint obligation set and cleared per the state table;
+- demand-policy state table: request-during-sweep, stale/duplicate `finish`, slow-sweep throttling under paused time;
+- touch generation machine: IRQ before registration/during read/after flag sample; INT still asserted; I²C failure restoring pending state; bounded services per activation; startup with INT asserted; generation wrap;
+- Outcome-B-specific (if selected): receiver closure, task shutdown, resource-return backpressure;
+- an external-consumer canonical reactor fixture (the seam gate, section 10) and a target compile/link fixture against the chosen HAL SHA;
+- runtime (not compile-fail) oracles for drop/cancel transitions — the revision-1 "dropped permit compile-fail" was impossible as written and is removed (finding 13).
 
-```rust
-/// Ready to start one stripe: owns the transport, the filled buffer for
-/// `region`, the spare buffer, and the epoch being swept.
-pub struct PreparedStripe<T, B> {
-    transport: T, ready: B, spare: B, frame: FrameEpoch, region: Region,
-}
+Negative controls published beside them, as always.
 
-/// One stripe in flight: owns the completion (pin before polling, per the
-/// K2R-0A outcome) and — independently — the spare buffer the renderer may
-/// fill for the next region of the same epoch.
-pub struct StripeInFlight<C, B> {
-    completion: C, spare: B, frame: FrameEpoch,
-}
+## 9. Board anchor obligations
 
-impl<T, B> PreparedStripe<T, B>
-where T: OwningRegionWrite<B> {
-    pub fn start(self)
-        -> Result<StripeInFlight<T::Completion, B>, StartFailed<T, B, T::Error>>;
-}
-```
+As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-backend peak memory/bandwidth budgets with zero-allocation-after-init), with finding 7's sharpening: the `write_region` decision is a **K2R-0A-adjacent gate** — the blocking capability freezes only with a compiled no-alloc adapter against an exact SHA.
 
-Normative: the renderer can hold and fill `spare` while the transfer is in flight — the ownership topology is explicit, never an indivisible "surface" (RESEARCH finding 8). `StartFailed` carries transport and both buffers back.
+## 10. The bilateral seam (merge with the harness workstream)
 
-### 6.4 Frame epochs and sweep rules (normative protocol)
-
-1. A sweep renders exactly one `FrameEpoch`: an immutable scene snapshot frozen at `begin_sweep`. State changes during a sweep target the *next* epoch; a transmitted frame is never a mix of epochs.
-2. Every transmitted stripe is **fully reconstructed** from background plus the complete ordered scene of its epoch. Stripe buffers are scratch; they carry no spatial or temporal history (RESEARCH finding 5).
-3. Stripe targets use global panel coordinates; a stripe target MUST NOT change layout semantics by reporting a stripe-local bounding box (RESEARCH finding 6).
-4. Three protocol facts are distinct and MUST never be conflated: `StripeWritten { epoch, region }`, `BusIdle`, and `FramePresented { epoch }` (emitted only when every stripe of the epoch has been written).
-5. Any `Failed`, transport reset, or epoch discontinuity invalidates damage history: the next sweep MUST be a full repaint. This is a protocol rule verified by K2R-0 oracles, not a field on a type.
-
-### 6.5 Frame demand
-
-```rust
-pub struct FrameDemand { /* private: dirty, sweeping: Option<FrameEpoch>,
-                            last_present, scheduled, min_interval, next_epoch */ }
-
-impl FrameDemand {
-    /// Explicit throttle policy; no Default.
-    pub const fn new(min_interval: Duration) -> Self;
-    /// Coalescing demand — the only vocabulary shared with kittens-tui.
-    pub fn request(&mut self);
-    /// Mints the epoch when demand is due: `None` while clean, while a sweep
-    /// is unfinished, or while throttled (which schedules `eligible_at`).
-    pub fn begin_sweep(&mut self, now: Instant) -> Option<FrameEpoch>;
-    /// Earliest eligible sweep instant; feeds an `OptionalDeadline`.
-    /// Deliberately NOT named `deadline` (RESEARCH finding 12) — periodic
-    /// cadence demand is the application's own `cadence_deadline` source,
-    /// distinct from throttle eligibility, distinct from TE phase.
-    pub fn eligible_at(&self) -> Option<Instant>;
-    pub fn on_eligible(&mut self);
-    /// Sweep outcome: `presented` clears demand for that epoch;
-    /// `failed` retains demand and records the full-repaint obligation.
-    pub fn sweep_presented(&mut self, epoch: FrameEpoch);
-    pub fn sweep_failed(&mut self, epoch: FrameEpoch);
-    pub fn full_repaint_required(&self) -> bool;
-}
-```
-
-`Instant` is `tokio::time::Instant` on host builds and the platform monotonic instant on target builds, behind one type alias; K2R-0 tests drive it with paused time.
-
-### 6.6 Touch protocol (host-modeled contract; hardware integration is K2R-1)
-
-Normative protocol, from RESEARCH finding 9:
-
-1. The ISR path does exactly one thing: bumps a wake-capable **generation counter** latch. It never performs I²C.
-2. Task context reads one contiguous register snapshot per service, parses count/event-type/touch-ID/coordinates from that single snapshot, and re-services while the INT line remains asserted.
-3. An I²C failure restores pending state — a generation is never consumed by a failed read.
-4. The source declares its semantics as **latest-state-with-coalescing** (this profile's choice): consumers receive the newest complete report; intermediate reports may coalesce; *transitions* (down/up edges per touch ID) are reconstructed from report deltas and MUST NOT be silently dropped — an edge observed in a snapshot survives coalescing.
-5. The reactor-facing type is a kernel-admitted source; its concrete carrier follows the K2R-0A outcome (pinned source or channel boundary). Reports use a fixed two-point capacity matching the FT3168.
-
-## 7. K2R-0A: the completion-delivery feasibility gate
-
-**The question:** the kernel's `ReactorSource` is sealed, `Unpin`, `&mut self`-polled; the HAL completion is a borrowing, generally `!Unpin` future whose drop cancels its listener. These are incompatible today. K2R-0A decides the mechanism, against exact pinned HAL SHAs recorded at spike start:
-
-- **Outcome A — kernel pin admission:** the kernel adds a reviewed pinned-source path (`poll_next(self: Pin<&mut Self>, ...)`), the comparison root SPEC 37.6 explicitly reserved. Requires a root-spec amendment and kernel-side fixtures; this profile then stores `StripeInFlight` in a pinned slot.
-- **Outcome B — named executor boundary:** completion is driven by an explicitly named Embassy task that resolves the future and delivers `Returned`/`Failed` through an admitted channel source. The task is a visible, spec'd component — never hidden inside a profile type.
-
-Pass criteria for the spike (whichever outcome): completion wake-up demonstrably reaches the reactor (no lost wake across a losing arbitration); all resources are recovered on success, failure, and cancellation; no hidden task (outcome A) or exactly one named task (outcome B); zero allocation after init. Fail criteria: unsafe self-reference, double-drive of the completion, or wake loss under the adversarial schedules of §8. **The outcome is recorded in this spec and in the root graduation map before K2R-0 freezes its carrier types.**
-
-## 8. K2R-0: required oracles
-
-All host, deterministic, paused-time where time matters:
-
-1. **Completion delivery** (per the K2R-0A outcome): completion resolves while another source wins the arbitration — the wake is not lost; cancellation mid-flight returns transport and buffer; dropped-permit and double-start are unwritable (compile-fail fixtures).
-2. **Resource recovery:** every `Failed` path hands back transport and buffer; a model transport with injected failure at every command/chunk boundary never leaks either.
-3. **Epoch/pixel equivalence:** a reference full-frame render and a stripe-swept render of the same epoch produce identical pixels, including across mid-sweep state changes (which must land in the next epoch) and after an injected failure (full repaint).
-4. **Demand policy:** coalescing; one sweep in flight; `eligible_at` scheduling under paused time; `sweep_failed` retains demand and sets the full-repaint obligation.
-5. **Touch interleavings:** adversarial generation-latch schedules — IRQ before registration, during read, after flag sample, INT still asserted after read, I²C failure mid-service — with the oracle that no down/up edge is lost and no torn report is ever surfaced.
-6. **Negative controls**, published beside the oracles: raw writes to a transport outside the capabilities compile; nothing bounds a renderer's scene-replay cost (measured, not prevented); TE-phase tearing is not prevented by anything in this slice.
-
-## 9. Board anchor obligations carried by this spec
-
-Revision-keyed V1 facts this spec depends on and their status: `LCD_TE` GPIO13 and `TP_INT` GPIO21 (schematic-confirmed); TE measured behavior (**Gap** — K2R-1); `write_region` transport for SH8601 (**Gap** — upstream/fork decision gated before K2R-1 stripes; stock full-framebuffer path is the K2R-1 baseline); per-backend peak memory/bandwidth budgets including DMA reserves, descriptors, and stacks (**Gap** — published at K2R-1 with a zero-allocation-after-init requirement).
-
-## 10. Error model
-
-Concrete error types per transport integration; `Failed<T, B, E>` is the carrier, never a bare error — losing the resources is the failure mode this profile exists to prevent. No crate-wide error enum. Panic policy follows the kernel: no `catch_unwind`, drop order documented per type.
+This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. Acceptance of either spec's slice is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. Until co-signed, neither spec claims the merge.
 
 ## 11. Slice acceptance
 
-K2R-0A/K2R-0 are done when: the K2R-0A outcome is recorded here and in the root graduation map; all §8 oracles pass in CI on the workspace toolchains; compile-fail fixtures cover the unwritable states (double-start, dropped permit, buffer reuse while in flight); negative controls are published; clippy/fmt/doc gates are clean; and the crate builds `no_std` without alloc. Only then does K2R-1 (V1 board bring-up) graduate into this document with its measured gates — and the merge with the sibling harness workstream happens on top of these frozen protocols, not before.
+- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the target compile probe exists in-repo, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative).
+- **K2R-0** is done when: the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds `no_std` without alloc; clippy/fmt/doc gates clean.
+- Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
+
+## 12. Review log
+
+Spec review, 2026-08-08: Codex `gpt-5.6-sol`, ultra effort, read-only; interrupted once and resumed in-session; 18 findings (12 blocking, 5 important, 1 minor), full text retained in session transcript and `/tmp/codex-spec-review-2.txt` at review time. Disposition: findings 1–14 and 16–18 adopted as restructured above (1→§6 provisional; 2→§7 compile probe + busy-poll rejection; 3→§5.1 cancel-and-drain; 4→§7 matrix/selection rule/∅; 5→§7 candidate B artifact; 6→§6 typestate caveats + §3 emittability; 7→§6/§9 blocking-capability gate; 8→§5.2 sealed capabilities; 9→§5.3 progress token, damage deferred; 10→§6 sweep token + finish; 11→§5.4 honest semantics; 12→§5.4 generation machine + §7 touch admission; 13→§8 runtime oracle; 14→§8 trace matrix; 16→§6 `Sweep<S>`; 17→§4/§5.5 milestone honesty; 18→§6 `on_eligible` removed). Finding 15 adopted as section 10's bilateral gate; the co-signing edit to `docs/kittens-code/SPEC.md` belongs to the sibling workstream and is recorded here as a pending cross-workstream ask, not performed unilaterally. Verdict accepted in full.
