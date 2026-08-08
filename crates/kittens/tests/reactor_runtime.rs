@@ -274,10 +274,14 @@ async fn latched_event_survives_when_an_earlier_source_wins_before_it_is_polled(
 async fn before_poll_runs_once_across_pending_executor_repolls() {
     struct Sources<F: Future<Output = Result<u8, tokio::sync::oneshot::error::RecvError>>> {
         completion: source::OneShot<F>,
+        // KTR014 requires at least one unguarded arm; this latch stays dormant
+        // and never participates in selection.
+        idle: Latched<u8>,
     }
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut sources = Sources {
         completion: source::one_shot(receiver),
+        idle: Latched::new(),
     };
     let mut before_count = 0;
     let mut guard_count = 0;
@@ -304,6 +308,12 @@ async fn before_poll_runs_once_across_pending_executor_repolls() {
         #[terminal]
         value = sources.completion => {
             value
+        }
+
+        #[source(idle)]
+        #[readiness(quiescent)]
+        _ = sources.idle => {
+            Ok(kittens::reactor::Control::Continue)
         }
     };
 

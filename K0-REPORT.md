@@ -168,7 +168,7 @@ established, while full numeric drain-window attribution remains open. No
 
 ## Mutations and diagnostics
 
-Sixteen compile-fail fixtures retain rustc output. They cover:
+Seventeen compile-fail fixtures retain rustc output. They cover:
 
 | Mutation | Retained result |
 |---|---|
@@ -181,6 +181,7 @@ Sixteen compile-fail fixtures retain rustc output. They cover:
 | temporary source expression | `KTR015`, persistent adapter/channel isolation repair |
 | shutdown below firehose | `KTR016`, leading-prefix consequence |
 | duplicate exact source place | `KTR020`, both IDs and alias limitation |
+| every arm guarded by `#[when]` | `KTR014`, wake-less permanent-pend consequence and unguarded-arm repair |
 | non-bool guard | bool helper type error |
 | readiness mismatch | concrete expected readiness marker |
 | unadmitted arbitrary future/display-like operation | concrete type, retained/latching or owned channel repair, and drop-cleanup distinction |
@@ -212,15 +213,18 @@ associated-marker equality and an admitted newtype has not been performed.
 
 ## Agent ablation and rehydration
 
-No blind fresh-agent trials or context-reset trials were run. Repository-local
-guides, diagnostic anchors, mutation snapshots, machine-readable index, and the
-expansion snapshot are present, but their repair advantage over raw code or
-inert metadata is unmeasured. Therefore:
+The exploratory diagnostic-only pilot below ran eight blind fresh-agent repair
+trials (see "First diagnostic-only repair pilot"); the comparative ablation
+across raw/annotated/lean/maximal conditions and the context-reset rehydration
+trials have not run. Repository-local guides, diagnostic anchors, mutation
+snapshots, machine-readable index, and the expansion snapshot are present, but
+their repair advantage over raw code or inert metadata is unmeasured.
+Therefore:
 
 - lean syntax is not promoted over maximal or annotated conditions by agent
   evidence;
 - diagnostic wording/numbering remains provisional;
-- the section 37.11 four-of-five/two-iteration promotion threshold is unmet;
+- the section 37.11 four-of-five/two-iteration bar is now met in the lean condition for `KTR007`, `KTR009`, `KTR015`, and `KTR016` by the exploratory pilot, but not across comparison conditions or the remaining diagnostics;
 - context reconstructibility is an objective, not a demonstrated result.
 
 ## Falsifier assessment
@@ -238,7 +242,7 @@ inert metadata is unmeasured. Therefore:
 | core mechanism exceeds registered size threshold | **triggered** for generated-future size versus Tokio/event; review remains open |
 | equal-budget drain attribution is impossible | **partially triggered** because only boolean, not numeric, state is public |
 | rust-analyzer/formatting rejects ordinary use | not observed; parse-recovery UX was not separately benchmarked |
-| agents bypass or delete constraints | open; ablation not run |
+| agents bypass or delete constraints | not observed in the eight-trial exploratory pilot (8/8 constraint-preserving, one iteration each); comparative ablation still open |
 | optimized text and idle/all-ready poll regression | open; no pinned repeated benchmark |
 
 The positive mechanism evidence supports continuing with architecture B/event,
@@ -262,6 +266,85 @@ an executor owned by Kittens; topology semantics stay profile-neutral;
 persistent admitted sources and biased lexical order are the behavioral
 boundary; the kernel remains no-std/no-alloc; and cooperative budget stays out
 of generated kernel code.
+
+## Post-review improvements (2026-08-07, second pass)
+
+A review pass against the SPEC section 37 contract added three improvements and
+fixed one specification defect the implementation itself exposed:
+
+1. **`KTR014` all-guarded liveness check.** Under K0 guard semantics a reactor
+   whose every arm carries `#[when]` can take one all-false guard snapshot and
+   then pend forever: a disabled arm registers no wake, so not even an external
+   wake recovers the loop. The macro now rejects that topology statically with
+   an unguarded-arm/dormant-adapter repair. New compile-fail fixture
+   `tests/ui/all_guarded.rs`. Adding the check exposed a masked-oracle hazard
+   worth remembering whenever a validation stage is added: two existing
+   fixtures whose only arm was guarded (the guard-snapshot runtime test and
+   the `guard_not_bool` UI fixture) started failing on `KTR014` instead of
+   the oracle they exist to exercise; both gained the prescribed unguarded
+   idle arm, which also demonstrates the repair.
+2. **Doc comments accepted as arm/phase rationale.** `///` above a source arm
+   previously died as `KTR000 unsupported attribute doc` — punishing exactly
+   the context-reconstructible-source practice the specification mandates.
+   Doc attributes are now accepted and intentionally not emitted (the
+   expansion has no item to attach them to); all other non-Kittens attributes
+   remain rejected so `cfg`-style conditional topology cannot exist silently.
+   New pass fixture `tests/ui-pass/doc_comment_rationale.rs`.
+3. **Specification example drift fixed.** SPEC section 38.2's Grok-shape
+   sketch omitted starvation waivers on `acp_stream`, `task_events`, and
+   `draw_deadline` and did not compile under the implemented direct starvation
+   rule — a source carries one yield edge, so a lane protecting
+   `terminal_input` cannot also protect the lanes below it. The spec example
+   now carries the waivers, and the correction is recorded in the spec itself
+   as a first-class instance of example-versus-checker drift. `KTR014` and
+   `KTR020` are now also recorded in the SPEC section 25.2 catalog notes.
+
+## First diagnostic-only repair pilot (exploratory, 2026-08-07)
+
+Eight blind trials ran against four core mutations — the first agent-repair
+evidence for this codebase. Method: the repository (without `.git`) was copied
+into eight isolated workspaces; each received one mutated
+`examples/pilot.rs`; a fresh coding agent with no conversation history was
+told only the working directory, that `cargo check -p kittens --example
+pilot` fails, and to repair the example while preserving intended behavior
+and declared policy. Agents had normal repository access (lean condition:
+source, diagnostics, docs). The reviewing agent independently re-checked
+every workspace afterward: compile status, a full library-source diff
+(empty in all eight), and the repair diff against the mutated original.
+
+| Mutation | Diagnostic | Trials | Iterations | Repair chosen | Constraint preserved |
+|---|---|---:|---:|---|---|
+| shutdown below firehose | `KTR016` | 2/2 | 1, 1 | moved the complete arm, attributes untouched | yes |
+| missing buffered yield | `KTR007` | 2/2 | 1, 1 | added `#[yields_to(input, when = buffered)]`; both trials explicitly rejected reordering and the waiver as policy changes | yes |
+| temporary source expression | `KTR015` | 2/2 | 1, 1 | retained `source::one_shot(...)` constructed before the loop | yes |
+| drain on non-drainable latch | `KTR009` bound | 2/2 | 1, 1 | removed `#[drain]`; both trials explicitly declined swapping the source type to preserve declared readiness/policy | yes |
+
+Observations worth keeping:
+
+- 8/8 repairs were canonical and constraint-preserving at one compile
+  iteration each — above the section 37.11 promotion bar (four of five within
+  two iterations) for these four diagnostics.
+- No trial deleted a declaration it did not understand, added a starvation
+  waiver, or bypassed the constrained path; two trials reasoned explicitly
+  from the diagnostic's own "a starvation waiver changes policy" clause.
+- The rehydration path behaved as designed: trials cited the local diagnostic
+  first, then the in-repo SPEC rule, the adapter source, the `ui/` compile-fail
+  twin of their mutation, and the runtime test exercising the same pattern.
+- The `KTR016`/`KTR007` fixtures produced a transient
+  `unused import: Control` warning while the macro error suppressed arm
+  expansion; three trials spent reasoning tokens explaining it away. A
+  macro-error path that consumes handler tokens would remove that decoy.
+
+Limitations, stated before anyone quotes the numbers: lean condition only —
+no raw-Tokio, inert-metadata, or maximal-grammar comparison arms, so this
+measures repair quality, not Kittens' marginal value over baselines; n=2 per
+mutation; trial agents shared a model family with the fixture author; the
+judge was the reviewing agent, not a blinded third party; and mutations were
+single-error and small. The comparative ablation and context-reset
+rehydration protocol of section 37.11 therefore remains open. What this
+pilot does establish: the diagnostic-to-repair path works end-to-end on
+first contact, and none of the observed failure modes the specification
+worries about (constraint deletion, waiver abuse, bypass) occurred.
 
 ## Crates.io readiness
 

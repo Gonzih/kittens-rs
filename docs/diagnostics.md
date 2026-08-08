@@ -14,6 +14,7 @@ K0 diagnostic identifiers are provisional but semantic anchors are tested.
 | `KTR009` | source is not drainable | use a stable drainable adapter or remove drain |
 | `KTR010` | invalid yield/capability/cycle | use an observational backlog target and acyclic edge |
 | `KTR011` | phase list/block mismatch | restore the block or deliberately remove both |
+| `KTR014` | every arm carries `#[when]`; an all-false snapshot pends forever with no wake | keep one unguarded arm (shutdown qualifies) or use a dormant adapter |
 | `KTR015` | temporary source expression | construct a persistent adapter or isolate producer |
 | `KTR016` | lexical order violates relation | move the complete arm |
 | `KTR019` | guard is not bool | return one synchronous bool |

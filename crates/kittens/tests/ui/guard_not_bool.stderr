@@ -1,15 +1,16 @@
 error[E0308]: mismatched types
-  --> tests/ui/guard_not_bool.rs:14:16
+  --> tests/ui/guard_not_bool.rs:17:16
    |
- 9 | /     kittens::reactor! {
-10 | |         policy { selection: biased; required_phases: []; }
-11 | |
-12 | |         #[source(event)]
-13 | |         #[readiness(quiescent)]
-14 | |         #[when(7)]
+12 | /     kittens::reactor! {
+13 | |         policy { selection: biased; required_phases: []; }
+14 | |
+15 | |         #[source(event)]
+16 | |         #[readiness(quiescent)]
+17 | |         #[when(7)]
    | |                ^ expected `bool`, found integer
-15 | |         _ = sources.event => { Ok(Control::Continue) }
-16 | |     }
+...  |
+22 | |         _ = sources.idle => { Ok(Control::Stop(())) }
+23 | |     }
    | |_____- arguments to this function are incorrect
    |
 note: function defined here
