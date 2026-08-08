@@ -1,7 +1,14 @@
 # kittens-code specification
 
 - Spec date: 2026-08-08
-- Version: v0.7 — v0.6 folded the external spec review (input 15, 8 blockers
+- Version: v0.8 — v0.7's targeted verification (input 17: 2 blockers,
+  2 majors, rest fixed/nits) closed here: one log-appender unifies session
+  and recovery appends with epoch-validation-before-repair; the IR is
+  complete (typed outputs, By enum, range/escaping semantics); the value-
+  cap-truncates vs meter-errors rule is now stated identically in P8, Q5,
+  and Appendix A; the ledger matrix carries named enforcement layers with
+  T4/T5/S4 dispositioned and G7e defined. Prior: v0.7 — v0.6 folded the
+  external spec review (input 15, 8 blockers
   + 9 majors, corrected topology and call model adopted); the verification
   pass on v0.6 (input 16, FREEZE-AFTER-FIXES, converging: 8/17 FIXED) drove
   this version: canonical Commit-only append path with PersistFailed,
@@ -165,8 +172,11 @@ framed store codec (§5).
   `tool_failed`, `tool_timeout`, `budget_exhausted{budget_kind}`,
   `verb_error{verb, cause ∈ {bad_ref,bad_range,bad_flag,parse,budget}}`,
   `schema_incompatible`, `store_io`, `config_invalid`, `cancelled`,
-  `internal`. In-script verb cap hits bind `verb_error{cause: budget}`;
-  `budget_exhausted` is query/turn level.
+  `internal`. Cap/meter rule (aligned with Q5, input 17 finding 4): value
+  caps (verb output, tool result, ask digest) TRUNCATE and never raise an
+  error; in-script *aggregate meter* hits (pages, bytes, subcalls,
+  partitions) bind `verb_error{cause: budget}`; query- and turn-level
+  budgets raise `budget_exhausted`.
 - P9. Identity types (F3): `SessionId([u8;16])` — driver-generated from the
   entropy source, no UUID/wall-time dependency (MCUs have no trusted clock);
   `EffectId(u64)`, `TurnEpoch(u64)`, digests as `[u8;32]`.
@@ -186,7 +196,8 @@ framed store codec (§5).
   checksum whose coverage is exactly `seq..payload` (declared, tested).
   Streamed work is **individually framed** — `Started → Progress* → exactly
   one Terminal` sharing one `txn` — never buffered whole (F9). Replay of a
-  stream with no Terminal derives a synthetic `aborted_by_crash` terminal.
+  stream with no Terminal gets a real `aborted_by_crash` terminal record
+  APPENDED during startup repair (ordering in §6 append canon).
   A torn/checksum-failed tail is detected and cleanly ignored (G2 fixture).
   Atomicity is per-record; the *transaction* invariant is "no Terminal
   without its Started on replay", not multi-record atomic writes.
@@ -206,11 +217,13 @@ framed store codec (§5).
   created_at: Option<driver-claimed-time> }`. Replay refuses a higher
   `schema_epoch` with `schema_incompatible`. One writer per log
   (create-exclusive/lock); multi-process append out of scope for v0.x.
-- S7. Store access is **effect-driven** (input 15 F5): `StoreAppend`,
-  `StoreReadPage`, `StoreSearchPage` effects with paged, bounded results —
-  no synchronous store port (IndexedDB/OPFS and flash are async; JSONL scans
-  would block the driver). The RLM engine consumes pages via its
-  continuation (§8).
+- S7. Store *reads* are **effect-driven** (input 15 F5, unified per input 17
+  finding 1): `StoreReadPage` and `StoreSearchPage` effects with paged,
+  bounded results — no synchronous store port (IndexedDB/OPFS and flash are
+  async; JSONL scans would block the driver). There is NO `StoreAppend`
+  effect: all appends go through the single log-appender component behind
+  `CoreAction::Commit` (§6 append canon). The RLM engine consumes pages via
+  its continuation (§8).
 
 ## 6. Core contract: inputs, transitions, actions (input 15 F4/F6/F7)
 
@@ -234,13 +247,19 @@ Transition = { actions: bounded owned Vec<CoreAction> }   // no lazy iter
 fn handle(&mut self, input: CoreInput) -> Transition
 ```
 
-Append canon (input 16 R5/R9): `Commit` is the ONLY append path; there is no
-`StoreAppend` effect (store *read/search* pages remain effects, S7). The
-driver stages each Commit to durable storage in order; success advances the
-`Persisted` watermark; failure arrives as `PersistFailed`, which core treats
-as Fatal `store_io` (drain and stop — a harness that cannot persist must not
-keep acting). Every CoreInput that references an effect carries its
-`TurnEpoch` (R4 — including `TimerFired`).
+Append canon (input 16 R5/R9; unified with recovery per input 17 finding 1):
+one **log-appender** component per driver owns the storage write path.
+During a session, `Commit` is the only way records reach it; the appender
+writes in strict `seq` order; success advances the `Persisted` watermark;
+failure arrives as `PersistFailed`, which core treats as Fatal `store_io`
+(drain and stop — a harness that cannot persist must not keep acting).
+Startup ordering (also fixes input 17 finding 16): open log →
+**validate `schema_epoch` FIRST** (refusal happens before any mutation; an
+old binary never repairs an incompatible log) → scan → append
+`aborted_by_crash` repair terminals **through the same appender** →
+`Persisted` confirmation → replay into the fresh core. Appender failure at
+startup = refuse to open. Every CoreInput that references an effect carries
+its `TurnEpoch` (R4 — including `TimerFired`).
 
 - L-A1. `handle` is never re-entrant: effect completions (including the
   synchronous test jail's) enter as queued CoreInputs through admitted
@@ -263,8 +282,9 @@ keep acting). Every CoreInput that references an effect carries its
   be published immediately as explicitly non-authoritative `preview: true`
   Events; authoritative Events follow the watermark and reference the same
   record ids, so clients reconcile by id. Drivers MUST bound flush latency
-  (bytes-or-millis sync policy, declared in bootstrap config); the recorded
-  tradeoff: durability beats display for authority, preview restores UX.
+  with a bytes-or-millis sync policy — flush when EITHER threshold is
+  reached first (declared in bootstrap config); the recorded tradeoff:
+  durability beats display for authority, preview restores UX.
 - L-T1. Turn law: sample → tool effects → resample; a model terminal with no
   tool calls ends the turn. Core owns `SessionState` and `TurnState { phase,
   epoch, pending_effects, call_order }`, RLM continuations, and the
@@ -335,20 +355,29 @@ keep acting). Every CoreInput that references an effect carries its
   **Status: versioned-experimental until E2 runs** (F13 downgrade from
   STABLE); version recorded in S6. The stability *goal* (future RL action
   space) stands, the freeze happens on E2 evidence.
-- Q2. **Typed IR (F13; closed variants per input 16 R13):** every surface
+- Q2. **Typed IR (F13; completed per input 17 finding 4):** every surface
   (verb text now; typed function calls and Lua later) lowers to one closed
-  IR: `Query = [Instr]` where `Instr` is a closed enum with typed fields —
-  `Grep { pattern: Str, sel: Sel, ctx: u16, kind: Option<EventKind> }`,
-  `Slice { sel: Sel }`, `Head/Tail { sel: Sel, n: u32 }`,
-  `Count { pattern: Option<Str>, sel: Sel }`,
-  `Partition { sel: Sel, by: By, size_or_pattern }`,
-  `Ask { sel: Sel, question: Str, sample_k: Option<u8> }`,
-  `AskEach { chunks: Ref, question: Str }`, `Final { value: Str | Ref }` —
-  with `Sel = Ref(%N) | Range | Whole`. Arity, ref-type (a `Ref` arg must
-  name an earlier line; `AskEach.chunks` must be a partition result),
-  duplicate-flag, and forward-reference validation happen at lowering
-  (G7d). The EBNF (appendix A) is the text surface only; the IR is the
-  semantic contract; E2 compares surfaces above the same IR.
+  IR: `Query = [Instr]`, each `Instr` a closed enum variant with typed
+  inputs AND a declared output type
+  `Out = Records | Chunks | Count | Digest | DigestList | Answer`:
+  - `Grep { pattern: Str, sel: Sel, ctx: u16, kind: Option<EventKind> } → Records`
+  - `Slice { sel: Sel } → Records`
+  - `Head { sel: Sel, n: u32 } → Records` / `Tail { … } → Records`
+  - `Count { pattern: Option<Str>, sel: Sel } → Count`
+  - `Partition { sel: Sel, by: By, size: Option<u32>, pattern: Option<Str> } → Chunks`
+    where `By = Turns | Bytes | Regex`; `size` required for Turns/Bytes,
+    `pattern` required for Regex (validated at lowering)
+  - `Ask { sel: Sel, question: Str, sample_k: Option<u8> } → Digest`
+  - `AskEach { chunks: Ref<Chunks>, question: Str } → DigestList`
+  - `Final { value: Str | Ref<any> } → Answer`
+  `Sel = Ref(%N) | Range | Whole` (Whole is the default when omitted).
+  Range semantics: `unit:a..b` is inclusive `a`, exclusive `b`; units:
+  `turn` = user-turn index, `seq` = record sequence, `byte` = offset in the
+  store byte view. String escaping: `\"` and `\\` only; raw newlines are
+  illegal inside strings (Appendix A grammar). Ref typing: a `Ref` must
+  name an earlier line, and `AskEach.chunks` must reference a `Chunks`
+  output. All validated at lowering (G7d). The EBNF is the text surface
+  only; the IR is the semantic contract; E2 compares surfaces above it.
 - Q3. Root-protection law: all RLM-originated data entering the root window
   is cap-typed; every tool result surfaced to the root is truncated to
   `Capped<ToolResult>` (head/tail excerpt + log-offset pointer; full output
@@ -370,17 +399,21 @@ keep acting). Every CoreInput that references an effect carries its
   recursion depth (default 1, economics rationale R§4.5); total subcalls
   per query; parallel subcalls; partition count; selected-bytes ceiling;
   **scanned-pages and scanned-bytes ceilings per query; total page-effects
-  per query; max simultaneous suspended queries per session; aggregate
-  retained continuation memory ceiling** — all runtime limits under
+  per query; per-`ask`-node wall-clock and token meters (the R§4.5 recursion
+  budget, named here so Appendix A's charges are all Q5-defined); max
+  simultaneous suspended queries per session; aggregate retained
+  continuation memory ceiling per session** — all runtime limits under
   compile-time hard maxima (P6 pattern). All meters surface as protocol
   events. Meter charging split (input 16 N5): **value caps truncate** with
-  metadata (`Capped<…>`); **aggregate/query meters error** (`verb_error
-  {cause: budget}` in-script; `budget_exhausted` at query/turn level).
+  metadata (`Capped<…>`) and never error; **aggregate/query meters error**
+  (`verb_error{cause: budget}` in-script; `budget_exhausted` at query/turn
+  level). P8's disambiguation rule says exactly this (updated with it).
 - Q6. L3 search: `grep` over store search-page effects; the exact pattern
   dialect is **versioned and recorded in the S6 header** (`l3_dialect_version`
-  — input 16 N7). KC0 pins dialect 1.0.0 = Rust `regex` crate syntax,
-  case-sensitive, no backreferences/lookaround (the crate cannot express
-  them), Unicode on. no_std dialect closes with D7. Gate G12: search replay
+  — input 16 N7). KC0 pins dialect 1.0.0 = `regex` crate v1.x with default
+  features, Unicode on, case-sensitive, inline flags (`(?i)` etc.)
+  REJECTED at query validation, no backreferences/lookaround (inexpressible
+  in the crate). no_std dialect closes with D7. Gate G12: search replay
   goldens over a fixed corpus.
 - Q7. L2 ports (`Embedder`/`Similar`) behind the `l2` feature (T7), defined,
   unimplemented; index contract carries model fingerprint, dims, metric,
@@ -400,7 +433,9 @@ keep acting). Every CoreInput that references an effect carries its
   normalized relative paths (no `..`, no absolute, symlink policy = refuse
   by default), bounded range reads, paged directory listings, atomic
   revision-aware writes (expected-generation compare). Rename semantics
-  (input 16 R11): replace-by-default within one mount; atomicity is a
+  (input 16 R11): rename ALWAYS replaces within one mount — no no-replace
+  mode in v0.x, callers wanting create-new use expected-generation writes;
+  atomicity is a
   per-driver declared capability (atomic where the backend supports it,
   copy+delete fallback declared, never silent); cross-mount rename is
   refused; renaming through or onto a symlink is refused. **Exec effects**
@@ -430,7 +465,8 @@ keep acting). Every CoreInput that references an effect carries its
 ## 11. Effects and seams summary
 
 Effects (driver-discharged, `EffectId`-correlated, cancellable): model call
-(SSE), sub-model call, StoreAppend/ReadPage/SearchPage, Vfs ops, Exec,
+(SSE), sub-model call, StoreReadPage/SearchPage (appends go through Commit,
+not an effect — §6), Vfs ops, Exec,
 timer arm/disarm, embed (l2). Synchronous core seams: none that touch IO —
 window assembly, token estimation, verb lowering, and budget enforcement are
 plain core logic (F5). Clock readings and entropy arrive as fields on
@@ -521,19 +557,48 @@ Gates:
   queue-full producer wait, whole-batch staging (a Transition is never
   split across `handle` calls), preview/authoritative reconciliation by
   record id.
+- G7e. Vfs/Exec contract conformance tests, run per driver (K2).
 - G12. L3 search goldens: fixed corpus, pinned dialect 1.0.0, byte-stable
   results (Q6).
 
-Ledger→enforcement→gate matrix (input 16 N3, compact form): T1→G1;
-T2/T3/T7→G1b (T6's check activates with the first non-Tokio driver — noted,
-not vacuous); P1/P8/P9→G2+G4b fixtures; P2/P7→G2c; P3→G7b; P4–P5→G2
-config-precedence fixture; P6→G3/G3b; S1→G9; S2/S5/S6→G2; S3→G2 fixtures;
-S7→G11 (paged effects only — no sync store call sites, checked by G1b
-dependency audit); L-A*→G11; L-T1/T2→G4b; L-T3/T4→G7/G7c; L-D1→G4 (the
-service-window claim is the kernel's own KTR-checked law, exercised here);
-L-D3→G2; C1–C10→G5/G6/G8 (+C8 bounds in G5); Q1–Q2→G7d; Q3→G3; Q4–Q5→G11
-meters + G5; Q6→G12; Q8/Q9→G5/G7d; K1–K3→G7/G7e; M1–M3→G7 retry scenario +
-G10; F1/F4→G2 fixtures.
+Ledger→enforcement-layer→gate matrix (input 17 finding 6 — complete; layers:
+**TY** type system, **API** API-surface absence, **CORE** core runtime
+check, **DRV** driver protocol, **CI** structural CI check, **FIX** test
+fixture/property, **REV** review-process law with no runtime gate):
+
+| IDs | Layer | Gate |
+|---|---|---|
+| T1 | CI | G1 |
+| T2, T3, T7 | CI | G1b |
+| T4, T5 | REV | none — process law, enforced at spec/PR review by design |
+| T6 | CI | G1b variant, activates with the first non-Tokio driver (KC1 conformance suite; recorded as deferred, not vacuous) |
+| P1, P8, P9 | DRV/FIX | G2, G4b |
+| P2, P7 | DRV/FIX | G2c |
+| P3 | FIX | G7b |
+| P4, P5 | DRV/FIX | G2 config-precedence fixture |
+| P6 | TY/FIX | G3, G3b |
+| S1 | API | G9 |
+| S2, S5, S6 | DRV/FIX | G2 |
+| S3 | DRV/FIX | G2 crash/torn/checksum fixtures |
+| S4 | DRV/FIX | G2 (JSONL framing is the codec the fixtures exercise) |
+| S7 | API/CI | G1b dependency audit (no sync store call sites) + G11 |
+| L-A1, L-A2, L-A2b, L-A3 | DRV/FIX | G11 |
+| L-T1, L-T2 | CORE/FIX | G4b |
+| L-T3, L-T4 | CORE/FIX | G7, G7c |
+| L-D1 | DRV + kernel law (KTR checks) | G4 |
+| L-D3 | DRV/FIX | G2 |
+| C1–C7, C9, C10 | CORE/FIX | G5, G6, G8 |
+| C8 | CORE | G5 (error bounds) |
+| Q1, Q2 | CORE/FIX | G7d |
+| Q3 | TY | G3 |
+| Q4, Q5 | CORE/FIX | G11 meters + G5 |
+| Q6 | DRV/FIX | G12 |
+| Q8, Q9 | CORE/FIX | G5, G7d |
+| K1 | CORE/FIX | G7 |
+| K2, K3 | DRV/FIX | G7e |
+| M1, M3 | DRV | G10 |
+| M2 | DRV/FIX | G7 retry scenario |
+| F1, F4 | DRV/FIX | G2 fixtures |
 
 Falsifiers: F-a (funnel/topology inexpressible in reactor macro without raw
 selection escape — ledgered kernel absences excluded); F-b (>5% hot-path
@@ -596,8 +661,8 @@ meters charged per Q5 — value caps truncate, aggregate meters error):
 | `slice` | `Slice{sel}` | records in selection | scanned-pages/bytes, verb output cap |
 | `head`/`tail` | `Head/Tail{sel, n}` | first/last n records | scanned-pages/bytes, verb output cap |
 | `count` | `Count{pattern?, sel}` | count (engine-side aggregation) | scanned-pages/bytes, page-effects |
-| `partition` | `Partition{sel, by, size_or_pattern}` | chunk-list selection (partition-count meter bounds it) | scanned-pages/bytes, partition count |
-| `ask` | `Ask{sel, question, sample_k?}` | sub-model digest (`Capped<AskDigest>`) | selected-bytes, total/parallel subcalls, recursion depth, wall-clock/token meters |
+| `partition` | `Partition{sel, by, size?, pattern?}` | chunk-list selection (partition-count meter bounds it) | scanned-pages/bytes, partition count |
+| `ask` | `Ask{sel, question, sample_k?}` | sub-model digest (`Capped<AskDigest>`) | selected-bytes, total/parallel subcalls, recursion depth, per-ask wall-clock/token meters (Q5) |
 | `ask-each` | `AskEach{chunks, question}` | per-chunk digests, rejoined by index; concatenation is verb-output-capped | selected-bytes, total/parallel subcalls, partition count |
 | `final` | `Final{value}` | terminates query; literal or `%N` is the answer | — |
 
@@ -621,10 +686,16 @@ Inline errors bind to `%N` + query trace record, no top-level ErrorEvent
   E4 coordinator arm, eval preregistration, L2/swarm as removable features,
   D-b unified as resolved (I-14). RESEARCH v3 stale text corrected same
   commit (95×, 16KB, prior-art phrasing, "nearly free").
-- 2026-08-08: v0.7 — input 16's required-before-freeze list applied in full
-  (see header). RESEARCH updated in the same commit: §6 family list now
-  includes OpenClaw as family (e), header/Q1/lineage reflect the resolved
+- 2026-08-08: v0.7 — input 16's required-before-freeze list applied in full.
+  RESEARCH updated in the same commit: §6 five-family list, resolved
   kittens-tui seam.
-- Next: final Codex verification of the input-16 fixes; close D2/D4 exact
-  shapes; operator review; freeze KC0 sections. Implementation remains
-  unauthorized until freeze.
+- 2026-08-08: v0.8 — input 17 (targeted verification of v0.7) closed:
+  append/recovery unification behind one appender with
+  epoch-validation-before-repair; complete typed IR; cap/meter rule made
+  consistent across P8/Q5/Appendix A; full ID→layer→gate matrix; wording
+  nits (per-session aggregate, always-replace rename, either-threshold
+  flush, exact regex pin with inline-flag rejection).
+- Next: close D2/D4 exact shapes; operator review; freeze KC0 sections.
+  The Codex review cycle is concluded at input 17 — remaining items are
+  drafting (D2/D4) and human judgment, not review findings. Implementation
+  remains unauthorized until freeze.
