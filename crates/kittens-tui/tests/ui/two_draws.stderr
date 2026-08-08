@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `presenter` as mutable more than once at a time
+  --> tests/ui/two_draws.rs:14:18
+   |
+13 |     let first = presenter.try_begin(now);
+   |                 --------- first mutable borrow occurs here
+14 |     let second = presenter.try_begin(now);
+   |                  ^^^^^^^^^ second mutable borrow occurs here
+15 |     drop((first, second));
+   |           ----- first borrow later used here

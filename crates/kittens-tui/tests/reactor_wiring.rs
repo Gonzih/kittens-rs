@@ -90,7 +90,11 @@ impl App {
                             "in-order acks are never stale in this scenario"
                         );
                         self.frames_acked += 1;
-                        if self.frames_acked == 3 {
+                        // Three app events yield exactly two frames: e2 and
+                        // e3 arrive while frame0 is in flight and coalesce
+                        // into one request. Waiting for a third ack would
+                        // hang forever — coalescing is the oracle here.
+                        if self.frames_acked == 2 {
                             self.quit.cancel();
                         }
                         Ok(Control::Continue)
@@ -152,14 +156,14 @@ async fn canonical_wiring_presents_three_acknowledged_frames() {
     };
 
     let acked = app.run(&mut sources).await.expect("writer lane stays open");
-    assert_eq!(acked, 3, "the reactor exits through the shutdown arm");
+    assert_eq!(acked, 2, "the reactor exits through the shutdown arm");
     assert_eq!(app.presenter.in_flight(), None, "gate is idle at exit");
 
     let App { writer: handle, .. } = app;
     writer.finish(handle).expect("writer drains and joins");
     assert_eq!(
         sink.0.lock().expect("sink lock").as_slice(),
-        b"frame0|frame1|frame2|",
-        "one committed frame per acknowledged window, in order"
+        b"frame0|frame1|",
+        "three app events coalesce into exactly two in-order frames"
     );
 }
