@@ -6,8 +6,9 @@
   gpt-5.6-sol at ultra effort, input 13 — verdict YES-WITH-CONDITIONS; factual
   corrections F15–F30 and blind spots F32–F39 folded → this is v3)
 - Status: refined synthesis; external verdict: sufficient basis for a
-  *reversible* KC0 evidence slice (not for freezing the bets as established);
-  one coordination gap open (kittens-tui seam)
+  *reversible* KC0 evidence slice (not for freezing the bets as established).
+  The kittens-tui seam, open at v2, is resolved by conformance to the
+  published K1-TUI contract (input 14; SPEC F3/D-b)
 - Scope: `kittens-code`, a coding-agent harness crate family built on the `kittens`
   reactor kernel and the (externally owned) `kittens-tui` rendering abstraction
 - Raw inputs: ten pinned files in [`research-inputs/`](research-inputs/) — one
@@ -477,8 +478,8 @@ resolved together.
 that unlocks agents reading each other's thoughts; must be modular, plug-in/out
 for evals.
 
-**Fact (inputs 02, 04, 06, 08):** prior art falls into four families, none of which
-is transcript read-mounting:
+**Fact (inputs 02, 04, 06, 08, 13):** prior art falls into five families —
+including one, (e), that IS scoped peer-transcript retrieval:
 (a) **message passing** — Claude agent-teams inbox + shared task list, the
 operator's harness-bus daemon (agents discover/spawn/message via MCP), A2A
 protocol, Mesh Memory Protocol (field-level messages with lineage, explicitly not
@@ -491,7 +492,11 @@ multi-tenant store with four-level scopes; agents never touch raw transcripts) �
 its scope model is ready-made prior art for mount access control;
 (d) **representation-level sharing** — DroidSpeak/KVCOMM/QKVShare share KV caches
 across agents at the serving layer (70%+ reuse, 7.8× prefill speedups) — a
-serving-layer sibling of "reading thoughts," model-locked and not queryable.
+serving-layer sibling of "reading thoughts," model-locked and not queryable;
+(e) **scoped peer-history retrieval** — OpenClaw's cross-agent session
+transcript search (input 13 F29) — bespoke retrieval tools over another
+agent's transcripts, the closest occupant and the reason the novelty claim
+below is narrow.
 
 **Corrected (input 13 F29 — the v2 "zero prior art" claim is withdrawn):** the
 first falsification attempt (input 08) missed OpenClaw, which ships scoped
@@ -725,9 +730,10 @@ compound rows split so foundations and extensions carry separate ratings.
 
 Open questions carried into the spec (spec-blocking marked ✋):
 
-1. ✋ **kittens-tui interface** — owned elsewhere; the protocol event stream must be
-   negotiated with that harness before the frontend seam freezes. **Gap: interface
-   unknown.**
+1. ~~kittens-tui interface~~ — **closed (input 14):** the owning harness
+   published the K1-TUI controlling contract; kittens-code conforms (shared
+   driver reactor, unprivileged renderer). Residual: KC1 pins kittens-tui as
+   its first external consumer before their name freeze.
 2. ~~no_std Lua (piccolo)~~ — **closed (input 08):** rejected for v1; revisit
    post-1.0 for its fuel-metered sandbox.
 3. ✋ **Reduced regex dialect off-std (D7) × store codec** — regex-automata subset
@@ -800,5 +806,9 @@ Open questions carried into the spec (spec-blocking marked ✋):
   retrieval factoring, model-invoked compaction, transcript-retrieval
   benchmark). Codex freeze conditions 1–6 recorded in input 13 findings 44–49;
   conditions map to SPEC v0.5 changes and the D-c spike.
-- Next: SPEC v0.5 folds the freeze conditions; the kittens-tui seam (Q1) is
-  negotiated with the owning harness, not decided unilaterally here.
+- 2026-08-08 (continued): SPEC advanced v0.5 → v0.7 through two further
+  external Codex passes (inputs 15, 16; see SPEC §16). Research-side
+  corrections landed alongside: §6 five-family prior-art list (OpenClaw as
+  family (e)), kittens-tui seam closed by conformance (input 14 — Q1 above),
+  exec-summary stale figures corrected (depth economics, ~32KB TLS, narrowed
+  swarm novelty, mount-interface-cheap-not-free).

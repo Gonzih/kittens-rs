@@ -1,15 +1,19 @@
 # kittens-code specification
 
 - Spec date: 2026-08-08
-- Version: v0.6 — full architectural revision folding the external spec review
-  (input 15, Codex gpt-5.6-sol ultra, verdict FREEZE-AFTER-FIXES: 7 blockers,
-  9 majors — every finding dispositioned; the corrected topology and call
-  model below are the review's, adopted). Prior lineage: v0.1 draft → v0.2
-  (input 11) → v0.3 (D3/D10–D14) → v0.4 (input 12) → v0.5 (input 13
-  conditions) → this.
-  **Not yet frozen, no implementation authorized.** Freeze requires: operator
-  review + closure of D2/D4 exact shapes (§15) + one Codex verification pass
-  confirming the blocker fixes.
+- Version: v0.7 — v0.6 folded the external spec review (input 15, 8 blockers
+  + 9 majors, corrected topology and call model adopted); the verification
+  pass on v0.6 (input 16, FREEZE-AFTER-FIXES, converging: 8/17 FIXED) drove
+  this version: canonical Commit-only append path with PersistFailed,
+  whole-batch dispatch law, bounded paged continuations, self-contained
+  typed verb semantics + IR variants, preview/authoritative event split,
+  persisted crash-repair terminals, resume demoted from Op to startup mode,
+  rename semantics, unknown-kind replay rules, literal import ledger with
+  ledger→gate matrix, l3 dialect pinned + recorded. Prior lineage: v0.1 →
+  v0.5 in git history of this file.
+  **Not yet frozen, no implementation authorized.** Freeze requires:
+  operator review + closure of D2/D4 exact shapes (§15) + one final Codex
+  verification confirming the input-16 fix list.
 - Controlling evidence slice: section 14 (KC0) with its **exhaustive import
   ledger** (input 15 F14 — no more ranges). Everything not imported there is
   candidate design retained for lineage, per the root SPEC §37 discipline.
@@ -92,8 +96,12 @@ Rules:
   embedding models, wall-clock, or entropy. Anything IO-shaped is an Effect;
   the only synchronous seams are deterministic, bounded, memory-only (§11).
   Enforced by G1b (cargo-metadata feature-tree check), not convention.
-- T3. Frontends and external clients link `protocol` (+ transport) only.
-  The in-process renderer (I-14) is an ordinary Event consumer. Gate G1b.
+- T3. Presentation/client modules and external frontends link `protocol`
+  (+ transport) only; the in-process renderer (I-14) is an ordinary Event
+  consumer. **The composition-root binary (kittens-code-cli) is exempt** —
+  it links driver-tokio to wire the system together (input 16 N6); the rule
+  binds everything that *consumes* the harness, not the root that assembles
+  it. Gate G1b checks the non-root members.
 - T4. New crates require a spec change (sprawl budget).
 - T5. Admission ledger rule (header).
 - T6. Non-Tokio drivers MUST depend on `kittens` with
@@ -112,16 +120,24 @@ framed store codec (§5).
 ## 4. Protocol contract (wire only — slimmed per input 15 F3)
 
 - P1. `Op` (client→driver): `user_input`, `interject`, `approve { id,
-  verdict }`, `interrupt`, `resume`, `config_patch(SessionConfigPatch)`,
-  `shutdown`. Candidate: `fork`, `rewind_to`, swarm mount ops. Every Op gets
-  a submission id (u64).
-- P2. `Event` (driver→client): turn lifecycle, model deltas, tool call
+  verdict }`, `interrupt`, `config_patch(SessionConfigPatch)`, `shutdown`.
+  Candidate: `fork`, `rewind_to`, swarm mount ops. Every Op gets a
+  submission id (u64). **`resume` is not an Op** (input 16 R7): resume is a
+  startup mode of the driver — open log, run crash-repair (S3), replay into
+  a fresh core, seed epoch/seq counters from the log maxima, continue. No
+  wire message exists for it.
+- P2. `Event` (driver→client): turn lifecycle, model deltas (authoritative,
+  plus optional `preview: true` pre-durability copies — L-A3), tool call
   proposed/started/output-delta/terminal, approval requests, budget updates,
   compaction started/applied/suppressed, RLM query trace, `ErrorEvent`.
-  Events are emitted **only after the underlying records are durably
-  acknowledged** (§6 L-D3). Unknown *fields* AND unknown *enum kinds* must
-  be tolerated by decoders (F15): every enum is `#[non_exhaustive]`-shaped
-  on the wire with an explicit `unknown` catch-all rule.
+  Authoritative Events are emitted only after the underlying records are
+  durably acknowledged (L-A3). Unknown-kind rules (input 16 N4, replacing
+  the v0.6 catch-all): **clients** preserve unknown Event kinds opaquely
+  (raw bytes retained, never re-encoded lossily); **drivers reject unknown
+  Ops** with `ErrorEvent { code: config_invalid }`-class refusal; unknown
+  *state-bearing record kinds* in a log require a `schema_epoch` bump —
+  replay never guesses their lifecycle (prevents false `aborted_by_crash`).
+  Gate G2c: decode → replay → re-encode fixtures across an epoch bump.
 - P3. Tool-call streams on the wire are `Started → OutputDelta* → exactly
   one Terminal`, property-tested (G7b).
 - P4. `SandboxPolicy` / `ApprovalPolicy` are protocol data; mechanism is
@@ -174,6 +190,11 @@ framed store codec (§5).
   A torn/checksum-failed tail is detected and cleanly ignored (G2 fixture).
   Atomicity is per-record; the *transaction* invariant is "no Terminal
   without its Started on replay", not multi-record atomic writes.
+  **Crash repair is persisted (input 16 R9):** on open, the scanner APPENDS
+  a real `aborted_by_crash` Terminal record for every incomplete
+  transaction, THEN replays — so the durable-record-only publication rule
+  (L-A3) holds for repair terminals too; nothing synthetic exists only in
+  memory.
 - S4. Codec: framed JSONL (one record per line + checksum field) in
   driver-tokio; postcard framing is the MCU candidate (D7-linked).
 - S5. Crash discipline: per-record durable append with a driver-declared
@@ -181,10 +202,10 @@ framed store codec (§5).
   watermarks to core (§6).
 - S6. Log header record: `{ session_id: SessionId, parent:
   Option<SessionId>, schema_epoch: u32, prompt_pack_version: [u16;3],
-  verb_grammar_version: [u16;3], codec, created_at:
-  Option<driver-claimed-time> }`. Replay refuses a higher `schema_epoch`
-  with `schema_incompatible`. One writer per log (create-exclusive/lock);
-  multi-process append out of scope for v0.x.
+  verb_grammar_version: [u16;3], l3_dialect_version: [u16;3], codec,
+  created_at: Option<driver-claimed-time> }`. Replay refuses a higher
+  `schema_epoch` with `schema_incompatible`. One writer per log
+  (create-exclusive/lock); multi-process append out of scope for v0.x.
 - S7. Store access is **effect-driven** (input 15 F5): `StoreAppend`,
   `StoreReadPage`, `StoreSearchPage` effects with paged, bounded results —
   no synchronous store port (IndexedDB/OPFS and flash are async; JSONL scans
@@ -198,18 +219,28 @@ re-entrancy-safe boundary:
 
 ```
 CoreInput  = ClientOp(Op)
-           | EffectProgress { id: EffectId, epoch, payload }
-           | EffectFinished { id: EffectId, epoch, terminal }
+           | EffectProgress { id: EffectId, epoch: TurnEpoch, payload }
+           | EffectFinished { id: EffectId, epoch: TurnEpoch, terminal }
            | Persisted { up_to_seq: u64 }
-           | TimerFired { id: EffectId }
-CoreAction = Commit(records)                    // append to log
+           | PersistFailed { at_seq: u64, error }
+           | TimerFired { id: EffectId, epoch: TurnEpoch }
+CoreAction = Commit(records)                    // THE append path (sole)
            | StartEffect { id, epoch, spec }    // http/model, sub-model,
-                                                // vfs, exec, store page,
-                                                // timer arm, embed (l2)
+                                                // vfs, exec, store READ/
+                                                // SEARCH page, timer arm,
+                                                // embed (l2)
            | CancelEffect { id }
 Transition = { actions: bounded owned Vec<CoreAction> }   // no lazy iter
 fn handle(&mut self, input: CoreInput) -> Transition
 ```
+
+Append canon (input 16 R5/R9): `Commit` is the ONLY append path; there is no
+`StoreAppend` effect (store *read/search* pages remain effects, S7). The
+driver stages each Commit to durable storage in order; success advances the
+`Persisted` watermark; failure arrives as `PersistFailed`, which core treats
+as Fatal `store_io` (drain and stop — a harness that cannot persist must not
+keep acting). Every CoreInput that references an effect carries its
+`TurnEpoch` (R4 — including `TimerFired`).
 
 - L-A1. `handle` is never re-entrant: effect completions (including the
   synchronous test jail's) enter as queued CoreInputs through admitted
@@ -220,9 +251,20 @@ fn handle(&mut self, input: CoreInput) -> Transition
   cancel-aware waiting in the owning task — never inside `handle`. Max
   concurrent effects is a config bound. Kernel `#[drain]`/`#[yields_to]`
   govern service order; capacity is these queues (F6).
+- L-A2b. Whole-batch dispatch law (input 16 R6): the driver reserves/stages
+  capacity for an ENTIRE Transition before dispatching any of it, dispatches
+  actions in order exactly once, and completes dispatch before the next
+  `handle` call. A Transition is never partially applied across a `handle`
+  boundary. Gate G11.
 - L-A3. Event publication: the driver derives protocol Events from `Commit`
   records and publishes them only after the covering `Persisted` watermark
   (durable-ack rule, F4). The jail driver acks synchronously.
+  **Streaming latency (input 16 N2):** model output deltas MAY additionally
+  be published immediately as explicitly non-authoritative `preview: true`
+  Events; authoritative Events follow the watermark and reference the same
+  record ids, so clients reconcile by id. Drivers MUST bound flush latency
+  (bytes-or-millis sync policy, declared in bootstrap config); the recorded
+  tradeoff: durability beats display for authority, preview restores UX.
 - L-T1. Turn law: sample → tool effects → resample; a model terminal with no
   tool calls ends the turn. Core owns `SessionState` and `TurnState { phase,
   epoch, pending_effects, call_order }`, RLM continuations, and the
@@ -293,32 +335,53 @@ fn handle(&mut self, input: CoreInput) -> Transition
   **Status: versioned-experimental until E2 runs** (F13 downgrade from
   STABLE); version recorded in S6. The stability *goal* (future RL action
   space) stands, the freeze happens on E2 evidence.
-- Q2. **Typed IR (F13):** every surface (verb text now; typed function
-  calls and Lua later) lowers to one closed IR — `Query = [Instr]`,
-  `Instr { op, args: [Value], out: RefSlot }`, `Value = Ref(%N) | Range |
-  Str | Num | Flag` — with arity, ref-type, duplicate-flag, and
-  forward-reference validation at lowering. The EBNF (appendix A) is the
-  text surface's grammar; the IR is the semantic contract; E2 compares
-  surfaces above the same IR.
+- Q2. **Typed IR (F13; closed variants per input 16 R13):** every surface
+  (verb text now; typed function calls and Lua later) lowers to one closed
+  IR: `Query = [Instr]` where `Instr` is a closed enum with typed fields —
+  `Grep { pattern: Str, sel: Sel, ctx: u16, kind: Option<EventKind> }`,
+  `Slice { sel: Sel }`, `Head/Tail { sel: Sel, n: u32 }`,
+  `Count { pattern: Option<Str>, sel: Sel }`,
+  `Partition { sel: Sel, by: By, size_or_pattern }`,
+  `Ask { sel: Sel, question: Str, sample_k: Option<u8> }`,
+  `AskEach { chunks: Ref, question: Str }`, `Final { value: Str | Ref }` —
+  with `Sel = Ref(%N) | Range | Whole`. Arity, ref-type (a `Ref` arg must
+  name an earlier line; `AskEach.chunks` must be a partition result),
+  duplicate-flag, and forward-reference validation happen at lowering
+  (G7d). The EBNF (appendix A) is the text surface only; the IR is the
+  semantic contract; E2 compares surfaces above the same IR.
 - Q3. Root-protection law: all RLM-originated data entering the root window
   is cap-typed; every tool result surfaced to the root is truncated to
   `Capped<ToolResult>` (head/tail excerpt + log-offset pointer; full output
   is in the log — reversible offload). Gate G3.
-- Q4. Execution is a **core-owned continuation** (F8): `QueryCont { query_id,
-  pc, results: typed %N slots, pending: [EffectId], budgets }`. Verbs that
-  need data emit paged store effects (S7); `ask` emits a sub-model effect
-  and the continuation suspends until its terminal CoreInput; `ask-each`
-  schedules incrementally (bounded parallel window) and rejoins by partition
-  index. Nothing blocks inside `handle`.
-- Q5. Budget set (F8 — fan-out actually bounded): per-verb output cap;
-  verb-count cap per query (*synthesis-introduced*); recursion depth
-  (default 1, economics rationale R§4.5); **total subcalls per query;
-  parallel subcalls; partition count; selected-bytes ceiling**. All meters
-  surface as protocol events.
+- Q4. Execution is a **core-owned continuation** (F8; state completed per
+  input 16 R8): `QueryCont { query_id, pc, results: typed %N slots,
+  page_cursor: Option<PageCursor>, fold: Option<FoldState>  // grep/count/
+  partition accumulators, join: Option<JoinState>  // ask-each partition
+  rejoin, pending: [EffectId], budgets: MeterSet }`. Verbs that need data
+  emit paged store-read/search effects (S7); `ask` emits a sub-model effect
+  and suspends; `ask-each` schedules incrementally (bounded parallel window)
+  and rejoins by partition index. Nothing blocks inside `handle`.
+  Terminal/discard rules: a query reaching `final`, erroring at query level,
+  or being cancelled emits CancelEffect for its pending ids and drops its
+  continuation with a trace record; turn interrupt discards all query
+  continuations of that epoch the same way.
+- Q5. Budget set (F8 + input 16 N1 — pending state actually bounded):
+  per-verb output cap; verb-count cap per query (*synthesis-introduced*);
+  recursion depth (default 1, economics rationale R§4.5); total subcalls
+  per query; parallel subcalls; partition count; selected-bytes ceiling;
+  **scanned-pages and scanned-bytes ceilings per query; total page-effects
+  per query; max simultaneous suspended queries per session; aggregate
+  retained continuation memory ceiling** — all runtime limits under
+  compile-time hard maxima (P6 pattern). All meters surface as protocol
+  events. Meter charging split (input 16 N5): **value caps truncate** with
+  metadata (`Capped<…>`); **aggregate/query meters error** (`verb_error
+  {cause: budget}` in-script; `budget_exhausted` at query/turn level).
 - Q6. L3 search: `grep` over store search-page effects; the exact pattern
-  dialect is **versioned** (`l3_dialect_version`, part of D7) — KC0 pins the
-  driver-tokio dialect (full regex) and records it; no_std dialect closes
-  with D7.
+  dialect is **versioned and recorded in the S6 header** (`l3_dialect_version`
+  — input 16 N7). KC0 pins dialect 1.0.0 = Rust `regex` crate syntax,
+  case-sensitive, no backreferences/lookaround (the crate cannot express
+  them), Unicode on. no_std dialect closes with D7. Gate G12: search replay
+  goldens over a fixed corpus.
 - Q7. L2 ports (`Embedder`/`Similar`) behind the `l2` feature (T7), defined,
   unimplemented; index contract carries model fingerprint, dims, metric,
   quantization, chunker version, source hash, watermark, rebuild policy,
@@ -336,10 +399,14 @@ fn handle(&mut self, input: CoreInput) -> Transition
 - K2. Implementable contracts (input 15 F11): **Vfs effects** operate on
   normalized relative paths (no `..`, no absolute, symlink policy = refuse
   by default), bounded range reads, paged directory listings, atomic
-  revision-aware writes (expected-generation compare), declared rename
-  semantics. **Exec effects** take argv (never a shell string), cwd, bounded
-  env + stdin, deliver sequenced stdout/stderr progress records, exit
-  status terminal, deadline, cancellation.
+  revision-aware writes (expected-generation compare). Rename semantics
+  (input 16 R11): replace-by-default within one mount; atomicity is a
+  per-driver declared capability (atomic where the backend supports it,
+  copy+delete fallback declared, never silent); cross-mount rename is
+  refused; renaming through or onto a symlink is refused. **Exec effects**
+  take argv (never a shell string), cwd, bounded env + stdin, deliver
+  sequenced stdout/stderr progress records, exit status terminal, deadline,
+  cancellation. Gate G7e (contract conformance tests per driver).
 - K3. `SessionCapabilities` (F11): drivers declare at startup which effect
   families exist (exec: no on web/MCU); tool schemas are advertised to the
   model ONLY for capable families — a data variant compiling is not a
@@ -357,6 +424,7 @@ fn handle(&mut self, input: CoreInput) -> Transition
   structured typed handoff, **centralized coordinator**, raw read-mount,
   filtered/snapshot mount} × task topologies.
 - W4. D16 (retention/redaction/taint + correction records + provenance +
+  **access revocation + stable read watermarks** (input 16 R16 c4) +
   enforcement oracle) blocks the swarm crate.
 
 ## 11. Effects and seams summary
@@ -396,11 +464,16 @@ CoreInputs that need them, never ambient.
 
 ## 14. KC0 — controlling evidence slice
 
-**Import ledger (exhaustive, input 15 F14):** T1–T7; P1–P9; S1–S7; L-A1–A3,
-L-T1–T4, L-D1, L-D3; C1–C10; Q1–Q6 (Q6 driver-tokio dialect only), Q8, Q9;
-K1–K3; M1–M3; F1, F4. Explicitly NOT imported: L-T5/D8 (subagents), Q7/T7
-features on (l2, swarm-port stay off), W1–W4, K4, F2, F3 (KC1), fork,
-postcard codec, all post-KC0 drivers.
+**Import ledger (literal enumeration, input 16 R14):** T1, T2, T3, T4, T5,
+T6, T7 (T7 = the features exist and are OFF in KC0 builds); P1, P2, P3, P4,
+P5, P6, P7, P8, P9; S1, S2, S3, S4, S5, S6, S7; L-A1, L-A2, L-A2b, L-A3,
+L-T1, L-T2, L-T3, L-T4, L-D1, L-D3; C1, C2, C3, C4, C5, C6, C7, C8, C9,
+C10; Q1, Q2, Q3, Q4, Q5, Q6 (driver-tokio dialect 1.0.0 only), Q8, Q9; K1,
+K2, K3; M1, M2, M3; F1, F4. **Not imported (dispositioned):** L-T5/D8
+(subagents, post-KC0); L-D2 (driver conformance suite — activates with the
+second driver, KC1); Q7 implementations (`l2` off); W1–W4 (`swarm-port`
+off; crate gated on D16); K4; F2; F3 (KC1 pins kittens-tui); fork;
+postcard codec (D7); all post-KC0 drivers.
 
 Scope: (1) protocol+core under the link gate; (2) driver-tokio reactor
 driving a real Anthropic-dialect endpoint and the seeded jail; (3) framed
@@ -412,17 +485,21 @@ SessionCapabilities; (6) eval rig: seeded jail + E1 with arms
 on the D14 battery (eight tasks; tasks 2/5 RLM-arms-only with degraded
 variants), **with preregistered falsifiers, thresholds, and cost/time/token
 budgets recorded in the battery manifest before first implementation
-results** (F16 condition 3); Terminal-Bench 2.0 and E2 are KC1 gates with
-their manifests preregistered at KC0 close.
+results** (F16 condition 3); Terminal-Bench 2.0, E2, E3, and E4 are KC1+
+gates whose manifests — same metric set, same ≥2-model-family rule, per-arm
+falsifiers and budgets — are preregistered at KC0 close (input 16 R16).
 
 Gates:
 
 - G1. Link gate (thumbv7em + wasm32-unknown-unknown), CI.
 - G1b. Structure gate: cargo-metadata check — core's dependency and feature
   tree matches T2/T6/T7; frontends link protocol only (T3).
-- G2. Replay determinism on the seeded jail (byte-identical log; L-D3);
-  fixtures: schema-epoch bump refusal, torn tail, checksum corruption,
-  incomplete stream → `aborted_by_crash`.
+- G2. Replay determinism, two distinct claims (input 16 N4): (a) fresh-run
+  byte equality on the seeded jail (L-D3); (b) replay *state equivalence*
+  when re-opening an existing log. Fixtures: schema-epoch bump refusal,
+  torn tail, checksum corruption, incomplete stream → persisted
+  `aborted_by_crash` repair record, config-patch precedence replay (F4).
+  G2c: unknown-kind decode/replay/re-encode across an epoch bump (P2).
 - G3. Budget law: trybuild cap-type bypass fails; adversarial oversized
   verb/tool/ask outputs truncate with metadata. G3b property tests
   (runtime limits, aggregate meters, malicious decode).
@@ -440,6 +517,23 @@ Gates:
 - G8. Injection-escape adversarial fixture (C7).
 - G9. Store immutability API audit (S1).
 - G10. Real-endpoint smoke session, replayable offline afterward.
+- G11. Boundary-law tests (L-A1/A2/A2b/A3): re-entrancy rejection,
+  queue-full producer wait, whole-batch staging (a Transition is never
+  split across `handle` calls), preview/authoritative reconciliation by
+  record id.
+- G12. L3 search goldens: fixed corpus, pinned dialect 1.0.0, byte-stable
+  results (Q6).
+
+Ledger→enforcement→gate matrix (input 16 N3, compact form): T1→G1;
+T2/T3/T7→G1b (T6's check activates with the first non-Tokio driver — noted,
+not vacuous); P1/P8/P9→G2+G4b fixtures; P2/P7→G2c; P3→G7b; P4–P5→G2
+config-precedence fixture; P6→G3/G3b; S1→G9; S2/S5/S6→G2; S3→G2 fixtures;
+S7→G11 (paged effects only — no sync store call sites, checked by G1b
+dependency audit); L-A*→G11; L-T1/T2→G4b; L-T3/T4→G7/G7c; L-D1→G4 (the
+service-window claim is the kernel's own KTR-checked law, exercised here);
+L-D3→G2; C1–C10→G5/G6/G8 (+C8 bounds in G5); Q1–Q2→G7d; Q3→G3; Q4–Q5→G11
+meters + G5; Q6→G12; Q8/Q9→G5/G7d; K1–K3→G7/G7e; M1–M3→G7 retry scenario +
+G10; F1/F4→G2 fixtures.
 
 Falsifiers: F-a (funnel/topology inexpressible in reactor macro without raw
 selection escape — ledgered kernel absences excluded); F-b (>5% hot-path
@@ -492,10 +586,23 @@ letter    = "a".."z" | "A".."Z" ;  digit = "0".."9" ;
 character = ? any UTF-8 scalar value ? ;
 ```
 
-Verb semantics as in v0.5 §8.1 (selection model, `%N` binding, per-verb caps,
-`slice` accepts `%N` or range, `ask-each` bounded by Q5's limit set, `final`
-takes literal or `%N`, inline errors per Q9) — now defined over the IR;
-arity/type/duplicate/forward-ref validation happens at lowering (G7d).
+Semantics table (self-contained, input 16 N5; every verb reads a `Sel` =
+`%N` ref, range, or whole target; every line's capped output binds `%N`;
+meters charged per Q5 — value caps truncate, aggregate meters error):
+
+| Verb | Typed form (Q2 IR) | Output | Meters charged |
+|---|---|---|---|
+| `grep` | `Grep{pattern, sel, ctx, kind}` | matching records + context; binds hit-selection | scanned-pages/bytes, page-effects, verb output cap |
+| `slice` | `Slice{sel}` | records in selection | scanned-pages/bytes, verb output cap |
+| `head`/`tail` | `Head/Tail{sel, n}` | first/last n records | scanned-pages/bytes, verb output cap |
+| `count` | `Count{pattern?, sel}` | count (engine-side aggregation) | scanned-pages/bytes, page-effects |
+| `partition` | `Partition{sel, by, size_or_pattern}` | chunk-list selection (partition-count meter bounds it) | scanned-pages/bytes, partition count |
+| `ask` | `Ask{sel, question, sample_k?}` | sub-model digest (`Capped<AskDigest>`) | selected-bytes, total/parallel subcalls, recursion depth, wall-clock/token meters |
+| `ask-each` | `AskEach{chunks, question}` | per-chunk digests, rejoined by index; concatenation is verb-output-capped | selected-bytes, total/parallel subcalls, partition count |
+| `final` | `Final{value}` | terminates query; literal or `%N` is the answer | — |
+
+Inline errors bind to `%N` + query trace record, no top-level ErrorEvent
+(Q9). Arity/type/duplicate/forward-ref validation at lowering (G7d).
 
 ## 16. Lineage
 
@@ -514,6 +621,10 @@ arity/type/duplicate/forward-ref validation happens at lowering (G7d).
   E4 coordinator arm, eval preregistration, L2/swarm as removable features,
   D-b unified as resolved (I-14). RESEARCH v3 stale text corrected same
   commit (95×, 16KB, prior-art phrasing, "nearly free").
-- Next: Codex verification pass on v0.6 blocker fixes; close D2/D4 exact
+- 2026-08-08: v0.7 — input 16's required-before-freeze list applied in full
+  (see header). RESEARCH updated in the same commit: §6 family list now
+  includes OpenClaw as family (e), header/Q1/lineage reflect the resolved
+  kittens-tui seam.
+- Next: final Codex verification of the input-16 fixes; close D2/D4 exact
   shapes; operator review; freeze KC0 sections. Implementation remains
   unauthorized until freeze.

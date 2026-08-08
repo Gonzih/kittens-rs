@@ -3,7 +3,7 @@
 Independent cross-model-family review of SPEC.md v0.5, crate-structure focus
 per operator loop directive. Read-only `codex exec` run; inspected real
 kernel source (source/mod.rs, Cargo.toml) alongside the spec. Verdict:
-FREEZE-AFTER-FIXES — 7 blockers, 9 majors. All folded into SPEC v0.6.
+FREEZE-AFTER-FIXES — 8 blockers, 9 majors. All folded into SPEC v0.6.
 
 ## Verdict
 
