@@ -65,7 +65,7 @@ impl App {
             }
 
             /// Shutdown leads; requested by the writer-events handler once
-            /// three frames are acknowledged.
+            /// both coalesced frames are acknowledged.
             #[source(stop)]
             #[readiness(quiescent)]
             #[shutdown]

@@ -78,6 +78,11 @@ impl FrameWriter {
     /// sink. The writer protocol is normative in `SPEC.md` section 6.4:
     /// in-order write+flush, one acknowledgement per frame, one typed
     /// failure then exit, accepted frames drained before exit.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the operating system refuses to spawn a thread,
+    /// which is outside normal operating limits.
     pub fn spawn<W: Write + Send + 'static>(mut sink: W) -> (Self, WriterHandle, WriterSource) {
         let (frame_tx, frame_rx) = std_mpsc::channel::<(FrameSeq, Vec<u8>)>();
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<WriterEvent>();
