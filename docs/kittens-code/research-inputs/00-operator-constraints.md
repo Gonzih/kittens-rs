@@ -36,3 +36,9 @@ They are inputs to the research doc, labeled as operator constraints (not yet ev
    in both docs so other harnesses can hydrate, validate, and refine.
 9. Redaction: prior org repos are referenced as "prior internal harness
    experiments"; the org name is never written in research artifacts.
+10. (Added post-research, 2026-08-08) During spec/implementation: look at the
+    existing kittens crates and expand/extend them wherever the harness needs
+    it — extending the kernel is in scope, not a violation. Rely on existing
+    libraries where possible; do less from scratch; code is cheap. The goal is
+    a harness that runs on microcontrollers, WASM, and bare-metal devices —
+    do whatever needs to be done to get there.
