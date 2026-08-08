@@ -1,92 +1,110 @@
 # kittens-render research
 
 - Date: 2026-08-08
-- Status: research pass for the embedded rendering/interaction profile; no implementation authorized by this document
-- Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) section 20 (embedded async UI, revision-keyed board facts, firmware anatomy, DMA/selection-loss contracts) and section 20B (coverage model); [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (the open generic-gate comparison this profile supplies the second arm for)
-- Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**, as in the root research doc; unresolved questions are marked `**Gap: ...**`
+- Revision 2, same day: incorporates the full 14-finding external review (Codex `gpt-5.6-sol`, ultra effort, read-only repository access). Five findings were blocking; one exposed a factual error in revision 1. Corrections are recorded explicitly per house rules — drift is a first-class defect, never silently patched.
+- Status: research pass for the embedded rendering/interaction profile; **not ready to graduate into a SPEC** until the section 9 gates run. No implementation is authorized by this document.
+- Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
+- Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
 ## 1. Charter: the interface becomes a first-class citizen
 
-**Observation:** a harness today is a backend — heavy IO, model streams, tool execution — with an interface bolted on through conventions. The Grok TUI research showed the interface is actually the hardest orchestration in the codebase: input isolation, frame gating, acknowledgement protocols, starvation topology. `kittens-tui` made that law explicit for terminals. This profile does the same for physical displays on bare metal: the rendering pipeline and the input pipeline become declared reactor topology in the same vocabulary as the backend, in one codebase that reads like a backend *and* is a rendering engine.
+**Observation:** a harness today is a backend — heavy IO, model streams, tool execution — with an interface bolted on through conventions. The Grok research showed the interface is the hardest orchestration in the codebase; `kittens-tui` made that law explicit for terminals. This profile does the same for physical displays on bare metal: rendering and input pipelines become declared reactor topology in the same vocabulary as the backend.
 
-**Recommendation:** the profile's thesis, falsifiable: *one Kittens vocabulary can express a complete embedded interactive application — display refresh, touch interrupts, sensor IO, backend work — with the same declared-topology coverage the desktop harness gets, on a real board.* The unit of proof is a running app on the named dev board, not a diagram.
+**Recommendation (unchanged):** the falsifiable thesis: *one Kittens vocabulary can express a complete embedded interactive application — display refresh, touch interrupts, sensor IO, backend work — with declared-topology coverage, on a real board.* The unit of proof is a running app on the named dev board.
 
-## 2. Exact hardware target, revision-keyed
+## 2. Exact hardware target, revision-keyed and schematic-corrected
 
-The first dev board is the user's stated hardware: **Waveshare ESP32-S3 1.8inch AMOLED Touch Display, SH8601 display driver, FT3168 capacitive touch, ESP32-S3 LX7 dual-core, 368×448, no battery**.
+First dev board: **Waveshare ESP32-S3 1.8" AMOLED Touch, SH8601 display, FT3168 touch, 368×448** — the **V1 revision** (root RESEARCH 20.1; V2 shipped CO5300/CST820 from 2026-05-30). V1 is the revision in hand and the better-supported one in Rust.
 
-**Fact (from root RESEARCH 20.1):** SH8601 + FT3168 identifies this as the **V1 revision** of the board. Waveshare discontinued V1 shipments in favor of V2 (CO5300 + CST820) on 2026-05-30; boards in hand and remaining retail stock are V1. Every claim in this profile is revision-keyed; V1 is the primary target because it is the hardware we own, and it is the *better-supported* revision in Rust:
+**Fact (revision-1 error, corrected by review finding 4):** revision 1 claimed this board has no tearing-effect input, over-generalizing the root research's V2 pin/BSP note. The [V1 schematic](https://files.waveshare.com/wiki/ESP32-S3-Touch-AMOLED-1.8/ESP32-S3-Touch-AMOLED-1.8.pdf) routes **`LCD_TE` to GPIO13** and **`TP_INT` to GPIO21**, and driver initialization enables tearing-effect output. TE availability does not prove tear-free rendering, but an architecture derived from "TE unavailable" was invalid.
 
-| Layer | V1 status | Source |
+**Fact (review finding 4):** at 40 MHz quad-SPI, a full 368×448 RGB565 frame (329,728 B) has a theoretical wire floor of ~**16.5 ms** before commands, copies, or rendering — a full-frame write spans most of a 60 Hz period, so TE phase matters for tear behavior.
+
+**Recommendation:** cadence eligibility (when a frame is *wanted*) and TE synchronization (when a write is *safe*) are distinct facts and stay distinct in any API. A measured TE experiment joins the gate list: edge behavior by panel mode, safe write phase, tearing outcome, behavior while asleep.
+
+| Layer | V1 status | Notes after review |
 |---|---|---|
-| display driver | [`sh8601-rs` 0.1.8](https://docs.rs/sh8601-rs) supports the exact V1 display with esp-hal, PSRAM, QSPI, and DMA-capable writes; ships a `ws_18in_amoled` example for this very board | root RESEARCH 20.1 |
-| touch | [`ft3x68-rs`](https://docs.rs/ft3x68-rs) — synchronous, `no_std`, FT3168-family, at most two points in a fixed-capacity vector; IRQ scheduling left to the application | root RESEARCH 20.1 |
-| MCU HAL | `esp-hal` (bare-metal `no_std`): async GPIO (explicitly cancellation-unsafe — root 20.3), timers, QSPI, DMA with ownership-returning transfers, PSRAM | root RESEARCH 20.1, 20.3 |
-| executor | Embassy on ESP32-S3 is proven by two nearby all-Rust watch firmwares; the Kittens kernel runs as an ordinary future on it (K0 architecture B) | root RESEARCH 20.2, 20.8 |
+| display driver | [`sh8601-rs` 0.1.8](https://docs.rs/sh8601-rs) — exact V1 display, esp-hal, QSPI | **but**: its `DrawTarget` writes a private full-screen framebuffer, `flush` sends the full window, `partial_flush` assumes that framebuffer and allocates; the streaming interface a stripe path needs is private (finding 3) |
+| touch | [`ft3x68-rs`](https://docs.rs/ft3x68-rs) — sync, `no_std`, ≤2 points | multi-transaction I²C reads can tear; event/ID bits are discarded; IRQ handling explicitly left to the application (finding 9) |
+| MCU HAL | `esp-hal`: owning DMA transfers, async GPIO (cancellation-unsafe), timers, PSRAM | `SpiDmaTransfer::wait_for_done(&mut self)` yields a borrowing, generally `!Unpin` future (finding 2) |
+| board control | touch shares the I²C domain with a TCA9554 expander; reset writes whole expander registers | shared-bus arbitration and panel-command serialization need one owner (finding 10) |
 
-**Fact:** a full RGB565 frame at 368×448 is **329,728 bytes**. ESP32-S3 internal SRAM is ~512 KB (shared with everything); the board has 8 MB octal PSRAM. Waveshare's own C BSP renders in DMA-capable **16-row stripes** (368×16×2 = 11,776 B) rather than requiring a full framebuffer.
+## 3. The transport boundary: two capabilities, not one `Surface`
 
-**Fact:** the inspected 1.8-board sources expose a touch IRQ line but **no tearing-effect (TE) input** (root RESEARCH 20.2 established this for V2 pin/BSP sources; the V1 schematic must be confirmed). Frame pacing therefore cannot gate on TE on this board; it gates on write-completion plus a cadence deadline.
+**Superseded (revision-1 hypothesis, rejected by findings 1 and 8):** revision 1 proposed a single ownership-returning `Surface` spanning blocking flush and owning-DMA. The review showed the two APIs do not share a boundary — a façade equating them would let "start" block to completion, making the completion ceremonial — and an indivisible surface *contradicts* two-buffer overlap: if the transfer owns everything, the renderer has no spare buffer to fill.
 
-**Gap: V1 TE availability and the exact V1 touch-IRQ GPIO number must be confirmed from the V1 schematic before the spec freezes pin-level claims (the V2-era docs mix revisions).**
+**Recommendation (adopting the reviewer's design as the leading candidate):** two explicit capabilities with resource-carrying results, and typestates for overlap:
 
-## 3. What the display path actually is
+```rust
+pub trait BlockingRegionWrite<B>: Sized {
+    type Error;
+    fn write_region(self, region: Region, pixels: B)
+        -> Result<Returned<Self, B>, Failed<Self, B, Self::Error>>;
+}
 
-**Fact:** `sh8601-rs` flush is **synchronous blocking** at the application boundary: when the call returns, the application-visible transfer is complete (controller scanout may continue). Its `partial_flush` allocates a temporary `Vec` proportional to the rectangle — the driver is `no_std` but not no-alloc (root RESEARCH 20.4).
+pub trait OwningRegionWrite<B>: Sized {
+    type Error;
+    type Completion: Future<Output = Result<Returned<Self, B>, Failed<Self, B, Self::Error>>>; // may be !Unpin
+    fn start_region(self, region: Region, pixels: B)
+        -> Result<Self::Completion, Failed<Self, B, Self::Error>>;
+}
 
-**Fact:** esp-hal's owning SPI-DMA transfer API consumes the buffer and peripheral and returns them on completion — ordinary Rust ownership makes a second concurrent transfer or a mutation of the in-flight buffer a compile error. This is a HAL/Rust win the profile composes with, never claims (root RESEARCH 20.4; the embedded-shape K0 fixture already models exactly this ownership-returning completion).
+pub struct PreparedStripe<T, B> { transport: T, ready: B, spare: B, frame: FrameEpoch, region: Region }
+pub struct StripeInFlight<C, B> { completion: C /* pin before polling */, spare: B, frame: FrameEpoch }
+```
 
-**Observation:** the two completion models available on this board map precisely onto the two arms of the open generic-gate question (kittens-tui SPEC section 10):
+`Returned` and every failure variant carry the transport and the sent buffer back; the in-flight state owns the completion and the *spare* buffer independently. Three distinct facts are emitted, never conflated: `StripeWritten`, `BusIdle`, `FramePresented`. Frame-demand policy (`request`/coalescing) is shared *above* both capabilities; their start/completion protocols are not claimed interchangeable.
 
-| | kittens-tui (terminal) | kittens-render (this board) |
+**Recommendation (finding 12, vocabulary):** share only `request` with kittens-tui. Use `eligible_at` for presenter throttling, `cadence_deadline`/`next_frame_at` for periodic demand, `write_region`/`start_region` for transport. No shared trait until the separately authorized generic-gate comparison proves identical semantics.
+
+## 4. Stripe rendering is a renderer contract, not a buffer trick
+
+**Fact (findings 5–7):** two alternating stripe buffers are scratch, not spatial history — partial redraw over them repaints stale pixels; a state change mid-sweep produces a visibly mixed frame; `DrawTarget` clipping rejects pixels only after primitives are generated, so replaying a scene 28× can rasterize 28×; and the honest memory budget includes DMA RX/TX reserves (~32.8 KB in the example transport), descriptors, stacks, and driver state — not just 23.5 KB of stripes. A PSRAM full framebuffer costs ~19.8 MB/s of bandwidth at 30 fps (write+read) before blending or contention.
+
+**Recommendation:** the stripe path requires: an immutable **`FrameEpoch`** snapshot frozen for the whole sweep; every transmitted stripe fully reconstructed from background plus the complete ordered scene; damage history invalidated to full repaint on any reset, partial-transfer failure, or epoch discontinuity; a **global-coordinate** stripe target; and either a bounded display list with spatial culling or measured scene-replay cost. Per-backend peak memory and bandwidth budgets are published separately, with a zero-allocation-after-init requirement.
+
+## 5. The kernel is a constraint here, and that is a finding about the kernel
+
+**Fact (finding 2):** DMA completion cannot currently be a reactor source. `ReactorSource` is sealed and `Unpin` with `&mut self` polling; `Latched` is locally armed only, with no concurrent arming handle and no ISR wake. The HAL's completion future borrows the owned transfer and is generally `!Unpin`. Reconstructing that future per poll is invalid (dropping it removes the completion listener).
+
+**Recommendation:** this graduates from profile problem to **kernel feasibility gate (K2R-0A)**: either the kernel admits pinned no-std sources (`poll_next(self: Pin<&mut Self>, ...)` — the pin-boundary comparison root SPEC 37.6 explicitly reserved), or the profile explicitly admits a named Embassy task/channel boundary for completion delivery. Neither is hidden behind an abstraction; the K0 report's provisional pin/`Unpin` row anticipated exactly this pressure.
+
+**Fact (finding 9):** the FT3168 path has the same shape: a one-bit latch cleared after a multi-transaction I²C read loses or fabricates input under IRQ interleavings. **Recommendation:** ISR-side wake-aware *generation* latch; task-side single contiguous register snapshot; parse count/event/ID from that snapshot; drain while INT is asserted; restore pending state on I²C failure; and the source declares itself as *latest-state-with-coalescing* or *lossless-transitions* — one latch cannot promise both.
+
+**Fact (finding 10):** shared-I²C arbitration, expander register shadowing, reset epochs, and serialized panel commands (brightness/AOD/sleep interleaved with CASET/PASET/RAMWR) need one owner. **Recommendation:** a board coordinator owns them, or Off/AOD semantics are removed from the initial profile. Initial profile: **removed**; the coordinator is its own later slice with the SH8601 command surface as evidence.
+
+## 6. Transport decision that gates everything
+
+**Fact (finding 3):** "stock `sh8601-rs` + 16-row stripes" is not implementable — the streaming interface is private. The real options:
+
+| Option | Cost | Verdict |
 |---|---|---|
-| submission | `Draw::commit` → writer thread | draw into owned buffer → flush/transfer |
-| in-flight token | `FrameSeq`, acknowledged by writer event | the buffer + display *themselves*, returned by completion |
-| gate reopens on | ack at-or-beyond sequence | ownership returning to the handler |
-| misuse rejection | runtime stale-ack + exclusive `Draw` borrow | compile-time: you cannot submit what you do not hold |
+| stock `sh8601-rs`, full PSRAM framebuffer | 329,728 B PSRAM + bandwidth math of section 4; alloc in `partial_flush` | viable for first light (K2R-1 baseline); measured, not assumed |
+| upstream/fork a `write_region(region, pixels)` transport | driver work + review; enables stripes and the owning-DMA path | required for the stripe/DMA architecture; **gate before the SPEC freezes** |
 
-**Hypothesis:** the ownership-returning form is the *stronger* gate (compile-time), and the profile should make it the canonical shape even in the v0 blocking path — by treating the display+buffer pair as a resource that the render step consumes and the completion event returns, so the blocking and DMA paths share one legal API. Whether one generic capacity-returning protocol should unify this with the TUI presenter remains the separately gated comparison; this profile deliberately builds the second concrete arm first.
+**Recommendation:** decide by measurement at K2R-1: bring the board up on the stock full-framebuffer path first (fastest path to a running app and to flush/TE/touch-latency numbers), develop the `write_region` transport in parallel as the architectural target.
 
-## 4. Loop anatomy on this class of hardware (inspected, not imagined)
+## 7. What kittens-render is (boundary, post-review)
 
-From the two nearby all-Rust watch firmwares (root RESEARCH 20.2):
+Unchanged in spirit, corrected in structure: sources (generation-latched touch with decoded events, cadence deadline, TE edge where measurement justifies it, completion delivery per the K2R-0A outcome); the two transport capabilities of section 3 with typestate overlap; frame-demand policy above them sharing only `request`; `embedded-graphics` global-coordinate targets as the composition boundary; explicitly not owned: widgets/layout, the display driver internals, HAL, executor, power/AOD (deferred to the board coordinator slice), Slint.
 
-- the workable shape is `derive cadence → arbitrate → update state → conditionally render → repeat`, with cadence spanning 30 s (off) to 16–33 ms (interactive/game) — the mode-derived absolute deadline is a first-class source, already proven in the K0 embedded fixture;
-- touch and button interrupts must be **latched** sources: esp-hal GPIO waits lose edges when a losing waiter drops, so the raw wait is inadmissible — an owned latch armed from the interrupt path is the reviewed shape (K0's `Latched` + the admission diagnostic exist for exactly this);
-- an unbounded await inside the loop (Wi-Fi join, TE wait) starves touch for seconds — handler-interior residual class; the profile's answer is topology plus deterministic latency oracles, not preemption claims;
-- one firmware's "swap_and_flush" never swapped — descriptive comments rot; behavioral oracles or ownership are the only currencies accepted here.
+## 8. Naming
 
-## 5. What kittens-render is (candidate boundary)
+`kittens-render` stands. The gate is no longer one `Surface`; the public nouns follow the corrected ownership topology (`PreparedStripe`, `StripeInFlight`, `Returned`, `Failed`, `FrameEpoch`).
 
-The embedded rendering/interaction profile, layered per root SPEC 9.4:
+## 9. Slice plan and measured gates (replacing revision 1's plan per finding 11)
 
-1. **Sources (producers + adapters):** latched touch events decoded from FT3168 (IRQ → latch → typed `TouchEvent` with the fixed two-point capacity), mode-derived frame deadline, ownership-returning transfer completion, and pass-throughs for whatever backend sources the app declares. Nothing here changes kernel semantics.
-2. **The render gate, ownership form:** a `Surface` (display handle + framebuffer/stripe buffers) that the draw step consumes and completion returns. One frame in flight is not a runtime counter — it is *possession*. Dirty/coalescing/cadence policy sits above it in a presenter-shaped protocol sharing kittens-tui's vocabulary (`request`, `try_begin`, deadline) so a harness developer reads both profiles as one system.
-3. **Composition boundary:** `embedded-graphics` `DrawTarget` is the drawing contract; the profile hands the draw closure a target and never owns widgets, layout, or styling — same "opaque payload" stance as kittens-tui, with `DrawTarget` playing the role bytes play there. Component/widget libraries build above.
-4. **Not owned:** the display driver (wraps `sh8601-rs`), the HAL, the executor, power management, and Slint-style frameworks (a later integration target, not a dependency).
+1. **K2R-0A — pinned-source/completion feasibility spike** against exact pinned HAL SHAs: prove completion wake-up and full resource recovery with no hidden task or allocation; outcome decides kernel pin-admission versus Embassy-boundary delivery.
+2. **K2R-0 — adversarial host protocol suite:** lost-wake interleavings, busy requests, dropped permits, failure/cancellation recovery carrying resources, absolute deadlines, and full-frame versus stripe pixel-equivalence oracles (FrameEpoch reconstruction correctness).
+3. **K2R-1 — V1 board baseline:** stock full-framebuffer path; record exact memory (static, stacks, heap high-water), allocation count after init, TE edge behavior by panel mode, flush latency, and touch latency *during* flush.
+4. **K2R-2 — DMA overlap, conditionally:** only if it improves total frame time or p99 input latency under a fixed workload versus K2R-1, with failure injection at every command/chunk boundary.
 
-**Recommendation — phased slices:**
+Per the review verdict: only the K2R-0A/K2R-0 contract graduates into the first SPEC; board DMA overlap is not specified until its gate has numbers.
 
-- **K2R-0 (host):** the profile's types and protocols against the existing K0 embedded-shape fixture machinery — surface ownership gate, latched touch source with decoded events, cadence presenter — all host-tested, no hardware claim. This is where the spec's oracles live.
-- **K2R-1 (board bring-up):** the same app compiled for ESP32-S3 with Embassy + `sh8601-rs` blocking flush + `ft3x68-rs` polling-on-IRQ-latch; stripe rendering within a predeclared SRAM budget; measure flush time and input-to-frame latency. First light on the user's V1 board.
-- **K2R-2 (DMA slice, gated):** esp-hal owning-DMA transfers behind the same `Surface` API; gate: the API survives unchanged and the reactor overlaps drawing into a second stripe while one is in flight.
+## 10. Review log
 
-**Recommendation — memory policy:** stripe rendering by default (two 16-row stripes ≈ 23.5 KB SRAM, alternating), full PSRAM framebuffer as an explicit opt-in policy value, never a silent default (root RESEARCH 20.7: a declaration must not silently select PSRAM/alignment/DMA strategy).
+External review, 2026-08-08: Codex `gpt-5.6-sol`, ultra reasoning effort, read-only repository access, 14 numbered findings (5 blocking, 8 important, 1 minor), full text retained in the session transcript. Disposition: findings 1–11 adopted as written above; finding 12 adopted (vocabulary split); finding 13's type signatures adopted as the leading candidate pending the K2R-0A prototype; finding 14 (worktree missing `AGENTS.md`/`kittens-tui` SPEC at the reviewed commit) resolved by rebasing this branch onto main once PR #2 merges, before any SPEC graduation. Verdict accepted: **not ready to graduate**; the section 9 gates control.
 
-## 6. Naming
-
-`kittens-render` says what it is and parallels `kittens-tui`. Alternatives considered: `kittens-surface` (the gate type is a good name, the crate scope is wider), `kittens-display` (sounds like a driver), `kittens-embedded-ui` (claims widgets we refuse to own). **Recommendation:** keep `kittens-render`; name the ownership gate type `Surface`.
-
-## 7. Falsifiers for this profile
-
-- the ownership-returning `Surface` API cannot represent both blocking flush and owning-DMA without self-referential borrowing or API forks;
-- stripe rendering through `DrawTarget` forces per-frame allocation the budget cannot absorb;
-- the latched touch source loses taps at realistic IRQ rates (measured on hardware, not assumed);
-- input-to-frame latency on K2R-1 exceeds what the same board does under the C BSP by a margin an interactive app cannot absorb;
-- the shared presenter vocabulary with kittens-tui turns out to obscure rather than unify (agent trials, same method as the K0 pilot).
-
-**Gap: no measurement exists yet for SH8601 blocking-flush duration per stripe/full frame on this board under `sh8601-rs` (no data — K2R-1 produces it).**
-
-## 8. Source ledger (delta over root RESEARCH section 20)
-
-All board, driver, HAL, Embassy, and firmware sources are pinned in root `RESEARCH.md` sections 20.1–20.5 and its section 21 ledger; this profile adds no new external sources yet. The V1 schematic confirmation (section 2 gap) is the next retrieval task.
+**Gap: V1 TE measured behavior (edge/mode/safe-phase/tearing) — no data until K2R-1.**
+**Gap: `write_region` transport upstream viability — no maintainer contact yet.**
+**Gap: SH8601 blocking-flush duration per full frame under `sh8601-rs` on this board — no data until K2R-1.**
