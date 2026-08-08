@@ -1,11 +1,17 @@
 # kittens-code specification
 
 - Spec date: 2026-08-08
-- Version: v0.4 — pass 1 (adversarial review, input 11) and pass 2 (D3,
-  D10–D14 closed as drafts) applied; pass 3 folds the verification review
-  (input 12: all 22 pass-1 regressions PASS; 2 majors + 10 minors, all
-  dispositioned in-text). **Not yet frozen, no implementation authorized.**
-  Freeze requires: operator review + kittens-tui seam negotiation (D-b).
+- Version: v0.5 — passes 1–3 as before; pass 4 folds the external cross-model
+  research review's freeze conditions (input 13, Codex gpt-5.6-sol ultra,
+  YES-WITH-CONDITIONS): S7 durability law (D15), W4 retention/redaction/taint
+  (D16, blocks swarm), E4 arms expanded + topology-stratified, E2 gains a
+  typed-surface arm, eval metric preregistration, Q6 index contract, ACP
+  version language. KC0's promise is explicitly what the external review
+  endorsed: a reversible evidence slice — compiling sans-io core + std
+  runtime; MCU transport/TLS/RAM claims stay behind the D-c spike.
+  **Not yet frozen, no implementation authorized.** Freeze requires: operator
+  review + kittens-tui seam negotiation (D-b) + external spec review (next
+  loop step).
 - Controlling evidence slice: section 14 (KC0). Sections 3–13 are normative for
   KC0 only where section 14 imports them; everything else is candidate design
   retained for lineage, mirroring the root SPEC's §37 discipline.
@@ -156,6 +162,14 @@ Pure serde data (R§3.1-2, I-01):
   D7 (codec × search). KC0 ships JSONL only.
 - S5. Crash discipline in shims: atomic append (temp+rename or target-native
   equivalent) (I-07).
+- S7. Durability law (D15, KC0-blocking; input 13 F32): JSONL is a codec, not
+  a durability protocol. KC0 rules: every record carries `seq` and a
+  per-record checksum; a crash-truncated tail (torn last line / bad checksum)
+  is detected and cleanly ignored at replay, never fatal; a tool call and its
+  result are one atomic append unit; schema evolution goes through upcasters
+  keyed by `protocol_version` (S6). Snapshots, flash-wear budgeting, and index
+  consistency are candidate (MCU-era, D7-linked). G2 gains a crash-truncated-
+  tail fixture.
 - S6. Session identity (D11, closed as KC0 draft): each log opens with a
   header record `{ session_id: Uuid (v7, driver-generated — core has no
   entropy), parent: Option<Uuid>, protocol_version: semver of the protocol
@@ -222,7 +236,8 @@ exactly the layer it was built for.
   deterministic failure (I-06, I-07).
 - C3. Scheduling: prefire — background summarization below the hard trigger
   (defaults 75%/85%, config data), keyed by conversation fingerprint; delayed
-  rather than eager application (R§3.2, I-08 §6).
+  rather than eager application (R§3.2, I-08 §6). Model-invoked compaction
+  (SelfCompact line, R§9 gap 14) is a candidate E1 arm, not KC0 behavior.
 - C4. Startup/config content re-injected from source after compaction, never
   summarized (R§3.1-4).
 - C5. Reminders travel as blocks attached to user-role messages; static
@@ -273,7 +288,11 @@ exactly the layer it was built for.
 - Q5. L3 search (`grep`) core-mandatory over the Store byte view; no_std
   pattern dialect is D7; KC0 uses the std matcher behind a core trait.
 - Q6. L2 (`Embedder`/`Similar` ports) defined in KC0, implemented post-KC0
-  (E3). L2 answers carry log-offset provenance (R§5.2).
+  (E3). L2 answers carry log-offset provenance (R§5.2). The index contract
+  carries (R§5.2 v3 / input 13 F35): model fingerprint, dimensions,
+  metric/normalization, quantization, chunker version, source-record hash,
+  indexed high-watermark, rebuild policy, and defined stale-index behavior
+  (hints beyond the watermark are marked stale, never silently served).
 - Q7. RLM also exposed as an opt-in `recall` tool (I-06 RecallTool) — and E1
   gains the corresponding arm (input 11 finding 5): always-on vs
   tool-mediated access are compared, not just presence/absence.
@@ -342,10 +361,24 @@ Hypothesis, *synthesis-introduced*; E2 measures).
 
 - W1. `ContextExchange` port defined in core, unimplemented in KC0: enumerate
   peers; mount/unmount read-only stores; resolve peer offsets to records.
+  Prior-art position (R§6 v3): OpenClaw ships scoped cross-agent transcript
+  search; what this port claims as novel is only the *uniform* abstraction —
+  same verbs, peer log as namespace.
 - W2. Scopes deny-by-default, own/team/all (governed-memory precedent, R§6);
-  no write path exists in the port.
-- W3. E4 gate: swarm crate ships only with the eval running isolation-only
-  (null hypothesis, I-06) vs +read-mounts (R§6).
+  no write path exists in the port. **Taint law:** peer-mounted content is
+  tainted by construction — escaped at the injection boundary like C7-class
+  content, and no tool authority may derive from it (R§6 v3;
+  AgentDojo/CaMeL).
+- W3. E4 gate (arms expanded per R§6 v3): swarm crate ships only with the
+  eval running {cost-matched isolation baseline (null hypothesis, I-06),
+  structured typed handoff, raw read-mount, filtered/snapshot mount},
+  stratified across task topologies (decomposable / sequential / tool-heavy /
+  adversarial — arXiv:2512.08296 shows topology flips the sign).
+- W4. Retention/redaction law (D16, blocks the swarm crate, not KC0; input 13
+  F33): before any peer mount ships, the store must support redaction
+  overlays or tombstones (crypto-shredding candidate) reconciling
+  "append-only" with secrets, poisoned records, and user deletion; access
+  revocation and stable read watermarks specified with it.
 
 ## 11. Ports and effects
 
@@ -373,7 +406,10 @@ warning; E5 measures the residual).
 ## 13. Frontend seams (KC0: headless only)
 
 - F1. Headless driver (stdin/stdout protocol stream + JSONL event dump).
-- F2. ACP adapter: candidate, std shim (R§8.1).
+- F2. ACP adapter: candidate, std shim (R§8.1). Version language (input 13
+  F28): the negotiated ACP *wire protocol* version (currently `1`) is distinct
+  from schema/package artifact versions (e.g. v1.20.0); the adapter negotiates
+  the former and pins the latter as a dependency.
 - F3. kittens-tui wiring: blocked on D-b negotiation; offered contract is the
   protocol event stream; no privileged path (I-07 lesson).
 
@@ -414,6 +450,11 @@ Scope (adjusted per input 11 findings 5, 9, 13):
    a capture JSONL for diffing against expectations). Scenario mismatch is a
    hard test failure. Determinism rule: same scenario + same config ⇒
    byte-identical log (this is also what G2 replays).
+
+   Preregistration rule (R§8.5 v3): each eval's metrics — task quality,
+   Recall@k, abstention rate, verification rate, tokens, dollars, p50/p95
+   latency, subcall count — and ≥2 model families are committed in the
+   battery manifest BEFORE implementation results are visible.
 
    E1 task battery (D14): minimum eight scripted tasks. Tasks 1, 3, 4, 6, 7,
    8 exist in every E1 arm; tasks 2 and 5 require the RLM engine and exist
@@ -492,6 +533,8 @@ KC0 falsifiers (any one forces architecture revision, not patching):
 | D12 | Config schema + precedence (§13.1) | closed as KC0 draft | verification review |
 | D13 | Prompt ownership → versioned prompt-pack in core (C9) | closed as KC0 draft | verification review |
 | D14 | Jail interface + E1 battery (§14.6) | closed as KC0 draft | verification review |
+| D15 | Durable-log rules (S7: checksums, crash-tail tolerance, atomic call/result appends, upcasters) | closed as KC0 draft | verification review |
+| D16 | Retention/redaction/taint law (W4: overlays/tombstones, revocation, watermarks) | open | blocks swarm crate |
 | KX1–KX3 | kittens embassy adapters (channel/signal/deadline) | ledgered kernel asks (I-10) | MCU runtime only |
 | KX-K1 | dynamic source sets + SSE adapter kernel asks | ledgered, K1-era | post-KC0 |
 
@@ -522,5 +565,15 @@ KC0 falsifiers (any one forces architecture revision, not patching):
   productions; `slice %N`; inline-error/no-double-report rule; §13.1
   prompt-pack override table + default SandboxPolicy key; D2/§8.1 register
   alignment; ask-each width bound).
-- Next: operator review + kittens-tui seam negotiation (D-b), then freeze of
-  KC0 sections only. Implementation remains unauthorized until freeze.
+- 2026-08-08: pass 4 → v0.5. External research review (input 13) conditions
+  folded: D15/S7 durability law with G2 crash-tail fixture; D16/W4
+  retention/redaction/taint gate on the swarm crate; E4 four-arm
+  topology-stratified design; E2 typed-surface arm; preregistered eval
+  metrics; Q6 index metadata contract; ACP wire-vs-artifact version language;
+  C3 SelfCompact candidate arm. RESEARCH is at v3 (corrected figures — RLM
+  paper-v3 numbers, depth economics, ~32KB TLS, rustpki, narrowed swarm
+  novelty).
+- Next: external spec review (Codex, crate-structure focus) per operator loop
+  directive, then operator review + kittens-tui seam negotiation (D-b), then
+  freeze of KC0 sections only. Implementation remains unauthorized until
+  freeze.

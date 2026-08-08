@@ -1,10 +1,13 @@
 # kittens-code research report
 
 - Research date: 2026-08-08
-- Refinement pass 1: 2026-08-08 (adversarial review + fresh-eyes SOTA sweep applied;
-  this is v2 — v1's uncorrected claims are preserved only inside inputs 09's quotes)
-- Status: refined synthesis, one coordination gap open (kittens-tui seam); ready to
-  seed spec drafting; not a spec, not an implementation
+- Refinement pass 1: 2026-08-08 (adversarial review + fresh-eyes SOTA sweep → v2)
+- Refinement pass 2: 2026-08-08 (external cross-model review by Codex
+  gpt-5.6-sol at ultra effort, input 13 — verdict YES-WITH-CONDITIONS; factual
+  corrections F15–F30 and blind spots F32–F39 folded → this is v3)
+- Status: refined synthesis; external verdict: sufficient basis for a
+  *reversible* KC0 evidence slice (not for freezing the bets as established);
+  one coordination gap open (kittens-tui seam)
 - Scope: `kittens-code`, a coding-agent harness crate family built on the `kittens`
   reactor kernel and the (externally owned) `kittens-tui` rendering abstraction
 - Raw inputs: ten pinned files in [`research-inputs/`](research-inputs/) — one
@@ -233,12 +236,16 @@ sections 4–7.
 
 ### 4.1 The mechanism and its measured envelope
 
-**Fact (input 05):** the RLM line (MIT blog Oct 2025 → arXiv:2512.24601) stores the
-prompt/history as a *variable in an environment* rather than tokens in the window;
-the root model iterates code → truncated output, peeking/grepping/partitioning and
-delegating spans to sub-LM calls; only the final answer surfaces. Measured:
-OOLONG 132k, RLM(GPT-5-mini) ≈63 vs GPT-5 ≈29; BrowseComp-Plus at ~10M tokens,
-RLM(GPT-5) 100% vs ReAct+BM25 ~60%.
+**Fact (input 05, figures corrected per input 13 F15):** the RLM line (MIT blog
+Oct 2025 → arXiv:2512.24601) stores the prompt/history as a *variable in an
+environment* rather than tokens in the window; the root model iterates code →
+truncated output, peeking/grepping/partitioning and delegating spans to sub-LM
+calls; only the final answer surfaces (mechanism verified against the current
+paper by the external review). Numbers: the widely-quoted blog figures
+(BrowseComp-Plus 100% vs ~60%; OOLONG ≈63 vs ≈29) were **preliminary, n=20**;
+the May 2026 paper v3 (150 queries) reports BrowseComp-Plus 91.3 (depth-1) /
+88.0 (depth-0) / 51.0 (CodeAct+BM25) and OOLONG 56 vs 44. Directionally the
+same, magnitudes smaller — cite the paper figures.
 
 **Fact (input 05):** prime-agent (pin `a18809e`) is the production-shaped proof:
 persistent IPython kernel as the *only* tool; sub-agents are full instances spawned
@@ -262,10 +269,15 @@ evidence-selection at ~9× lower latency), which is a spec-level argument for
 keeping the verb surface small and *stable*: it is the action space a future
 trained model would target.
 
-**Fact (inputs 05, 06):** the depth-2 reproduction (arXiv:2603.02615) found
-recursion depth 2 *degrades* accuracy and explodes cost ~95× (3.6s → 344.5s);
-depth 1 helps complex reasoning; overthinking hurts simple retrieval. minRLM beat
-the official harness (72.7% vs 69.7%) with *fewer* primitives at 3.6× fewer tokens.
+**Fact (inputs 05, 13 — corrected):** the depth-2 reproduction (arXiv:2603.02615;
+one run, 20 samples/condition, no significance testing) found depth 2 degrading
+accuracy in its setup, with 344.5s total latency vs 3.6s for the **non-RLM
+baseline** (~96× vs baseline; the depth-1→depth-2 increment is ≈3.9×) — v2's
+"95× depth-2 cost regression" mislabeled the comparator. **Counter-evidence
+(input 13 F17):** the official paper v3 evaluates depths 0–3 and reports depth
+2/3 matching or improving depth 1 on several tasks. The depth evidence is
+mixed, not one-way. minRLM beat the official harness (72.7% vs 69.7%) with
+*fewer* primitives at 3.6× fewer tokens.
 
 **Fact (input 06):** the operator's flagship prior crate (ORG-1) implemented the
 whole family in Rust in Feb 2026: three pluggable `ContextStrategy` variants
@@ -296,18 +308,20 @@ not by prompt convention.
 **Operator constraint:** RLM does not replace compression; both run together, with
 standing one-line reminders of the RLM capability.
 
-**Fact (input 05):** MEMTIER (arXiv:2605.03675) measured that **62% of
-context-compaction events produce a behavioral break** with flat memory, and
-tool-execution success decays 14pp over 72h — the strongest published argument
-that destructive compaction alone is architecturally insufficient.
+**Fact (input 05, framing corrected per input 13 F18):** MEMTIER
+(arXiv:2605.03675) reports **62% of context-compaction events coinciding with a
+measurable behavioral break** and 14pp tool-success decay over 72h — but these
+derive from community-issue analysis plus the authors' own diagnostic, i.e.
+observational evidence, not a controlled causal result. It is the strongest
+*observational signal* against destructive compaction alone, not proof.
 **Fact (input 05):** ACE documents "context collapse" from iterative summarization;
 the operator's ORG-4 research independently ranked compaction strategies and
 documented the "compaction death spiral" with a circuit breaker as mitigation.
-**Fact (input 08, new):** the 2026-08-02 online-compaction study observed
-*compensatory re-search behavior* — agents re-grep to recover weakened context
-after compaction — which is the complementarity thesis caught on camera: when the
-window is thinned, agents reach for exact search if and only if a search surface
-exists.
+**Fact (input 08; causal framing softened per input 13 F21):** the 2026-08-02
+online-compaction study observed longer post-compaction trajectories and
+suggests the model compensates through extra searches — suggestive of the
+complementarity thesis, but the study ran no no-search control, so it does not
+prove that a search surface is what enables the recovery.
 **Fact (input 05):** the closest measured analog to the standing-reminder principle
 is Prime Intellect's DeepDive result: RLM under-performs without environment tips
 and roughly doubles with them.
@@ -369,14 +383,16 @@ revisited post-1.0.
 
 ### 4.5 Recursion policy
 
-**Recommendation:** RLM recursion depth 1 by default; `ask`/`ask-each` fan-out is
-the proven mechanism (paper, prime-agent, and ORG-1 all effectively ran depth ≤1);
-deeper recursion is admitted only as an explicitly budgeted resource (token +
-wall-clock meters per recursion node). Precision forced by review finding 11: this
-is *RLM recursion* depth — subagent *spawn* depth is a different budget (Claude
-ships spawn depth 3) and is decided in the spec's subagent section, not here.
-Budget metering is the visible differentiator a Rust implementation can own: the
-RLM line's acknowledged open wound is unbounded cost tails (§4.1).
+**Recommendation (rationale revised per input 13 F16/F17):** RLM recursion depth
+1 by default — on **cost/latency grounds** (each depth multiplies wall-clock and
+spend; ≈3.9× at the measured depth-1→2 step), no longer on accuracy grounds
+(paper v3 shows depth 2/3 can match or improve depth 1). Deeper recursion is a
+legitimate, explicitly budgeted resource (token + wall-clock meters per
+recursion node), not a forbidden one. This is *RLM recursion* depth — subagent
+*spawn* depth is a different budget (Claude ships spawn depth 3), decided in the
+spec's subagent section. Budget metering remains the differentiator a Rust
+implementation can own: the RLM line's acknowledged open wound is unbounded
+cost tails (§4.1).
 
 ## 5. Context tiers: L1 / L2 / L3
 
@@ -406,22 +422,30 @@ capable serving layer can exploit them; no v1 behavior depends on it.
 **Operator constraint (mid-flight addition):** embeddings need only be "super good
 enough"; the embedding system is pluggable per execution target.
 
-**Fact (input 05):** MemGPT/Letta archival memory and MEMTIER's semantic tier
-support an embedding tier; the counter-signal is the RLM paper itself —
-programmatic grep/partition beat ReAct+BM25 retrieval 100% vs ~60% on
-BrowseComp-Plus. **Fact (input 05):** normalize signals before mixing lexical and
-dense scores (MEMTIER). **Fact (inputs 06, 07):** cheap-and-pluggable precedents:
-a prior personal experiment ran local MiniLM with an OpenAI→TF-IDF *fallback
-chain*; Grok's experimental memory uses sqlite-vec + hybrid search + MMR.
+**Corrected evidence base (input 13 F19/F20):** MEMTIER does NOT support an
+embedding tier specifically — its semantic tier is LLM-extracted facts retrieved
+chiefly by BM25 (default dense-score weight zero; its dense baseline bought
++0.030 accuracy at 3.7× latency). It supports *structured tiering*, not dense
+retrieval. The RLM paper's counter-signal stands: programmatic grep/partition
+beat CodeAct+BM25 91.3 vs 51.0 on BrowseComp-Plus (corrected figures, §4.1).
+MEMTIER's "normalize before mixing" is a design recommendation, not a measured
+result (its normalization variants tied). **Fact (inputs 06, 07):**
+cheap-and-pluggable precedents: a prior personal experiment ran local MiniLM
+with an OpenAI→TF-IDF *fallback chain*; Grok's experimental memory uses
+sqlite-vec + hybrid search + MMR.
 
-**Fact (input 08, closes v1 open question 4 for std/WASM):** Model2Vec/potion
-static embeddings are the concrete "super good enough" candidate class: distilled
-static token-lookup models, ~8–30MB, int8-quantizable to 25% size with no
-performance loss, with an **official Rust implementation (model2vec-rs) carrying a
-`wasm` feature flag**. v1's hash-based-only framing for WASM was too pessimistic.
-The MCU story remains open: no no_std port exists; an int8 lookup table is
-flash-mappable in principle. The benchmark question sharpens to
-"potion-8M-int8 vs char-n-gram hashing" (eval E3).
+**Fact (input 08, sizes corrected per input 13 F24):** Model2Vec/potion static
+embeddings are the concrete "super good enough" candidate class: potion-base-8M
+is ~8M *parameters* ≈ 30MB f32 safetensors (int8 quantization to ~1/4 size is a
+vendor claim), with an **official Rust implementation (model2vec-rs) carrying a
+`wasm` feature flag**. v1's hash-based-only framing for WASM was too
+pessimistic, but fitness for *coding-transcript retrieval specifically* is
+unbenchmarked — vendor evidence only. MCU story open: no no_std port; int8
+lookup table flash-mappable in principle. Benchmark question: potion-8M-int8 vs
+char-n-gram hashing on transcript retrieval (eval E3), with the index-metadata
+requirements of input 13 F35 (model fingerprint, dims, metric, quantization,
+chunker version, source hash, watermark, rebuild policy) as part of the port
+contract.
 
 **Observation:** evidence ranks L3-exact above L2-approximate for correctness;
 L2's value is latency and topic-level orientation, exactly as the operator framed
@@ -467,9 +491,17 @@ its scope model is ready-made prior art for mount access control;
 across agents at the serving layer (70%+ reuse, 7.8× prefill speedups) — a
 serving-layer sibling of "reading thoughts," model-locked and not queryable.
 
-**Fact (input 08):** a deliberate falsification attempt found no system where one
-harness mounts another's transcript read-only and queries it. The bet is original
-as of 2026-08-08.
+**Corrected (input 13 F29 — the v2 "zero prior art" claim is withdrawn):** the
+first falsification attempt (input 08) missed OpenClaw, which ships scoped
+`sessions_history`, exact transcript search, and configurable cross-agent
+search over another agent's session transcripts — functional prior art for
+agent-controlled, access-scoped peer-history retrieval. What remains original
+is narrower: the **uniform read-only mount abstraction** — the same RLM verb
+surface, unchanged, pointed at a peer's raw log as a namespace, model-agnostic
+and portable across targets, rather than a bespoke retrieval tool set. The E4
+hypothesis survives; the novelty claim is demoted from "no one reads peer
+transcripts" to "no one unifies peer-transcript access with the agent's own
+context-query surface."
 
 **Counter-signal (restored per review finding 9) — Observation (input 06):** the
 operator's own strongest prior swarm result is that *isolation-first* coordination
@@ -485,18 +517,29 @@ protocol, no new query language, no copy; a peer's L2 index can mount alongside 
 hints. What is genuinely novel vs families (a)–(d): harness-level, model-agnostic,
 query-shaped access to another agent's *raw* history.
 
+**Security counter-arguments (input 13 F33/F42, recorded):** peer text is a
+transitive prompt-injection vector — a reader with greater capabilities acting
+on unsafe peer content is the chief failure mode; and typed handoffs may be
+*beneficial* information bottlenecks, meaning raw mounts could hurt via
+correlated hallucination. Peer-mounted content must be treated as tainted data
+(same escaping boundary as C7-class content; no tool authority derived from it)
+— the AgentDojo/CaMeL lesson.
+
 **Recommendation:** a `ContextExchange` port in its own crate
 (`kittens-code-swarm`): enumerate peers, mount/unmount peer stores (read-only),
 resolve peer log offsets to typed records; scope levels borrowed from the
-governed-memory family (own/team/all, deny-by-default). Transport is a shim detail
-(same filesystem, socket, relay); the core sees only mounted stores. The crate is
-optional at the workspace level — eval E4 runs {isolation-only baseline} vs
-{+read-mounts}, with the operator's prior isolation result as the null hypothesis.
-Write-side coordination (task lists, inboxes) is out of scope for v1 — that
-family is well-occupied.
-**Hypothesis:** read-mounts materially improve multi-harness task outcomes over
-isolation-first coordination. No data exists anywhere; this is the project's most
-original falsifiable claim.
+governed-memory family (own/team/all, deny-by-default); mounted content tainted
+by construction. Transport is a shim detail; the core sees only mounted stores.
+The crate is optional at the workspace level. Eval E4 (arms expanded per input
+13 F37/F48): {cost-matched isolation baseline (the operator's prior best, null
+hypothesis), structured typed handoff, raw read-mount, filtered/snapshot
+mount}, stratified across task topologies — the 260-configuration multi-agent
+study (arXiv:2512.08296) reports outcomes from +80.8% on decomposable work to
+−70% on sequential planning, so topology is a first-class variable, not noise.
+Write-side coordination stays out of scope for v1.
+**Hypothesis:** uniform read-mounts improve multi-harness outcomes over both
+isolation and structured handoffs on decomposable tasks. Outcome data exists
+for neither direction on this exact interface.
 
 ## 7. Portability: no_std core, virtual IO, virtual FS
 
@@ -524,11 +567,17 @@ materializing. The constraint stands; the tax must be paid consciously: ports at
 the *effect* level (few, coarse), not wrappers around every std call. Eval E5
 makes the tax visible instead of assumed.
 
-**Fact (input 03):** honest risk list for the core: TLS certificate verification is
-std-only in embedded-tls (no_std reality = pinned roots/PSK/unverified or
-hardware/proxy termination); wall-clock and entropy must be injected ports;
-DNS/sockets are always shim-side; realistic RAM floor ~64–128KB — ESP32-S3-with-
-PSRAM class comfortable, RP2040 workable only with a spill-to-flash store.
+**Fact (input 03, corrected per input 13 F26/F27):** honest risk list for the
+core: TLS certificate verification off-std is *harder but not impossible* — v2
+overstated this: embedded-tls 0.19's `webpki` verifier is std-only, but the
+crate also ships a `rustpki` certificate-chain verifier whose feature does not
+require std; endpoint compatibility, roots, hostname/time handling, and
+algorithms still need the hardware spike before any claim. TLS memory budget is
+~32KB/connection (16KB read + 16KB write record buffers), not the 16KB v2
+carried, before HTTP/JSON/transcript/stack costs. Wall-clock and entropy must
+be injected ports; DNS/sockets are always shim-side; realistic RAM floor
+~64–128KB — ESP32-S3-with-PSRAM class comfortable, RP2040 workable only with a
+spill-to-flash store.
 **Observation (inputs 03, 04, 08):** no full agent harness has shipped on
 bare-metal Rust or a WASM core; the 08 sweep re-verified. kittens-code would be
 first. De-risk step inherited from input 03 (restored per review finding 18): an
@@ -623,16 +672,23 @@ law help a real harness?" — gets its first production answer inside this crate
 
 ### 8.5 Eval axes (the refinement engine)
 
-**Fact (input 08):** harness effects are 10–20 Terminal-Bench points; Harness-Bench
-provides the disclosure/attribution methodology. The eval harness therefore runs
-two rigs: the deterministic mock-LLM jail from the operator's prior work (scripted
-model responses, behavioral capture — input 06, ORG-5) for mechanism-level
-regression, and Terminal-Bench 2.0 as the external yardstick.
+**Fact (input 08, scoped per input 13 F23):** harness choice moved a
+Terminal-Bench 2.0 score by 16.2 points in the cited configuration pair
+(32.6 vs 16.4) — a whole-configuration swing, NOT an expected per-mechanism
+effect size for E1–E5; Harness-Bench evaluates configurations, it does not
+decompose mechanisms. The eval harness runs two rigs: the deterministic
+mock-LLM jail (input 06, ORG-5) for mechanism-level regression, and
+Terminal-Bench 2.0 as the external yardstick. **Preregistration rule (input 13
+F46):** metrics — task quality, Recall@k, abstention rate, verification rate,
+tokens, dollars, p50/p95 latency, subcall count — and at least two model
+families are committed per eval BEFORE implementation results are visible.
 
 - **E1 context law:** compaction-only vs RLM-only vs both (± standing reminder) —
   the never-run ORG-1 comparison and the literature's missing ablation, finally run.
 - **E2 query surface:** verb set vs verb set + Lua escape hatch vs `ask sample-k`
-  (cost and outcome per task regime).
+  vs a typed function-call/AST surface (input 13 F39) — cost and outcome per
+  task regime, including quoting/escaping failure rates and small-model
+  compliance.
 - **E3 tiers:** L3-only vs L3+L2 (latency, verification rate, wrong-hint damage);
   potion-8M-int8 vs char-n-gram hashing as the L2 candidates.
 - **E4 swarm:** multi-harness task, isolation-only baseline (the operator's prior
@@ -642,20 +698,25 @@ regression, and Terminal-Bench 2.0 as the external yardstick.
 
 ## 9. Confidence and open questions
 
+Ratings revised per the external cross-model review (input 13, findings 1–12);
+compound rows split so foundations and extensions carry separate ratings.
+
 | Claim | Confidence | Why |
 |---|---|---|
-| §3.1 convergent skeleton (items 1–5, 7) | high | 5+ lineages, corroborated at n=13 (input 08); counter-signals now recorded inline (Plan/Act modes, Gemini soft split) |
+| §3.1 inner flat loop + append/replay pattern | high | 5+ lineages, corroborated at n=13 (input 08) |
+| §3.1 remaining skeleton items (typed protocol, reminders, deferred schemas, small kernel) | medium-high | real but thinner lineage per item; counter-signals recorded inline (input 13 F1) |
 | §3.1 item 6 (depth-capped subagents, one summary) | medium | convergent for those halves; isolation is a contradicted policy axis |
-| Append-only log + resume-as-replay + RLM-queryable store | high | Codex/Grok/prime-agent all ship it; MEMTIER quantifies the alternative's cost |
-| RLM + compaction together beat either alone | medium | prime-agent hybrid + MEMTIER + compensatory re-search (2608.00902) are circumstantial; direct ablation still unrun — E1 |
-| Shell-verb surface sufficient for context interaction | medium | surface-invariance + minRLM + operator migration, against the recorded ACI/mini-swe contradictory pair; ablation missing — E2 |
-| Standing one-line reminder materially helps | medium | PI env-tips ~2× on DeepDive is the only analog; transfer unproven |
-| RLM recursion depth-1 cap, budgeted deeper | medium-high | one reproduction study (2 models) shows 95× depth-2 regression; no shipped RLM runs depth>1; SRLM shows recursion isn't the driver |
-| L2 embeddings as pluggable hint layer, L3 first | medium-high | grep-beats-BM25 + operator constraint align; model2vec-rs closes the WASM path; latency case unmeasured — E3 |
-| Swarm read-mounts improve multi-harness outcomes | unknown | zero prior art (falsification attempted, 4 near-miss families recorded); operator's own isolation-first result is the null hypothesis — E4 |
-| no_std+alloc sans-io core is feasible | medium | every ingredient pinned and real; no full-system precedent; TLS verification genuinely hard off-std; ESP32-S3 spike is the de-risk gate |
-| kittens reactor is the right host for the loop | medium-high | loop shape matches kernel law 1:1 on paper; K0 has never hosted a real harness |
-| Crate split (§8.1) | low-medium | reasoned from others' sprawl pain; unvalidated until slices build |
+| Append-only log + resume-as-replay | high | Codex/Grok/prime-agent all ship it (input 13 F30: split from the row below) |
+| …same store RLM-queryable by the model | medium | only prime-agent + ORG-1 ship that extension; MEMTIER evidence is observational (F18) |
+| RLM + compaction together beat either alone | low-medium | circumstantial only; re-search study has no no-search control (F21); direct ablation unrun — E1 |
+| Shell-verb surface sufficient for context interaction | low-medium | surface-invariance results are general-tool, not context-query; RLM's advantage may be arbitrary program composition (F40); operator migration favored Lua — E2, now incl. typed/function-call arm |
+| Standing one-line reminder materially helps | low | PI env-tips is a task-specific analog, not a periodic capability reminder (F6); E1 variable |
+| RLM recursion depth-1 default (cost policy) | medium | depth-1→2 step ≈3.9× latency (F16); paper v3 shows depth 2/3 can help accuracy (F17) — cap is economics, not correctness |
+| L2 embeddings as pluggable hint layer, L3 first | medium | L3-first policy sound; MEMTIER does not validate dense retrieval (F19); model2vec fitness for transcripts unbenchmarked (F24) — E3 |
+| Uniform swarm read-mount improves outcomes | unknown | OpenClaw is functional prior art for scoped peer-history retrieval (F29); novelty narrowed to the uniform mount; outcome data absent in both directions — E4 (expanded arms) |
+| no_std+alloc sans-io core is feasible | medium | ingredients pinned incl. rustpki no_std cert path (F26); ~32KB TLS budget (F27); no full-system precedent; ESP32-S3 spike is the gate |
+| kittens reactor is the right host for the loop | medium | topology fits K0 on paper (input 10); fit is not outcome benefit, and cancellation ownership is harness-side (F11/F31) |
+| Crate split (§8.1) | low-medium | defensible boundary hypothesis; unbuilt |
 
 Open questions carried into the spec (spec-blocking marked ✋):
 
@@ -684,6 +745,24 @@ Open questions carried into the spec (spec-blocking marked ✋):
 10. **Harness self-optimization** (Meta-Harness/HarnessBridge line, input 08) —
     declared non-goal for v1; recorded so future harnesses don't re-litigate
     silently.
+11. ✋ **Durable-log engineering** (input 13 F32): framed/checksummed records,
+    crash-truncated tails, atomic call/result transactions, schema upcasters,
+    snapshots, index consistency, flash wear. JSONL is a codec, not a
+    durability protocol — the spec's store section must carry this (D15).
+12. ✋ **Retention/redaction/taint law** (input 13 F33): "never destroyed"
+    cannot govern secrets, poisoned records, user deletion, or finite flash.
+    Tombstone/redaction overlays or crypto-shredding; peer/tool text as
+    tainted data (AgentDojo arXiv:2406.13352, CaMeL arXiv:2503.18813). Blocks
+    the swarm crate (D16), not KC0.
+13. **Retrieval factoring** (input 13 F34): LongMemEval (arXiv:2410.10813)
+    separates indexing/retrieval/reading — chunk granularity, key expansion,
+    temporal queries, abstention are spec-relevant dimensions the L1/L2/L3
+    frame hides; feed into E3 design.
+14. **Model-invoked compaction** (input 13 F36): SelfCompact
+    (arXiv:2606.23525) reports model-triggered compaction beating fixed
+    thresholds — a candidate E1 arm beside prefire.
+15. **Gap: no coding-transcript retrieval benchmark exists for any of the E3
+    embedding candidates (no data).**
 
 ## 10. Lineage log
 
@@ -699,7 +778,22 @@ Open questions carried into the spec (spec-blocking marked ✋):
   (input 08: harness-engineering literature, SRLM, swarm falsification attempt
   failed → bet original, model2vec closes WASM embedding path, piccolo rejected,
   delayed-compaction evidence). All findings dispositioned; this file is v2.
-- Next: spec drafting (`docs/kittens-code/SPEC.md`), inheriting this file's labels
-  and section numbers; spec-blocking questions are §9 items marked ✋; the
-  kittens-tui seam (Q1) is negotiated with the owning harness, not decided
-  unilaterally here.
+- 2026-08-08: spec drafted and refined in parallel (SPEC v0.1→v0.4, its own
+  lineage in SPEC §16).
+- 2026-08-08: research refinement pass 2 → v3. External cross-model review
+  (Codex gpt-5.6-sol, ultra effort; input 13) returned YES-WITH-CONDITIONS.
+  Folded: corrected RLM figures to paper v3 (blog numbers were preliminary
+  n=20); depth-2 comparator fixed (~3.9× vs depth-1, and paper v3 shows depth
+  2/3 can help — cap is now an economics policy); MEMTIER reframed as
+  observational and NOT embedding-tier evidence; model2vec sizes corrected
+  (~30MB f32); embedded-tls `rustpki` no_std verifier discovered (TLS risk
+  softened, budget corrected to ~32KB); ACP wire-version vs artifact-version
+  distinction; **swarm "zero prior art" withdrawn** (OpenClaw cross-agent
+  transcript search is functional prior art; novelty narrowed to the uniform
+  read-only mount abstraction); confidence table split and re-rated (input 13
+  findings 1–12); new gaps 11–15 (durable-log law, retention/redaction/taint,
+  retrieval factoring, model-invoked compaction, transcript-retrieval
+  benchmark). Codex freeze conditions 1–6 recorded in input 13 findings 44–49;
+  conditions map to SPEC v0.5 changes and the D-c spike.
+- Next: SPEC v0.5 folds the freeze conditions; the kittens-tui seam (Q1) is
+  negotiated with the owning harness, not decided unilaterally here.
