@@ -811,8 +811,8 @@ fn validate(reactor: &Reactor) -> Result<()> {
         return Err(ktr(
             first_guard.span(),
             "KTR014",
-            "every source arm is guarded by `#[when]`; one all-false guard snapshot pends forever because a disabled arm registers no wake",
-            "keep at least one unguarded source arm — a `#[shutdown]` arm is always unguarded — or model the disabled state with a dormant adapter instead of a guard",
+            "every source arm is guarded by `#[when]`; an all-false snapshot polls no source and registers no source wake",
+            "keep an unguarded wake-capable control source (for example, a shutdown channel), or encode enablement in an adapter that registers the relevant wake; a permanently dormant source is not sufficient",
         ));
     }
 

@@ -274,14 +274,16 @@ async fn latched_event_survives_when_an_earlier_source_wins_before_it_is_polled(
 async fn before_poll_runs_once_across_pending_executor_repolls() {
     struct Sources<F: Future<Output = Result<u8, tokio::sync::oneshot::error::RecvError>>> {
         completion: source::OneShot<F>,
-        // KTR014 requires at least one unguarded arm; this latch stays dormant
-        // and never participates in selection.
-        idle: Latched<u8>,
+        // KTR014 requires an unguarded arm. Use a retained cancellation waiter
+        // that really registers a wake; a dormant Latched would only silence
+        // the syntax check without repairing the no-waker condition.
+        shutdown: source::Cancellation,
     }
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
     let mut sources = Sources {
         completion: source::one_shot(receiver),
-        idle: Latched::new(),
+        shutdown: source::cancellation(shutdown_token.clone()),
     };
     let mut before_count = 0;
     let mut guard_count = 0;
@@ -302,18 +304,19 @@ async fn before_poll_runs_once_across_pending_executor_repolls() {
             Ok(())
         }
 
+        #[source(shutdown)]
+        #[readiness(quiescent)]
+        #[shutdown]
+        _ = sources.shutdown => {
+            Ok(0)
+        }
+
         #[source(completion)]
         #[readiness(quiescent)]
         #[when({ guard_count += 1; true })]
         #[terminal]
         value = sources.completion => {
             value
-        }
-
-        #[source(idle)]
-        #[readiness(quiescent)]
-        _ = sources.idle => {
-            Ok(kittens::reactor::Control::Continue)
         }
     };
 

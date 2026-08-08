@@ -1,4 +1,3 @@
-use kittens::reactor::Control;
 use kittens::source::FixedQueue;
 
 struct Sources {
@@ -12,8 +11,8 @@ struct App {
 }
 
 // Every arm carries `#[when]`. If both guards snapshot false in one
-// arbitration, no source is polled, no waker is registered, and the reactor
-// pends forever. The macro rejects the topology instead.
+// arbitration, no source is polled and that arbitration registers no source
+// wake. The macro rejects the directly visible zero-poll topology.
 async fn run(app: &mut App, sources: &mut Sources) -> Result<(), ()> {
     kittens::reactor! {
         policy { selection: biased; required_phases: []; }
@@ -22,13 +21,13 @@ async fn run(app: &mut App, sources: &mut Sources) -> Result<(), ()> {
         #[readiness(may_remain_ready)]
         #[starvation(allowed, reason = "fixture exercises the all-guarded rejection")]
         #[when(app.accepts_commands)]
-        _ = sources.commands => { Ok(Control::Continue) }
+        _ = sources.commands => { Ok(kittens::reactor::Control::Continue) }
 
         #[source(telemetry)]
         #[readiness(may_remain_ready)]
         #[starvation(allowed, reason = "fixture exercises the all-guarded rejection")]
         #[when(app.accepts_telemetry)]
-        _ = sources.telemetry => { Ok(Control::Stop(())) }
+        _ = sources.telemetry => { Ok(kittens::reactor::Control::Stop(())) }
     }
 }
 

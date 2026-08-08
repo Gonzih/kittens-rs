@@ -1,13 +1,5 @@
-error: KTR014 every source arm is guarded by `#[when]`; one all-false guard snapshot pends forever because a disabled arm registers no wake. Repair: keep at least one unguarded source arm — a `#[shutdown]` arm is always unguarded — or model the disabled state with a dormant adapter instead of a guard.
-  --> tests/ui/all_guarded.rs:24:16
+error: KTR014 every source arm is guarded by `#[when]`; an all-false snapshot polls no source and registers no source wake. Repair: keep an unguarded wake-capable control source (for example, a shutdown channel), or encode enablement in an adapter that registers the relevant wake; a permanently dormant source is not sufficient.
+  --> tests/ui/all_guarded.rs:23:16
    |
-24 |         #[when(app.accepts_commands)]
+23 |         #[when(app.accepts_commands)]
    |                ^^^
-
-warning: unused import: `kittens::reactor::Control`
- --> tests/ui/all_guarded.rs:1:5
-  |
-1 | use kittens::reactor::Control;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -1,0 +1,5 @@
+error: KTR000 unsupported lean reactor attribute `cfg`. Repair: use the section-37 lean grammar; maximal lifecycle, close, cancellation, priority-class, and batch attributes are not supported.
+  --> tests/ui/non_kittens_attribute.rs:11:9
+   |
+11 |         #[cfg(any())]
+   |         ^
