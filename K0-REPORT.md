@@ -347,17 +347,21 @@ rehydration variant, and does not retain a blinded semantic review. It is kept
 as seed material for a reproducible harness and as a qualitative preview of
 the intended repair path; the agent-ablation gate remains fully open.
 
-## Crates.io readiness
+## Crates.io publication (2026-08-08)
 
-Package metadata, dual licensing, README, repository links, lockfile, CI, and a
-minimal example are present. `kittens-macros` passes `cargo publish --dry-run`.
-The `kittens` dry run cannot complete registry verification until the exact
-`kittens-macros` version is published and indexed; that is Cargo's expected
-two-crate publication order. Both crate names were absent from the crates.io
-index when checked on 2026-08-07, which is not a reservation.
+The user authorized publication of the manifest-declared `0.1.0` packages
+after PR #1 merged. Both were published from commit
+`c909b2121895329c034638a81702821c2fadf545` in dependency order:
 
-Before crates.io publication, decide whether the current package version should
-be an alpha, then close or explicitly waive the open architecture gates above.
-The eventual order is: publish `kittens-macros`, wait for index availability,
-dry-run `kittens`, then publish `kittens`. This report authorizes none of those
-irreversible registry writes.
+- [`kittens-macros 0.1.0`](https://crates.io/crates/kittens-macros/0.1.0)
+  passed Cargo's complete package verification and uploaded 5 files,
+  52.3 KiB unpacked / 11.8 KiB compressed.
+- [`kittens 0.1.0`](https://crates.io/crates/kittens/0.1.0) was verified only
+  after Cargo resolved and compiled the published macro crate, then uploaded
+  54 files, 134.7 KiB unpacked / 29.2 KiB compressed.
+
+A fresh project outside the workspace downloaded both exact versions from the
+crates.io registry and passed `cargo check`. Publication distributes the
+experimental K0 evidence slice; it does not close or waive the open
+architecture, ablation, performance, or stable-API gates recorded above. No
+Git tag or GitHub release was created.

@@ -74,15 +74,21 @@ retained one-shot futures. The crate itself is always `#![no_std]`; host-only
 Tokio code is target-gated so the kernel remains bare-metal-linkable even when
 Cargo unifies the `tokio` feature elsewhere in the graph.
 
+## Installation
+
+```text
+cargo add kittens
+```
+
 ## Status
 
 This repository implements the K0 evidence slice defined by [SPEC.md](SPEC.md),
 not the older speculative full-v0.1 architecture in that document. The public
-surface is intentionally small and still experimental. Formal K0 closure and a
-stable crates.io release are not claimed; the remaining gates are explicit. See
-[K0-REPORT.md](K0-REPORT.md) for evidence, falsifiers, and unresolved release
-work, and [docs/agent-guide.md](docs/agent-guide.md) for the compact canonical
-grammar.
+surface is intentionally small and still experimental. Version `0.1.0` is
+published on crates.io as an experimental evidence release; formal K0 closure
+and a stable API are not claimed, and the remaining gates stay explicit. See
+[K0-REPORT.md](K0-REPORT.md) for evidence, falsifiers, and unresolved work, and
+[docs/agent-guide.md](docs/agent-guide.md) for the compact canonical grammar.
 
 ## Development
 
