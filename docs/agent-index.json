@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "concepts": [
+    {
+      "id": "reactor",
+      "term": "reactor",
+      "public_items": ["kittens::reactor!", "kittens::reactor::Control"],
+      "canonical_example": "crates/kittens/examples/minimal.rs",
+      "anti_pattern": "crates/kittens/tests/ui-pass/raw_runtime_bypass.rs",
+      "diagnostics": ["KTR003", "KTR004", "KTR007", "KTR011", "KTR016"],
+      "guarantee": "declared lexical topology and phase placement",
+      "non_guarantee": "event arrival, handler termination, or raw-runtime behavior"
+    },
+    {
+      "id": "source",
+      "term": "persistent source",
+      "public_items": ["kittens::source::ReactorSource", "kittens::source::Latched", "kittens::source::FixedQueue"],
+      "canonical_example": "crates/kittens/examples/minimal.rs",
+      "anti_pattern": "crates/kittens/tests/ui/temporary_source.rs",
+      "diagnostics": ["KTR006", "KTR009", "KTR010", "KTR015", "SRC001"],
+      "guarantee": "reviewed selection-loss preservation and owned handler items",
+      "non_guarantee": "rollback, repeat safety, async cleanup, or delivery after drop"
+    }
+  ]
+}

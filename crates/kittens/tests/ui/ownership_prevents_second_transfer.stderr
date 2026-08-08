@@ -1,0 +1,26 @@
+error[E0382]: use of moved value: `display`
+  --> tests/ui/ownership_prevents_second_transfer.rs:10:12
+   |
+ 7 |     let display = Display;
+   |         ------- move occurs because `display` has type `Display`, which does not implement the `Copy` trait
+ 8 |     let framebuffer = Framebuffer;
+ 9 |     submit(display, framebuffer);
+   |            ------- value moved here
+10 |     submit(display, Framebuffer);
+   |            ^^^^^^^ value used here after move
+   |
+note: consider changing this parameter type in function `submit` to borrow instead if owning the value isn't necessary
+  --> tests/ui/ownership_prevents_second_transfer.rs:4:21
+   |
+ 4 | fn submit(_display: Display, _framebuffer: Framebuffer) {}
+   |    ------           ^^^^^^^ this parameter takes ownership of the value
+   |    |
+   |    in this function
+note: if `Display` implemented `Clone`, you could clone the value
+  --> tests/ui/ownership_prevents_second_transfer.rs:1:1
+   |
+ 1 | struct Display;
+   | ^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+...
+ 9 |     submit(display, framebuffer);
+   |            ------- you could clone this value

@@ -1,0 +1,42 @@
+[workspace]
+members = [
+    "crates/kittens",
+    "crates/kittens-macros",
+    "fixtures/feature-unifier",
+    "fixtures/no-std",
+    "fixtures/renamed-dependency",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Gonzih/kittens-rs"
+rust-version = "1.85"
+version = "0.1.0"
+
+[workspace.dependencies]
+kittens-macros = { path = "crates/kittens-macros", version = "0.1.0" }
+proc-macro-crate = "3.4"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits", "parsing"] }
+tokio = { version = "1.53", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
+trybuild = "1.0"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kittens_doc_cfg)'] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

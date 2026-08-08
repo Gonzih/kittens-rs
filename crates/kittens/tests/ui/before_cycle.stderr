@@ -1,0 +1,13 @@
+error: KTR003 reactor scheduling cycle: a -> b -> a. Repair: remove or reverse one listed relation without deleting an unrelated constraint.
+  --> tests/ui/before_cycle.rs:20:9
+   |
+20 |         #[before(a)]
+   |         ^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/before_cycle.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

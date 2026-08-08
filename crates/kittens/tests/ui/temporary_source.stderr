@@ -1,0 +1,13 @@
+error: KTR015 source `packet` must be a persistent path or field, not a temporary expression. Repair: construct a reviewed persistent source before the reactor, or isolate the producer behind an explicitly owned task/signal and admitted channel source.
+ --> tests/ui/temporary_source.rs:9:13
+  |
+9 |         _ = core::future::pending::<u8>() => { Ok(Control::Continue) }
+  |             ^^^^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/temporary_source.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

@@ -1,0 +1,39 @@
+error[E0277]: source type `OneShot<std::future::Ready<()>>` cannot be a buffered-yield target
+  --> tests/ui/yield_target_not_backlog.rs:10:5
+   |
+10 | /     kittens::reactor! {
+11 | |         policy { selection: biased; required_phases: []; }
+12 | |
+13 | |         #[source(stream)]
+...  |
+20 | |         _ = sources.completion => { Ok(Control::Continue) }
+21 | |     }
+   | |_____^ the trait `BacklogSource` is not implemented for `OneShot<std::future::Ready<()>>`
+   |
+   = note: move the protected source above the firehose, or use an adapter with a reviewed observational backlog probe
+help: the following other types implement trait `BacklogSource`
+  --> src/source/mod.rs
+   |
+   |   impl<T> BacklogSource for Latched<T> {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Latched<T>`
+...
+   |   impl<T, const N: usize> BacklogSource for FixedQueue<T, N> {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `FixedQueue<T, N>`
+   |
+  ::: src/source/tokio_impl.rs
+   |
+   | / impl<T, C> BacklogSource for Mpsc<T, C>
+   | | where
+   | |     C: ChannelClosePolicy<T>,
+   | |_____________________________^ `Mpsc<T, C>`
+...
+   | / impl<T, C> BacklogSource for OptionalMpsc<T, C>
+   | | where
+   | |     C: ChannelClosePolicy<T>,
+   | |_____________________________^ `OptionalMpsc<T, C>`
+note: required by a bound in `kittens::__private::assert_KTR010_yield_target_has_backlog_probe`
+  --> src/lib.rs
+   |
+   |     pub fn assert_KTR010_yield_target_has_backlog_probe<S: BacklogSource>(_: &S) {}
+   |                                                            ^^^^^^^^^^^^^ required by this bound in `assert_KTR010_yield_target_has_backlog_probe`
+   = note: this error originates in the macro `kittens::reactor` (in Nightly builds, run with -Z macro-backtrace for more info)

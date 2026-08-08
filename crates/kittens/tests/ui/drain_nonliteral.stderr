@@ -1,0 +1,13 @@
+error: KTR008 drain max must be an unsuffixed integer literal. Repair: use a literal from 1 through 4096.
+  --> tests/ui/drain_nonliteral.rs:16:23
+   |
+16 |         #[drain(max = LIMIT)]
+   |                       ^^^^^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/drain_nonliteral.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

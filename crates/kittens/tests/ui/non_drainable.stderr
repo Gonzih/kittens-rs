@@ -1,0 +1,31 @@
+error[E0277]: source type `Latched<u8>` does not support macro-managed draining
+  --> tests/ui/non_drainable.rs:9:5
+   |
+ 9 | /     kittens::reactor! {
+10 | |         policy { selection: biased; required_phases: []; }
+11 | |
+12 | |         #[source(touch)]
+...  |
+15 | |         _ = sources.touch => { Ok(Control::Continue) }
+16 | |     }
+   | |_____^ the trait `DrainableSource` is not implemented for `Latched<u8>`
+   |
+   = note: remove `#[drain(...)]` or use a stable installed source with a reviewed nonblocking drain operation
+help: the following other types implement trait `DrainableSource`
+  --> src/source/mod.rs
+   |
+   |   impl<T, const N: usize> DrainableSource for FixedQueue<T, N> {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `FixedQueue<T, N>`
+   |
+  ::: src/source/tokio_impl.rs
+   |
+   | / impl<T, C> DrainableSource for Mpsc<T, C>
+   | | where
+   | |     C: ChannelClosePolicy<T>,
+   | |_____________________________^ `Mpsc<T, C>`
+note: required by a bound in `kittens::__private::assert_KTR009_source_is_drainable`
+  --> src/lib.rs
+   |
+   |     pub fn assert_KTR009_source_is_drainable<S: DrainableSource>(_: &S) {}
+   |                                                 ^^^^^^^^^^^^^^^ required by this bound in `assert_KTR009_source_is_drainable`
+   = note: this error originates in the macro `kittens::reactor` (in Nightly builds, run with -Z macro-backtrace for more info)

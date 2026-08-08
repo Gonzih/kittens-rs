@@ -1,0 +1,13 @@
+error: KTR020 source place is declared under both `first` and `second`. Repair: keep one source ID for this exact persistent place; distinct-place aliasing remains a rustc backstop.
+  --> tests/ui/duplicate_place.rs:18:13
+   |
+18 |         _ = (sources.event) => { Ok(Control::Continue) }
+   |             ^^^^^^^^^^^^^^^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/duplicate_place.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

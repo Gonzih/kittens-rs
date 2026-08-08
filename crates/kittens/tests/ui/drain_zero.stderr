@@ -1,0 +1,13 @@
+error: KTR008 drain max must be an unsuffixed literal from 1 through 4096. Repair: choose a positive bounded service window.
+  --> tests/ui/drain_zero.rs:15:23
+   |
+15 |         #[drain(max = 0)]
+   |                       ^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/drain_zero.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

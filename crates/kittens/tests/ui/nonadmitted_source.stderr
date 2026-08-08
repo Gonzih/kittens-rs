@@ -1,0 +1,35 @@
+error[E0277]: source type `VendorWaiter` is not admitted for repeated reactor selection
+  --> tests/ui/nonadmitted_source.rs:9:5
+   |
+ 9 | /     kittens::reactor! {
+10 | |         policy { selection: biased; required_phases: []; }
+11 | |
+12 | |         #[source(touch_irq)]
+13 | |         #[readiness(quiescent)]
+14 | |         _ = sources.touch_irq => { Ok(Control::Continue) }
+15 | |     }
+   | |_____^ this source does not establish preservation when another source wins
+   |
+help: the trait `ReactorSource` is not implemented for `VendorWaiter`
+  --> tests/ui/nonadmitted_source.rs:3:1
+   |
+ 3 | struct VendorWaiter;
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: use a reviewed retained/latching adapter, or isolate the producer behind an explicitly owned signal/channel; cleanup on drop is not the same contract
+   = help: the following other types implement trait `ReactorSource`:
+             Cancellation
+             FixedQueue<T, N>
+             Latched<T>
+             Mpsc<T, C>
+             OneShot<F>
+             OptionalDeadline
+             OptionalMpsc<T, C>
+             OptionalOneShot<F>
+note: required by a bound in `kittens::__private::assert_SRC001_reactor_source_is_admitted__repair_use_retained_or_channel`
+  --> src/lib.rs
+   |
+   |     pub fn assert_SRC001_reactor_source_is_admitted__repair_use_retained_or_channel<
+   |            ------------------------------------------------------------------------ required by a bound in this function
+   |         S: ReactorSource,
+   |            ^^^^^^^^^^^^^ required by this bound in `assert_SRC001_reactor_source_is_admitted__repair_use_retained_or_channel`
+   = note: this error originates in the macro `kittens::reactor` (in Nightly builds, run with -Z macro-backtrace for more info)

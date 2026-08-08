@@ -1,0 +1,13 @@
+error: KTR016 source `cancel` must precede `firehose` because of the shutdown leading-prefix rule. Repair: move the complete source arm so lexical order matches the declared relation.
+  --> tests/ui/shutdown_below_firehose.rs:20:9
+   |
+20 |         #[shutdown]
+   |         ^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/shutdown_below_firehose.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

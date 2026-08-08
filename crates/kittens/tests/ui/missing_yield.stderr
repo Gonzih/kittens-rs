@@ -1,0 +1,13 @@
+error: KTR007 may-remain-ready source `model` can starve protected source `input`. Repair: move `input` above `model`, or add `#[yields_to(input, when = buffered)]` when `input` is backlog-probeable; a starvation waiver changes policy.
+  --> tests/ui/missing_yield.rs:14:9
+   |
+14 |         #[readiness(may_remain_ready)]
+   |         ^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/missing_yield.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

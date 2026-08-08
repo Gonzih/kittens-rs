@@ -1,0 +1,32 @@
+[package]
+name = "kittens"
+description = "A no_std reactor kernel for explicit, compile-checked async orchestration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["async", "reactor", "no-std", "tokio", "orchestration"]
+categories = ["asynchronous", "concurrency", "no-std"]
+readme = "../../README.md"
+publish = true
+
+[features]
+default = ["macros", "tokio"]
+macros = ["dep:kittens-macros"]
+tokio = ["dep:tokio", "dep:tokio-util"]
+
+[dependencies]
+kittens-macros = { workspace = true, optional = true }
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util.workspace = true
+trybuild.workspace = true
+
+[lints]
+workspace = true

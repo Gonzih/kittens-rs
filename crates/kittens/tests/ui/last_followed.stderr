@@ -1,0 +1,13 @@
+error: KTR004 source `voice` is declared `last`, but source `telemetry` follows it. Repair: move the complete last source arm to the end without changing its attributes.
+  --> tests/ui/last_followed.rs:16:9
+   |
+16 |         #[last]
+   |         ^
+
+warning: unused import: `kittens::reactor::Control`
+ --> tests/ui/last_followed.rs:1:5
+  |
+1 | use kittens::reactor::Control;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

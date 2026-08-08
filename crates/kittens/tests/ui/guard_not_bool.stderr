@@ -1,0 +1,19 @@
+error[E0308]: mismatched types
+  --> tests/ui/guard_not_bool.rs:14:16
+   |
+ 9 | /     kittens::reactor! {
+10 | |         policy { selection: biased; required_phases: []; }
+11 | |
+12 | |         #[source(event)]
+13 | |         #[readiness(quiescent)]
+14 | |         #[when(7)]
+   | |                ^ expected `bool`, found integer
+15 | |         _ = sources.event => { Ok(Control::Continue) }
+16 | |     }
+   | |_____- arguments to this function are incorrect
+   |
+note: function defined here
+  --> src/lib.rs
+   |
+   |     pub const fn assert_KTR019_guard_result_is_bool(value: bool) -> bool {
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
