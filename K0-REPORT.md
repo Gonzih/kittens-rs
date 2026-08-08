@@ -365,3 +365,26 @@ crates.io registry and passed `cargo check`. Publication distributes the
 experimental K0 evidence slice; it does not close or waive the open
 architecture, ablation, performance, or stable-API gates recorded above. No
 Git tag or GitHub release was created.
+
+### README artwork patch release (2026-08-08)
+
+Version `0.1.1` was published from commit
+`b6460bfbe88aad4c2d1b957265e6419bbd0608d4` and tagged `v0.1.1`. The patch
+does not change the kernel or macro implementation. It adds a coordinated
+animated-sticker logo and yarn-play banner, pins their README URLs to the
+release tag, and moves the initial implementation entry into a dated
+changelog section.
+
+- [`kittens-macros 0.1.1`](https://crates.io/crates/kittens-macros/0.1.1)
+  passed Cargo package verification and uploaded 5 files, 52.3 KiB unpacked /
+  11.8 KiB compressed.
+- [`kittens 0.1.1`](https://crates.io/crates/kittens/0.1.1) resolved and
+  compiled the published `kittens-macros 0.1.1`, then uploaded 54 files,
+  135.3 KiB unpacked / 29.5 KiB compressed.
+
+The crates.io README endpoint renders both tag-pinned image URLs. The artwork
+stays in the repository rather than the archive, avoiding image weight in
+every crate download. Both URLs returned HTTP 200 with `image/webp`, and a
+fresh external project downloaded exact `kittens = "=0.1.1"` plus
+`kittens-macros 0.1.1` and passed `cargo check`. The patch release adds no K0
+closure or API-stability claim.
