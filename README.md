@@ -1,4 +1,10 @@
-# kittens
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Gonzih/kittens-rs/v0.1.1/assets/kittens-logo.webp" width="280" alt="Kittens logo: an orange tabby and a tuxedo kitten playing with a coral ball of yarn">
+</p>
+
+<h1 align="center">kittens</h1>
+
+<p align="center"><em>Explicit async orchestration with compiler-checked claws and soft paws.</em></p>
 
 Kittens is an experimental `no_std` reactor kernel for explicit,
 compile-checked async orchestration in Rust.
@@ -19,6 +25,8 @@ Kittens is not an executor, a task scheduler, structured-concurrency runtime,
 rendering protocol, hardware abstraction layer, or sandbox. Handlers and phases
 are ordinary Rust and remain capable of blocking the whole reactor, running
 unchecked loops, or bypassing Kittens with raw runtime calls.
+
+![Three animated kittens playing together with colorful balls of yarn](https://raw.githubusercontent.com/Gonzih/kittens-rs/v0.1.1/assets/kittens-yarn-banner.webp)
 
 ## Smallest reactor
 
@@ -84,7 +92,7 @@ cargo add kittens
 
 This repository implements the K0 evidence slice defined by [SPEC.md](SPEC.md),
 not the older speculative full-v0.1 architecture in that document. The public
-surface is intentionally small and still experimental. Version `0.1.0` is
+surface is intentionally small and still experimental. Version `0.1.1` is
 published on crates.io as an experimental evidence release; formal K0 closure
 and a stable API are not claimed, and the remaining gates stay explicit. See
 [K0-REPORT.md](K0-REPORT.md) for evidence, falsifiers, and unresolved work, and

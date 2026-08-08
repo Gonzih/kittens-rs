@@ -13,10 +13,10 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Gonzih/kittens-rs"
 rust-version = "1.85"
-version = "0.1.0"
+version = "0.1.1"
 
 [workspace.dependencies]
-kittens-macros = { path = "crates/kittens-macros", version = "0.1.0" }
+kittens-macros = { path = "crates/kittens-macros", version = "0.1.1" }
 proc-macro-crate = "3.4"
 proc-macro2 = "1.0"
 quote = "1.0"
