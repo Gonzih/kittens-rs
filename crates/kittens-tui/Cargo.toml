@@ -1,0 +1,25 @@
+[package]
+name = "kittens-tui"
+description = "Terminal-orchestration profile for the Kittens reactor kernel: input isolation, frame writer with acknowledgement, presenter render gate, and terminal lifecycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["tui", "terminal", "async", "reactor", "orchestration"]
+categories = ["asynchronous", "command-line-interface"]
+readme = "README.md"
+publish = true
+
+[dependencies]
+crossterm.workspace = true
+kittens = { workspace = true, features = ["macros", "tokio"] }
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tokio-util.workspace = true
+trybuild.workspace = true
+
+[lints]
+workspace = true

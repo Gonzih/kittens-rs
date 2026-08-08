@@ -2,6 +2,7 @@
 members = [
     "crates/kittens",
     "crates/kittens-macros",
+    "crates/kittens-tui",
     "fixtures/feature-unifier",
     "fixtures/no-std",
     "fixtures/renamed-dependency",
@@ -16,6 +17,8 @@ rust-version = "1.85"
 version = "0.1.1"
 
 [workspace.dependencies]
+crossterm = "0.29"
+kittens = { path = "crates/kittens", version = "0.1.1" }
 kittens-macros = { path = "crates/kittens-macros", version = "0.1.1" }
 proc-macro-crate = "3.4"
 proc-macro2 = "1.0"
