@@ -126,6 +126,11 @@ impl<X: OwnedTransfer> InFlight<X> {
     /// state and returns every resource; afterwards the adapter is spent and
     /// further polls return `Pending` forever without registering a wake
     /// (the caller owns moving on).
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the internal take follows a checked presence test
+    /// on the same value.
     pub fn poll_complete(
         &mut self,
         cx: &mut Context<'_>,
