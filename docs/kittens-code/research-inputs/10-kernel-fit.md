@@ -1,5 +1,13 @@
 # Kernel-fit analysis: kittens-code needs vs the implemented K0 surface
 
+> CORRECTION (2026-08-08, input 15 finding 12): the KX4 claim below — that
+> wasm needs no new adapters because local `Latched`/`FixedQueue` suffice on
+> a single thread — is WRONG. Local sources do not self-wake and cannot be
+> armed from host callbacks under the borrow rules; Web (Promise/channel/
+> timer) and WASI (Pollable) wake-aware adapters are required kernel asks,
+> and non-Tokio drivers must disable the kittens crate's default `tokio`
+> feature. See SPEC v0.6 kernel-ask ledger.
+
 Date: 2026-08-08. Method: direct read of `crates/kittens/src/lib.rs`,
 `src/source/mod.rs`, `src/source/tokio_impl.rs`, and the `grok_shape.rs` /
 `embedded_shape.rs` integration tests at workspace HEAD (post-`4200d2e`).

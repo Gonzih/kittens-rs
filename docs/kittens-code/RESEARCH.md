@@ -74,9 +74,10 @@ load-bearing original bets, each individually falsifiable:
    hierarchy.
 3. **Swarm as a mount, not a protocol.** Cross-harness "read each other's thoughts"
    is the same RLM verb surface pointed at another harness's log store, exposed as a
-   modular `ContextExchange` seam that plugs in and out for evals. A deliberate
-   falsification attempt (input 08 §3) found no prior occupant; the nearest families
-   and the standing counter-signal are recorded in section 6.
+   modular `ContextExchange` seam that plugs in and out for evals. Functional prior
+   art exists for scoped peer-history retrieval (OpenClaw — input 13 F29); the
+   novel remainder is only the *uniform* mount abstraction. Near-miss families and
+   the standing counter-signal are in section 6.
 
 Everything else is deliberate convergence with the 2026 state of the art. Section 3
 separates what is genuinely convergent (three or more independent lineages) from
@@ -99,7 +100,8 @@ with one honest hard problem: TLS certificate verification off-std (section 7).
 **Rejected up front:** crate sprawl (Codex ~110, Grok ~70 members), a leader
 daemon, SQLite as source of truth, a bespoke RLM DSL grammar (tried and superseded
 in the operator's own prior work — Observation, input 06), RLM recursion depth >1
-by default (measured 95× cost blow-up), tokenizer coupling in the core, a no_std
+by default (≈3.9× latency per depth step, and multiplied spend — an economics
+cap, §4.5), tokenizer coupling in the core, a no_std
 Lua in the core (piccolo rejected for v1 — input 08 §5: pre-1.0, no no_std claim,
 `string`/`table` stdlib unimplemented, which defeats "every LLM knows Lua"; its
 fuel-metered sandbox design is the reason to revisit post-1.0), automatic harness
@@ -509,7 +511,9 @@ operator's own strongest prior swarm result is that *isolation-first* coordinati
 scheme tried"; "isolation was the feature." The read-mount bet must beat that
 baseline, not a strawman.
 
-**Observation:** kittens-code's §4 design makes read-mounting nearly free: every
+**Observation:** kittens-code's §4 design makes the read-mount *interface*
+cheap to expose (the engineering behind it — scopes, taint, watermarks,
+redaction — is not free; see W2/W4): every
 harness already maintains an append-only, replayable, RLM-queryable log. Reading
 another agent's thoughts is *mounting its store read-only* under a namespace and
 pointing the same verbs at it: `grep --peer builder-2 "panic in reactor"`. No new
@@ -548,7 +552,8 @@ virtual filesystem independent of std.
 
 **Fact (input 03):** the stack exists and is pinned: `embedded-io`/`-async` 0.7
 (98M downloads, bidirectional std/tokio adapters) as the byte-stream vocabulary;
-`reqwless` 0.14 + `embedded-tls` 0.19 (TLS 1.3, ~16KB/conn) for no_std HTTP;
+`reqwless` 0.14 + `embedded-tls` 0.19 (TLS 1.3, ~32KB/conn — read+write
+record buffers, input 13 F27) for no_std HTTP;
 serde/serde_json with `alloc`; `crop` rope (no_std-capable); `postcard` for
 compact persistence; Embassy 0.10 as the no_std executor world the kittens kernel
 already targets. WASM: wasm32-unknown-unknown (host-import IO, Cloudflare `worker`
