@@ -6,7 +6,17 @@
 
 <p align="center"><em>Explicit async orchestration with compiler-checked claws and soft paws.</em></p>
 
-Kittens is an experimental `no_std` reactor kernel for explicit,
+This repository is the Kittens monorepo: the reactor kernel plus every
+profile crate built on it. Each crate carries its own `SPEC.md` as its
+controlling contract; the root [SPEC.md](SPEC.md) is the kernel/K0 contract.
+
+| Crate | What it is | Contract |
+|---|---|---|
+| [`kittens`](crates/kittens) | the `no_std` reactor kernel and Tokio source adapters | root [SPEC.md](SPEC.md) §37, [K0-REPORT.md](K0-REPORT.md) |
+| [`kittens-macros`](crates/kittens-macros) | the `reactor!` compiler (parser, topology validator, expansion) | root [SPEC.md](SPEC.md) §37 |
+| [`kittens-tui`](crates/kittens-tui) | terminal-orchestration profile: input isolation, frame writer with acknowledgement, presenter render gate, terminal lifecycle | [crates/kittens-tui/SPEC.md](crates/kittens-tui/SPEC.md) |
+
+Kittens itself is an experimental `no_std` reactor kernel for explicit,
 compile-checked async orchestration in Rust.
 
 It keeps application state in ordinary Rust, polls persistent sources in biased

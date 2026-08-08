@@ -149,6 +149,12 @@ Writer protocol, normative:
 
 ### 6.5 Presenter
 
+`Instant` throughout the presenter is `tokio::time::Instant`: it is what
+`kittens::source::OptionalDeadline` arms with, so `deadline()` feeds the
+deadline source without conversion, and paused-time tests can drive the
+throttle deterministically. It converts from `std` via
+`tokio::time::Instant::from_std` where a caller needs it.
+
 ```rust
 pub struct Presenter { /* private: dirty, force_full, in_flight,
                           last_present, scheduled, min_interval, next_seq */ }
