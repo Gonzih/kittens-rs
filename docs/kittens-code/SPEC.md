@@ -1,10 +1,12 @@
 # kittens-code specification
 
 - Spec date: 2026-08-08
-- Version: v0.2 — spec refinement pass 1 applied (adversarial review, input 11:
-  3 blockers, 5 major, 6 minor — all dispositioned below) plus the operator's
-  extend-the-kernel directive and the kernel-fit analysis (input 10).
-  **Not yet frozen, no implementation authorized.**
+- Version: v0.3 — refinement pass 1 (adversarial review, input 11: 3 blockers,
+  5 major, 6 minor — all dispositioned) + operator extend-the-kernel directive
+  + kernel-fit analysis (input 10); pass 2 closes D3 (verb grammar) and drafts
+  D10–D14. **Not yet frozen, no implementation authorized.** Freeze requires:
+  operator review + kittens-tui seam negotiation (D-b) + one verification
+  review of this version.
 - Controlling evidence slice: section 14 (KC0). Sections 3–13 are normative for
   KC0 only where section 14 imports them; everything else is candidate design
   retained for lineage, mirroring the root SPEC's §37 discipline.
@@ -125,9 +127,14 @@ Pure serde data (R§3.1-2, I-01):
 - P7. Wire evolution: additive-only within v0.x; unknown-field-tolerant
   decode (I-07). Persisted-record versioning is D11 (log header record with
   schema version; replay across versions defined there).
-- P8. Error taxonomy (D10, KC0-blocking): `ErrorEvent { class:
-  Retryable | Fatal | UserActionable, code, message, correlates: Option<SubmissionId> }`;
-  exact code list closes with D10.
+- P8. Error taxonomy (D10, closed as KC0 draft): `ErrorEvent { class:
+  Retryable | Fatal | UserActionable, code: ErrorCode, message,
+  correlates: Option<SubmissionId> }`. KC0 `ErrorCode` set:
+  `model_transport`, `model_overloaded`, `model_context_length`,
+  `model_auth`, `tool_denied`, `tool_failed`, `tool_timeout`,
+  `budget_exhausted { budget_kind }`, `verb_error { verb, cause }`,
+  `store_io`, `config_invalid`, `cancelled`, `internal`. Additive-only per
+  P7; class mapping is data shipped with the code list, not caller judgment.
 
 ## 5. Transcript store contract
 
@@ -146,11 +153,14 @@ Pure serde data (R§3.1-2, I-01):
   D7 (codec × search). KC0 ships JSONL only.
 - S5. Crash discipline in shims: atomic append (temp+rename or target-native
   equivalent) (I-07).
-- S6. Session identity (D11, KC0-blocking): each log opens with a header
-  record {session UUID, parent session (fork lineage), schema version,
-  created-at}; one writer per log (single-writer rule; multi-process append
-  is out of scope for v0.x and MUST be rejected by shims via lock or
-  create-exclusive).
+- S6. Session identity (D11, closed as KC0 draft): each log opens with a
+  header record `{ session_id: Uuid (v7, driver-generated — core has no
+  entropy), parent: Option<Uuid>, protocol_version: semver of the protocol
+  crate, codec: "jsonl-v1", created_at: driver-provided }`. Replay MUST
+  refuse a higher major `protocol_version` and MUST tolerate unknown fields
+  at equal major (P7). One writer per log: shims enforce via
+  create-exclusive/lock; multi-process append is out of scope for v0.x.
+  G2 includes a schema-version-bump fixture.
 
 ## 6. Turn engine and call model (core law)
 
@@ -216,6 +226,14 @@ exactly the layer it was built for.
 - C6. RLM standing reminder every turn; wording is config data (E1 variable).
 - C7. Untrusted config-file content is escaped at the injection boundary
   (R§3.2, I-07). Gated by adversarial fixture (G8).
+- C9. Prompt ownership (D13, closed as KC0 draft): system prompt, reminder
+  templates (including the C6 standing reminder), and the compaction summary
+  prompt ship as a **versioned prompt-pack** — plain data in `core`
+  (const, semver-tagged, region-labeled per P5) — overridable per-template
+  via config (D12). Rationale: prompts-as-versioned-data keeps sessions
+  replayable/rehydratable (S2) and makes prompt changes diffable spec
+  artifacts rather than shim lore; matches the repo's code-carries-context
+  philosophy. The prompt-pack version is recorded in the S6 header.
 - C8. Token accounting (D-a, resolved for KC0 — input 11 finding 7): the
   driving number is hybrid — provider-reported usage for history (exact) +
   a tail estimator **self-calibrated each turn against the provider's
@@ -227,9 +245,11 @@ exactly the layer it was built for.
 
 - Q1. Surface: fixed verb set, one verb per line, Unix-flavored (R§4.4):
   `grep`, `slice`, `head`, `tail`, `count`, `partition`, `ask`, `ask-each`,
-  `final`, `final-var`. Namespace targets: own log (default), mounted peers
-  (candidate), never working files (those are tools). Grammar (D3) is
-  versioned and STABLE — a future RL action space (R§4.4, I-08 §2).
+  `final`. (`final-var` from the research surface is merged into `final %N` —
+  a REDUCE deviation recorded here.) Namespace targets: own log (default),
+  mounted peers (candidate), never working files (those are tools). Grammar
+  (D3, §8.1) is versioned and STABLE — a future RL action space (R§4.4,
+  I-08 §2).
 - Q2. Budgets enforced via P6 cap-types: per-verb output cap; verb-count cap
   (*synthesis-introduced*); recursion node budget (depth 1 default);
   token + wall-clock meters on every `ask`/`ask-each` node surfaced as
@@ -253,6 +273,46 @@ exactly the layer it was built for.
 - Q7. RLM also exposed as an opt-in `recall` tool (I-06 RecallTool) — and E1
   gains the corresponding arm (input 11 finding 5): always-on vs
   tool-mediated access are compared, not just presence/absence.
+
+### 8.1 Verb grammar (D3, closed as KC0 draft-normative)
+
+One verb per line; a query is a short script; every line's capped output is
+both shown to the model and bound to a result reference `%N` (N = 1-based
+line number). Line-oriented, no loops, no state beyond `%N` — total by
+construction.
+
+```ebnf
+script    = line , { line } ;
+line      = verb , { arg } , newline ;
+verb      = "grep" | "slice" | "head" | "tail" | "count" | "partition"
+          | "ask" | "ask-each" | "final" ;
+arg       = flag | value ;
+flag      = "--" , ident , [ "=" , value ] ;
+value     = ref | range | number | string | ident ;
+ref       = "%" , digit , { digit } ;
+range     = unit , ":" , number , ".." , number ;
+unit      = "turn" | "seq" | "byte" ;
+string    = '"' , { character - '"' | '\"' } , '"' ;
+```
+
+Verb semantics (each verb reads a *selection*: a `%N` ref, a `range`, or the
+whole mounted target when omitted; every output is cap-typed per P6):
+
+| Verb | Args | Output |
+|---|---|---|
+| `grep` | pattern string, selection?, `--ctx=N`, `--type=EVENT_KIND`, `--peer=NAME` (candidate) | matching records with context; binds selection of hits |
+| `slice` | range | records in range |
+| `head` / `tail` | selection?, `--n=N` | first/last N records |
+| `count` | pattern?, selection? | match/record count (cheap aggregation; R§4.1 notes counting degrades in-model — this pushes it to the engine) |
+| `partition` | selection?, `--by=turns\|bytes\|regex`, `--size=N` / pattern | binds a list-of-chunks selection |
+| `ask` | selection or `%N`, question string, `--sample-k=N` (E2 arm, feature-gated) | sub-model answer (digest, cap-typed) |
+| `ask-each` | chunk-list `%N`, question string | bounded fan-out; list of digests; each element budgeted |
+| `final` | literal string or `%N` | terminates the query; the referenced/literal value is the answer |
+
+Errors are verb-level and typed (D10 codes): bad ref, bad range, budget
+exhausted, unknown flag. An erroring line binds an error value to its `%N`;
+the script continues (models recover better from inline errors than aborts —
+Hypothesis, *synthesis-introduced*; E2 measures).
 
 ## 9. Tools kernel
 
@@ -304,6 +364,17 @@ warning; E5 measures the residual).
 - F3. kittens-tui wiring: blocked on D-b negotiation; offered contract is the
   protocol event stream; no privileged path (I-07 lesson).
 
+### 13.1 Configuration (D12, closed as KC0 draft)
+
+One `Config` struct in the protocol crate; std shim deserializes it from
+TOML. Precedence: built-in defaults < config file < `config-patch` Op
+(last-wins per leaf key; patches are recorded in the log like any Op, so
+config state is replayable). KC0 key set: compaction thresholds
+(`prefire = 0.75`, `hard = 0.85`), stationarity thresholds (`16`/`4`),
+budgets (P6 caps), reminder template selection (C6/C9), model tiers
+(`root`, `sub` — M3), per-tool approval defaults (P4), store location.
+Unknown keys warn, never fail (P7 spirit).
+
 ## 14. KC0 — the controlling evidence slice
 
 Scope (adjusted per input 11 findings 5, 9, 13):
@@ -316,11 +387,28 @@ Scope (adjusted per input 11 findings 5, 9, 13):
 4. Context engine C1–C8 present (C8 = calibrated hybrid per D-a); RLM engine
    Q1–Q5 + Q7 complete; L2/swarm ports defined, unimplemented.
 5. Tools K1–K2 complete (K3 cut).
-6. Eval rig: mock-LLM jail (D14 defines its interface: scripted
-   request-fingerprint→response sequences + behavioral capture, I-06 ORG-5)
-   + E1 executed end-to-end with arms {compaction-only, RLM-always-on,
-   RLM-as-tool, both} × {reminder on/off} on the D14 task battery.
-   Terminal-Bench 2.0 is a KC1 gate (I-08).
+6. Eval rig: mock-LLM jail + E1 executed end-to-end with arms
+   {compaction-only, RLM-always-on, RLM-as-tool, both} × {reminder on/off}
+   on the D14 task battery. Terminal-Bench 2.0 is a KC1 gate (I-08).
+
+   Jail interface (D14, closed as KC0 draft; I-06 ORG-5 precedent): the jail
+   is an alternative discharger of the `Http` model-call Effect — a scenario
+   file of ordered steps `{ match: Ordinal | RequestFingerprint(hash of
+   normalized message list), respond: [scripted deltas / tool calls /
+   errors] }` — plus behavioral capture (every outgoing request appended to
+   a capture JSONL for diffing against expectations). Scenario mismatch is a
+   hard test failure. Determinism rule: same scenario + same config ⇒
+   byte-identical log (this is also what G2 replays).
+
+   E1 task battery (D14): minimum eight scripted tasks, each existing in
+   every E1 arm: (1) long-horizon fact recall across a forced compaction;
+   (2) recall of an old tool result after its window truncation (Q3
+   reversible-offload path); (3) mid-task interrupt + resume (G4/G4b
+   overlap); (4) tool doom-loop requiring the stationarity guard; (5)
+   budget-exhaustion recovery (verb cap hit, model must re-strategize);
+   (6) multi-turn task with reminders on vs off; (7) retry/circuit-breaker
+   scenario (M2); (8) hostile-config injection attempt (C7/G8 overlap).
+   The battery manifest is a fixture file; additions follow T5.
 
 Gates (all MUST pass before any post-KC0 surface is built):
 
@@ -369,7 +457,7 @@ KC0 falsifiers (any one forces architecture revision, not patching):
 |---|---|---|---|
 | D1 | Crate topology §3 (core no longer links kittens; drivers do) | set for KC0 | freeze after KC0 |
 | D2 | Op/Event wire shapes | draft P1–P8; closes with D10 | spec refinement |
-| D3 | Verb grammar (exact EBNF) | open — next spec pass | KC0 build |
+| D3 | Verb grammar (§8.1 EBNF; final-var merged into `final %N`) | closed as KC0 draft | verification review |
 | D4 | WindowLayout field types | draft P5 | spec refinement |
 | D5 | Isolation policy enum | deferred with D8 | post-KC0 |
 | D6 | Wire dialects | KC0 = Anthropic-style only | revisit KC1 |
@@ -379,11 +467,11 @@ KC0 falsifiers (any one forces architecture revision, not patching):
 | D-a | TokenCount | **resolved for KC0**: provider-exact history + self-calibrated tail ratio; error bounds reported in G5 (C8) | — |
 | D-b | kittens-tui seam | blocked on external negotiation | frontend only |
 | D-c | ESP32-S3 spike | scheduled pre-MCU-claims (R§7) | MCU claims only |
-| D10 | Error taxonomy (P8 codes/classes) | open, KC0-blocking | KC0 build |
-| D11 | Persisted schema versioning + session identity (S6, G2 fixture) | drafted S6; close exact header shape | KC0 build |
-| D12 | Config schema + precedence (defaults < file < config-patch Op) + per-tool approval defaults | open, KC0-blocking | KC0 build |
-| D13 | Prompt content ownership (system prompt, reminder templates, compaction summary prompt) — candidate: versioned prompt-pack as core data, config-overridable | open, KC0-blocking | KC0 build |
-| D14 | Mock-jail interface + E1 task battery definition | open, KC0-blocking (G5 depends) | KC0 build |
+| D10 | Error taxonomy (P8) | closed as KC0 draft | verification review |
+| D11 | Schema versioning + session identity (S6) | closed as KC0 draft | verification review |
+| D12 | Config schema + precedence (§13.1) | closed as KC0 draft | verification review |
+| D13 | Prompt ownership → versioned prompt-pack in core (C9) | closed as KC0 draft | verification review |
+| D14 | Jail interface + E1 battery (§14.6) | closed as KC0 draft | verification review |
 | KX1–KX3 | kittens embassy adapters (channel/signal/deadline) | ledgered kernel asks (I-10) | MCU runtime only |
 | KX-K1 | dynamic source sets + SSE adapter kernel asks | ledgered, K1-era | post-KC0 |
 
@@ -400,6 +488,13 @@ KC0 falsifiers (any one forces architecture revision, not patching):
   §3, kernel extension explicitly in scope). Cut from KC0: fork, K3, mlua.
   Added: G4b, G7–G10 gates; D10–D14 decisions; §6 call model (sync core +
   effect queue; reactor lives in drivers).
-- Next: close D3 (verb EBNF) + D10–D14 drafts in spec refinement pass 2, then
-  operator/other-harness review, then freeze of KC0 sections only.
-  Implementation remains unauthorized until freeze.
+- 2026-08-08: spec refinement pass 2 → v0.3. Closed as KC0 drafts: D3 (§8.1
+  verb grammar, one-verb-per-line with `%N` result refs; `final-var` merged
+  into `final %N`; inline verb errors as Hypothesis), D10 (P8 error codes),
+  D11 (S6 header shape, UUIDv7 driver-generated), D12 (§13.1 config,
+  replayable config-patch precedence), D13 (C9 versioned prompt-pack in
+  core), D14 (§14.6 jail interface + eight-task E1 battery).
+- Next: one verification review of v0.3 (fresh agent, checks pass-2 additions
+  against the same discipline), then operator review + kittens-tui seam
+  negotiation (D-b), then freeze of KC0 sections only. Implementation remains
+  unauthorized until freeze.
