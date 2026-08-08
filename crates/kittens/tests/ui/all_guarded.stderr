@@ -1,0 +1,5 @@
+error: KTR014 every source arm is guarded by `#[when]`; an all-false snapshot polls no source and registers no source wake. Repair: keep an unguarded wake-capable control source (for example, a shutdown channel), or encode enablement in an adapter that registers the relevant wake; a permanently dormant source is not sufficient.
+  --> tests/ui/all_guarded.rs:23:16
+   |
+23 |         #[when(app.accepts_commands)]
+   |                ^^^

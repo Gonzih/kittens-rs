@@ -166,8 +166,16 @@ impl Parse for Reactor {
         let mut arms = Vec::new();
 
         while !input.is_empty() {
-            if input.peek(Token![#]) {
-                arms.push(parse_arm(input)?);
+            // Doc comments are source-side rationale for readers and agents;
+            // the expansion has no item to attach them to, so they are
+            // accepted here and intentionally not emitted.
+            let attrs = Attribute::parse_outer(input)?;
+            let attrs: Vec<Attribute> = attrs
+                .into_iter()
+                .filter(|attr| !attr.path().is_ident("doc"))
+                .collect();
+            if !attrs.is_empty() {
+                arms.push(parse_arm(attrs, input)?);
                 continue;
             }
 
@@ -298,8 +306,7 @@ fn parse_policy(input: ParseStream<'_>) -> Result<Policy> {
 }
 
 #[allow(clippy::too_many_lines)]
-fn parse_arm(input: ParseStream<'_>) -> Result<Arm> {
-    let attrs = Attribute::parse_outer(input)?;
+fn parse_arm(attrs: Vec<Attribute>, input: ParseStream<'_>) -> Result<Arm> {
     let binding = Pat::parse_single(input)?;
     match &binding {
         Pat::Ident(ident)
@@ -797,6 +804,16 @@ fn validate(reactor: &Reactor) -> Result<()> {
                 "move the complete source arm so lexical order matches the declared relation",
             ));
         }
+    }
+
+    if reactor.arms.iter().all(|arm| arm.when.is_some()) {
+        let first_guard = reactor.arms[0].when.as_ref().expect("all arms are guarded");
+        return Err(ktr(
+            first_guard.span(),
+            "KTR014",
+            "every source arm is guarded by `#[when]`; an all-false snapshot polls no source and registers no source wake",
+            "keep an unguarded wake-capable control source (for example, a shutdown channel), or encode enablement in an adapter that registers the relevant wake; a permanently dormant source is not sufficient",
+        ));
     }
 
     for (victim_index, victim) in reactor.arms.iter().enumerate() {

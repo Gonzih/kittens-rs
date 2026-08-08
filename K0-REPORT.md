@@ -168,7 +168,7 @@ established, while full numeric drain-window attribution remains open. No
 
 ## Mutations and diagnostics
 
-Sixteen compile-fail fixtures retain rustc output. They cover:
+Eighteen compile-fail fixtures retain rustc output. They cover:
 
 | Mutation | Retained result |
 |---|---|
@@ -181,6 +181,8 @@ Sixteen compile-fail fixtures retain rustc output. They cover:
 | temporary source expression | `KTR015`, persistent adapter/channel isolation repair |
 | shutdown below firehose | `KTR016`, leading-prefix consequence |
 | duplicate exact source place | `KTR020`, both IDs and alias limitation |
+| every arm guarded by `#[when]` | `KTR014`, zero-source-poll/no-source-wake consequence and wake-capable unguarded-arm repair |
+| non-Kittens arm attribute | `KTR000`, confirms doc attributes are the sole source-side exception |
 | non-bool guard | bool helper type error |
 | readiness mismatch | concrete expected readiness marker |
 | unadmitted arbitrary future/display-like operation | concrete type, retained/latching or owned channel repair, and drop-cleanup distinction |
@@ -212,15 +214,21 @@ associated-marker equality and an admitted newtype has not been performed.
 
 ## Agent ablation and rehydration
 
-No blind fresh-agent trials or context-reset trials were run. Repository-local
-guides, diagnostic anchors, mutation snapshots, machine-readable index, and the
-expansion snapshot are present, but their repair advantage over raw code or
-inert metadata is unmeasured. Therefore:
+No protocol-conforming blind fresh-agent or context-reset trials have run. The
+informal smoke exercise below reports eight lean-condition repair attempts, but
+retains only four mutated inputs and eight final patch excerpts. It omits the
+exact prompts, model identifiers, rustc JSON, test/oracle output, token/tool/time
+counts, and per-trial transcripts required by section 27.4. With two reported
+attempts per mutation, it also cannot meet section 37.11's four-of-five
+promotion threshold. Repository-local guides, diagnostic anchors, mutation
+snapshots, machine-readable index, and the expansion snapshot are present, but
+their repair advantage over raw code or inert metadata is unmeasured.
+Therefore:
 
 - lean syntax is not promoted over maximal or annotated conditions by agent
   evidence;
 - diagnostic wording/numbering remains provisional;
-- the section 37.11 four-of-five/two-iteration promotion threshold is unmet;
+- the section 37.11 four-of-five/two-iteration promotion threshold remains unmet for every diagnostic and condition;
 - context reconstructibility is an objective, not a demonstrated result.
 
 ## Falsifier assessment
@@ -238,7 +246,7 @@ inert metadata is unmeasured. Therefore:
 | core mechanism exceeds registered size threshold | **triggered** for generated-future size versus Tokio/event; review remains open |
 | equal-budget drain attribution is impossible | **partially triggered** because only boolean, not numeric, state is public |
 | rust-analyzer/formatting rejects ordinary use | not observed; parse-recovery UX was not separately benchmarked |
-| agents bypass or delete constraints | open; ablation not run |
+| agents bypass or delete constraints | open; the retained smoke-exercise patches show no bypass, but the required trial artifacts and comparative ablation are absent |
 | optimized text and idle/all-ready poll regression | open; no pinned repeated benchmark |
 
 The positive mechanism evidence supports continuing with architecture B/event,
@@ -262,6 +270,82 @@ an executor owned by Kittens; topology semantics stay profile-neutral;
 persistent admitted sources and biased lexical order are the behavioral
 boundary; the kernel remains no-std/no-alloc; and cooperative budget stays out
 of generated kernel code.
+
+## Post-review improvements (2026-08-07, second pass)
+
+A review pass against the SPEC section 37 contract added two code/test
+improvements and fixed one specification defect the implementation itself
+exposed:
+
+1. **`KTR014` all-guarded zero-poll check.** Under K0 guard semantics a
+   reactor whose every arm carries `#[when]` can take one all-false guard
+   snapshot that polls no source and therefore registers no source wake in
+   that arbitration. The macro rejects that directly visible topology with a
+   wake-capable unguarded-control-source repair. This is deliberately not
+   presented as a full liveness proof: source wake behavior is not encoded in
+   the admission traits, and a permanently dormant source can still return
+   `Pending` without registering. New compile-fail fixture
+   `tests/ui/all_guarded.rs`. Adding the check exposed a masked-oracle hazard
+   worth remembering whenever a validation stage is added: two existing
+   fixtures whose only arm was guarded (the guard-snapshot runtime test and
+   the `guard_not_bool` UI fixture) started failing on `KTR014` instead of
+   the oracle they exist to exercise. Both now use an unguarded retained
+   cancellation source; unlike an empty local latch, its pending poll registers
+   a wake.
+2. **Doc comments accepted as arm/phase rationale.** `///` above a source arm
+   previously died as `KTR000 unsupported attribute doc` — punishing exactly
+   the context-reconstructible-source practice the specification mandates.
+   Doc attributes are now accepted and intentionally not emitted (the
+   expansion has no item to attach them to); all other non-Kittens attributes
+   remain rejected so `cfg`-style conditional topology cannot exist silently.
+   New pass fixture `tests/ui-pass/doc_comment_rationale.rs`; compile-fail
+   fixture `tests/ui/non_kittens_attribute.rs` pins that `cfg` remains
+   rejected.
+3. **Specification example drift fixed.** SPEC section 38.2's Grok-shape
+   sketch omitted starvation waivers on `acp_stream`, `task_events`, and
+   `draw_deadline` and did not compile under the implemented direct starvation
+   rule — a source carries one yield edge, so a lane protecting
+   `terminal_input` cannot also protect the lanes below it. The spec example
+   now carries the waivers, and the correction is recorded in the spec itself
+   as a first-class instance of example-versus-checker drift. `KTR014` and
+   `KTR020` are now also recorded in the SPEC section 25.2 catalog notes.
+
+## Diagnostic-only repair smoke exercise (non-gating, reported 2026-08-07)
+
+The retained record reports eight lean-condition attempts against four core
+mutations. The reported method copied the repository without `.git` into
+eight isolated workspaces, installed one mutated `examples/pilot.rs` in each,
+and asked a fresh coding agent to repair the build while preserving intended
+behavior and declared policy. The four mutated inputs and eight reported final
+patch excerpts are retained in `docs/pilot-2026-08-07/`.
+
+| Mutation | Diagnostic | Reported attempts | Reported iterations | Patch shown | Patch preserves named constraint |
+|---|---|---:|---:|---|---|
+| shutdown below firehose | `KTR016` | 2 | 1, 1 | moved the complete arm, attributes untouched | yes |
+| missing buffered yield | `KTR007` | 2 | 1, 1 | added `#[yields_to(input, when = buffered)]` | yes |
+| temporary source expression | `KTR015` | 2 | 1, 1 | retained `source::one_shot(...)` constructed before the loop | yes |
+| drain on non-drainable latch | `KTR009` bound | 2 | 1, 1 | removed `#[drain]` | yes |
+
+What the retained files support:
+
+- Each retained patch excerpt is the canonical local repair for its mutation,
+  and none deletes a declaration, adds a starvation waiver, or bypasses the
+  constrained path.
+- The record reports one compile iteration for each attempt, but the missing
+  compiler/test artifacts prevent an independent reviewer from verifying that
+  count or the final hidden-oracle result.
+- The `KTR016`/`KTR007` fixtures produced a transient
+  `unused import: Control` warning while macro failure suppressed arm
+  expansion. Removing that decoy from future fixtures/error expansion remains
+  a useful diagnostic-quality improvement.
+
+This exercise is not a section 27.4/37.11 pilot and supplies no promotion or
+release-gate evidence. Besides the absent artifacts listed earlier, it covers
+only the lean condition, uses two reported attempts per mutation rather than
+five, has no raw/annotated/maximal comparison, has no context-reset
+rehydration variant, and does not retain a blinded semantic review. It is kept
+as seed material for a reproducible harness and as a qualitative preview of
+the intended repair path; the agent-ablation gate remains fully open.
 
 ## Crates.io readiness
 

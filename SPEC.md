@@ -2465,7 +2465,7 @@ The following IDs and message templates were proposed for the maximal candidate.
 
 Numbers `KTR006`, `KTR009`, `KTR013`, and `KTR019` are reserved for generated rustc type checks below so documentation IDs remain stable.
 
-`KTR014`'s stated rationale predates the always-enabled pending sentinel of sections 19.2 and 20.2, which already prevents Tokio's all-disabled panic path in the control expansion. If retained, `KTR014` is a liveness advisory about a fully guarded reactor with no possible progress, not a panic-path rejection; whether it survives at all is a diagnostic-pilot decision, not a frozen commitment.
+`KTR014`'s original rationale predates the always-enabled pending sentinel of sections 19.2 and 20.2, which already prevents Tokio's all-disabled panic path in the control expansion. The K0 implementation retained `KTR014` as a conservative zero-poll guard check: under K0 guard semantics a fully `#[when]`-guarded reactor whose guards all snapshot false polls no source and registers no source wake in that arbitration, so the macro requires at least one unguarded arm (section 37.5). This is not a general liveness proof: it guarantees that an arm is polled, not that the arm is wake-capable, and a permanently dormant source does not repair the operational risk. The implementation also added `KTR020` for the section 37.5 duplicate-place rule, which this catalog had not numbered: `KTR020 source place is declared under both '{first}' and '{second}'. Repair: keep one source ID for this exact persistent place.` The decision and exact prose for both remain provisional pending the section 37.11 pilot.
 
 Two condition-specific variants are also normative: `KTR005 shutdown source '{id}' cannot be #[last]. Repair: keep shutdown in the leading prefix and remove #[last].` and `KTR008 terminal source '{id}' cannot be drained because its first successful item exits. Repair: remove #[drain(...)].`
 
@@ -3547,6 +3547,8 @@ Rules for the lean probe:
 - `after_event` runs once after each successfully completed service window (one selected item plus any drained items), not once per drained item; any handler `Stop` or `Err` skips it even if earlier items in that window continued;
 - a user guard is evaluated exactly once per arbitration, remains fixed across all executor repolls of that pending arbitration, and must produce `bool`; no claim of purity is made.
 - a false guard registers no wake and is not resnapshotted on wake; K0 guards use reactor-owned state changed between arbitrations, while external changes must arrive as an enabled event that completes the current arbitration.
+- at least one source arm must be unguarded (`KTR014`-anchored): if every arm carries `#[when]`, one all-false guard snapshot polls no source and registers no source wake in that arbitration. The check guarantees only that some source is polled; the application must use an unguarded wake-capable control source (commonly a shutdown channel/cancellation source), or encode external enablement in an adapter that registers the relevant wake. A permanently dormant source such as an empty local latch is not a liveness repair.
+- `///` doc comments above phase blocks and source arms are accepted as source-side rationale and are intentionally not emitted into the expansion; every other non-Kittens attribute is rejected so `cfg`-style conditional topology cannot exist silently.
 - enablement is snapshotted in lexical source order: evaluate that source's user guard first, short-circuit its yield probe when false, otherwise evaluate its backlog probe once per relation edge with no cross-edge cache; during draining, keep the user guard snapshot and reevaluate only the selected source's yield probe after each successful handler and before `try_next`.
 
 The phase requirement list intentionally duplicates phase presence because it rules out deleting a required block accidentally. The negative-control benchmark also removes both the requirement and block to demonstrate that Kittens cannot infer architectural intent once the declaration is erased.
@@ -4038,6 +4040,7 @@ async fn run(&mut self, sources: &mut Sources) -> Result<LoopExit, HarnessError>
         // ordering that would otherwise be a legal-but-breaking reorder.
         #[source(acp_stream)]
         #[readiness(may_remain_ready)]
+        #[starvation(allowed, reason = "model streaming may wait behind control events")]
         #[when(self.session_accepts_acp())]
         #[yields_to(terminal_input, when = buffered)]
         #[drain(max = 32)]
@@ -4060,6 +4063,7 @@ async fn run(&mut self, sources: &mut Sources) -> Result<LoopExit, HarnessError>
         // mechanism outside Kittens guarantees (section 37.3).
         #[source(task_events)]
         #[readiness(may_remain_ready)]
+        #[starvation(allowed, reason = "effect completions may wait behind model streaming")]
         #[yields_to(terminal_input, when = buffered)]
         completion = sources.task_events => {
             self.handle_task_completion(completion)?;
@@ -4084,6 +4088,7 @@ async fn run(&mut self, sources: &mut Sources) -> Result<LoopExit, HarnessError>
         // disarms before firing, cannot hot-loop after firing.
         #[source(draw_deadline)]
         #[readiness(quiescent)]
+        #[starvation(allowed, reason = "frame throttling deliberately delays drawing")]
         _ = sources.draw_deadline => {
             self.presenter.on_deadline();
             Ok(Control::Continue)
@@ -4110,6 +4115,8 @@ async fn run(&mut self, sources: &mut Sources) -> Result<LoopExit, HarnessError>
 ```
 
 The declaration block is longer than the equivalent `tokio::select!`. That is the trade this project makes deliberately (section 0.2): every ordering fact that Grok keeps in comments — shutdown first, ACP yields to input, ACP drains 32, voice last — is a compiler input here, locally visible to the agent editing the arm it governs.
+
+Note the waivers on `acp_stream`, `task_events`, and `draw_deadline`. Under the direct starvation rule of section 37.4, every may-remain-ready predecessor must yield to each protected victim individually, and a source carries at most one yield edge in K0. A stream lane whose single yield edge protects `terminal_input` cannot also protect the lanes below it, so those arms carry audited waivers — which is exactly the service hierarchy Grok's comments imply: input is sacred, everything else in the stream tier is best effort relative to what precedes it. An earlier revision of this example omitted the waivers and did not compile under the implemented checker; the correction is recorded here deliberately as an instance of the spec-example-versus-checker drift this project treats as a first-class defect.
 
 Boundary — not checked here: `self.session_accepts_acp()` is trusted as an ordinary boolean (its truth is a runtime fact); the presenter's one-frame-in-flight protocol is application-owned runtime state in K0; the JoinSet forwarder is an application mechanism; nothing bounds how long `handle_acp_event` awaits.
 

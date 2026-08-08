@@ -7,7 +7,7 @@
       "public_items": ["kittens::reactor!", "kittens::reactor::Control"],
       "canonical_example": "crates/kittens/examples/minimal.rs",
       "anti_pattern": "crates/kittens/tests/ui-pass/raw_runtime_bypass.rs",
-      "diagnostics": ["KTR003", "KTR004", "KTR007", "KTR011", "KTR016"],
+      "diagnostics": ["KTR003", "KTR004", "KTR007", "KTR011", "KTR014", "KTR016"],
       "guarantee": "declared lexical topology and phase placement",
       "non_guarantee": "event arrival, handler termination, or raw-runtime behavior"
     },

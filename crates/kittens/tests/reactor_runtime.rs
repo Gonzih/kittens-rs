@@ -274,10 +274,16 @@ async fn latched_event_survives_when_an_earlier_source_wins_before_it_is_polled(
 async fn before_poll_runs_once_across_pending_executor_repolls() {
     struct Sources<F: Future<Output = Result<u8, tokio::sync::oneshot::error::RecvError>>> {
         completion: source::OneShot<F>,
+        // KTR014 requires an unguarded arm. Use a retained cancellation waiter
+        // that really registers a wake; a dormant Latched would only silence
+        // the syntax check without repairing the no-waker condition.
+        shutdown: source::Cancellation,
     }
     let (sender, receiver) = tokio::sync::oneshot::channel();
+    let shutdown_token = tokio_util::sync::CancellationToken::new();
     let mut sources = Sources {
         completion: source::one_shot(receiver),
+        shutdown: source::cancellation(shutdown_token.clone()),
     };
     let mut before_count = 0;
     let mut guard_count = 0;
@@ -296,6 +302,13 @@ async fn before_poll_runs_once_across_pending_executor_repolls() {
         before_poll {
             before_count += 1;
             Ok(())
+        }
+
+        #[source(shutdown)]
+        #[readiness(quiescent)]
+        #[shutdown]
+        _ = sources.shutdown => {
+            Ok(0)
         }
 
         #[source(completion)]
