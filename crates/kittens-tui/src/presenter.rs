@@ -326,7 +326,10 @@ mod tests {
             let _draw = p.try_begin(now()).expect("draw");
             // Dropped without commit or no_output.
         }
-        assert!(p.is_dirty(), "an uncommitted draw does not lose the request");
+        assert!(
+            p.is_dirty(),
+            "an uncommitted draw does not lose the request"
+        );
         assert_eq!(p.in_flight(), None);
     }
 
@@ -362,7 +365,10 @@ mod tests {
         // The deadline fires; the draw becomes due at the eligible instant.
         p.on_deadline();
         let t2 = t0 + interval;
-        assert!(p.try_begin(t2).is_some(), "eligible exactly at the deadline");
+        assert!(
+            p.try_begin(t2).is_some(),
+            "eligible exactly at the deadline"
+        );
         writer.finish(handle).expect("writer joins");
     }
 

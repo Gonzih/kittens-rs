@@ -96,7 +96,10 @@ impl InputReader {
         Ok(Self::spawn_with(CrosstermPoller, poll_interval))
     }
 
-    fn spawn_with<P: EventPoller + 'static>(mut poller: P, poll_interval: Duration) -> (Self, InputSource) {
+    fn spawn_with<P: EventPoller + 'static>(
+        mut poller: P,
+        poll_interval: Duration,
+    ) -> (Self, InputSource) {
         let flags = Arc::new(Flags::default());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let thread_flags = Arc::clone(&flags);
@@ -214,8 +217,7 @@ mod tests {
         let poller = ScriptedPoller {
             events: Mutex::new(vec![key('a'), key('b')]),
         };
-        let (reader, mut source) =
-            InputReader::spawn_with(poller, Duration::from_millis(1));
+        let (reader, mut source) = InputReader::spawn_with(poller, Duration::from_millis(1));
 
         let mut received = Vec::new();
         while received.len() < 2 {
@@ -246,8 +248,7 @@ mod tests {
         let poller = ScriptedPoller {
             events: Mutex::new(Vec::new()),
         };
-        let (reader, _source) =
-            InputReader::spawn_with(poller, Duration::from_millis(1));
+        let (reader, _source) = InputReader::spawn_with(poller, Duration::from_millis(1));
 
         reader.pause();
         while !reader.is_parked() {

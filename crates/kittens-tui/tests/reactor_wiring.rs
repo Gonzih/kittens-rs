@@ -52,10 +52,7 @@ impl App {
         Ok(())
     }
 
-    async fn run(
-        &mut self,
-        sources: &mut Sources,
-    ) -> Result<u32, kittens_tui::WriterClosed> {
+    async fn run(&mut self, sources: &mut Sources) -> Result<u32, kittens_tui::WriterClosed> {
         kittens::reactor! {
             policy {
                 selection: biased;
