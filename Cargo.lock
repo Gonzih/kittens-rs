@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "kittens-code-cli"
-version = "0.1.1"
+version = "0.0.1"
 dependencies = [
  "kittens-code-core",
  "kittens-code-driver-tokio",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "kittens-code-core"
-version = "0.1.1"
+version = "0.0.1"
 dependencies = [
  "kittens-code-protocol",
  "serde",
@@ -562,8 +562,9 @@ dependencies = [
 
 [[package]]
 name = "kittens-code-driver-tokio"
-version = "0.1.1"
+version = "0.0.1"
 dependencies = [
+ "http",
  "httpdate",
  "kittens",
  "kittens-code-core",
@@ -586,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "kittens-code-protocol"
-version = "0.1.1"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",

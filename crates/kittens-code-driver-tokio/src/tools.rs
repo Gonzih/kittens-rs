@@ -325,6 +325,25 @@ pub fn run(root: &Path, call: &ProposedToolCall) -> (ToolOutcome, String) {
 mod tests {
     use super::*;
 
+    fn call(name: &str, args: impl serde::Serialize) -> ProposedToolCall {
+        ProposedToolCall {
+            name: String::from(name),
+            args_json: serde_json::to_string(&args).expect("serialize tool arguments"),
+        }
+    }
+
+    fn assert_failed(result: (ToolOutcome, String), contains: &str) {
+        let (outcome, output) = result;
+        assert!(matches!(
+            outcome,
+            ToolOutcome::Failed { ref message } if message == &output
+        ));
+        assert!(
+            output.contains(contains),
+            "{output:?} did not contain {contains:?}"
+        );
+    }
+
     #[test]
     fn absolute_and_traversal_paths_are_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -529,6 +548,220 @@ mod tests {
         assert!(
             fuzzy_find(hay, needle).is_some(),
             "trailing-whitespace normalization also absorbs CR"
+        );
+    }
+
+    #[test]
+    fn every_tool_success_path_returns_expected_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("input.txt"), "alpha\nneedle here\nomega needle\n")
+            .expect("seed input");
+
+        let (outcome, output) = run(
+            root,
+            &call("read", serde_json::json!({"path": "input.txt"})),
+        );
+        assert_eq!(outcome, ToolOutcome::Succeeded);
+        assert!(output.contains("needle here"));
+
+        let (outcome, output) = run(
+            root,
+            &call(
+                "write",
+                serde_json::json!({"path": "written.txt", "content": "complete"}),
+            ),
+        );
+        assert_eq!(outcome, ToolOutcome::Succeeded);
+        assert_eq!(output, "wrote 8 bytes");
+        assert_eq!(
+            std::fs::read_to_string(root.join("written.txt")).expect("read written"),
+            "complete"
+        );
+
+        let (outcome, output) = run(
+            root,
+            &call(
+                "edit",
+                serde_json::json!({"path": "written.txt", "old": "complete", "new": "exact"}),
+            ),
+        );
+        assert_eq!(
+            (outcome, output),
+            (ToolOutcome::Succeeded, String::from("edit applied"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("written.txt")).expect("read edited"),
+            "exact"
+        );
+
+        let (outcome, output) = run(
+            root,
+            &call(
+                "grep",
+                serde_json::json!({"path": "input.txt", "pattern": "needle"}),
+            ),
+        );
+        assert_eq!(outcome, ToolOutcome::Succeeded);
+        assert_eq!(output, "2:needle here\n3:omega needle");
+
+        let (outcome, output) = run(
+            root,
+            &call(
+                "grep",
+                serde_json::json!({"path": "input.txt", "pattern": "absent"}),
+            ),
+        );
+        assert_eq!(outcome, ToolOutcome::Succeeded);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn fuzzy_edit_fallback_hits_and_misses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("fuzzy.txt"), "alpha   \nbeta\nomega\n").expect("seed fuzzy");
+
+        let result = run(
+            root,
+            &call(
+                "edit",
+                serde_json::json!({
+                    "path": "fuzzy.txt",
+                    "old": "alpha\nbeta",
+                    "new": "replaced"
+                }),
+            ),
+        );
+        assert_eq!(result.0, ToolOutcome::Succeeded);
+        assert_eq!(
+            std::fs::read_to_string(root.join("fuzzy.txt")).expect("read fuzzy edit"),
+            "replaced\nomega\n"
+        );
+
+        assert_failed(
+            run(
+                root,
+                &call(
+                    "edit",
+                    serde_json::json!({
+                        "path": "fuzzy.txt",
+                        "old": "more\nlines\nthan\nthe\nfile",
+                        "new": "never"
+                    }),
+                ),
+            ),
+            "old text not found",
+        );
+        assert_eq!(fuzzy_find("one\ntwo", "three"), None);
+        assert_eq!(fuzzy_find("", ""), Some((0, 0)));
+    }
+
+    #[test]
+    fn every_tool_failure_route_is_a_failed_outcome() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("parent-file"), "not a directory").expect("seed parent file");
+
+        let malformed = ProposedToolCall {
+            name: String::new(),
+            args_json: String::from("{bad"),
+        };
+        for name in ["read", "write", "edit", "grep"] {
+            assert_failed(
+                run(
+                    root,
+                    &ProposedToolCall {
+                        name: String::from(name),
+                        args_json: malformed.args_json.clone(),
+                    },
+                ),
+                "bad arguments",
+            );
+        }
+
+        assert_failed(
+            run(root, &call("read", serde_json::json!({"path": "missing"}))),
+            "No such file",
+        );
+        assert_failed(
+            run(
+                root,
+                &call(
+                    "write",
+                    serde_json::json!({"path": "parent-file/child", "content": "x"}),
+                ),
+            ),
+            "os error",
+        );
+        assert_failed(
+            run(
+                root,
+                &call(
+                    "edit",
+                    serde_json::json!({"path": "missing", "old": "x", "new": "y"}),
+                ),
+            ),
+            "No such file",
+        );
+        assert_failed(
+            run(
+                root,
+                &call(
+                    "grep",
+                    serde_json::json!({"path": "missing", "pattern": "x"}),
+                ),
+            ),
+            "No such file",
+        );
+        assert_failed(
+            run(root, &call("exec", serde_json::json!({}))),
+            "unknown tool: exec",
+        );
+    }
+
+    #[test]
+    fn path_rejections_apply_to_each_filesystem_operation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for (name, args) in [
+            ("read", serde_json::json!({"path": "/absolute"})),
+            (
+                "write",
+                serde_json::json!({"path": "../escape", "content": "x"}),
+            ),
+            (
+                "edit",
+                serde_json::json!({"path": "../escape", "old": "x", "new": "y"}),
+            ),
+            (
+                "grep",
+                serde_json::json!({"path": "../escape", "pattern": "x"}),
+            ),
+        ] {
+            assert_failed(run(root, &call(name, args)), "refused");
+        }
+
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().expect("outside");
+            let outside_file = outside.path().join("outside.txt");
+            std::fs::write(&outside_file, "outside").expect("seed outside");
+            std::os::unix::fs::symlink(&outside_file, root.join("leaf")).expect("leaf symlink");
+            assert_failed(
+                run(root, &call("read", serde_json::json!({"path": "leaf"}))),
+                "symlinked",
+            );
+            assert!(read_checked(root, &root.join("leaf")).is_err());
+        }
+
+        let missing_root = root.join("does-not-exist");
+        assert_failed(
+            run(
+                &missing_root,
+                &call("read", serde_json::json!({"path": "file"})),
+            ),
+            "No such file",
         );
     }
 }

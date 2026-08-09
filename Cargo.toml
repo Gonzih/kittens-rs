@@ -24,9 +24,9 @@ version = "0.1.1"
 [workspace.dependencies]
 crossterm = "0.29"
 kittens = { path = "crates/kittens", version = "0.1.1" }
-kittens-code-core = { path = "crates/kittens-code-core", version = "0.1.1" }
-kittens-code-driver-tokio = { path = "crates/kittens-code-driver-tokio", version = "0.1.1" }
-kittens-code-protocol = { path = "crates/kittens-code-protocol", version = "0.1.1" }
+kittens-code-core = { path = "crates/kittens-code-core", version = "0.0.1" }
+kittens-code-driver-tokio = { path = "crates/kittens-code-driver-tokio", version = "0.0.1" }
+kittens-code-protocol = { path = "crates/kittens-code-protocol", version = "0.0.1" }
 serde = { version = "1.0", default-features = false, features = [
     "derive",
     "alloc",

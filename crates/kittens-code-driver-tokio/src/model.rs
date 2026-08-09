@@ -161,3 +161,150 @@ impl ModelClient for JailClient {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kittens_code_core::caps::Capped;
+    use kittens_code_protocol::ids::EffectId;
+
+    fn window_with_tail() -> WindowLayout {
+        WindowLayout::new(
+            String::from("system"),
+            String::new(),
+            String::new(),
+            String::from("question"),
+            vec![
+                TailItem::Message(String::from("message")),
+                TailItem::ToolCall {
+                    call: EffectId(9),
+                    text: String::from("read {}"),
+                },
+                TailItem::ToolResult {
+                    call: EffectId(9),
+                    text: Capped::head("result", 64, None),
+                },
+            ],
+            String::from("summary"),
+            Vec::new(),
+        )
+        .expect("valid paired tail")
+    }
+
+    #[tokio::test]
+    async fn jail_success_reports_usage_tool_calls_and_capture() {
+        let client = JailClient::new(vec![JailStep {
+            text: String::from("answer"),
+            tool_calls: vec![(String::from("read"), String::from("{\"path\":\"x\"}"))],
+            usage: Some((17, 99)),
+            fail: None,
+        }]);
+        let outcome = client
+            .complete(window_with_tail())
+            .await
+            .expect("scripted success");
+        assert_eq!(outcome.text, "answer");
+        assert_eq!(outcome.tool_calls[0].name, "read");
+        assert_eq!(
+            outcome.usage,
+            Some(Usage {
+                prompt_tokens: 17,
+                prompt_bytes: 99,
+            })
+        );
+        assert_eq!(
+            client.captured(),
+            vec![String::from("q=8 tail=mcr summary=7")]
+        );
+    }
+
+    #[tokio::test]
+    async fn jail_fail_step_and_script_exhaustion_are_classified() {
+        let client = JailClient::new(vec![JailStep {
+            text: String::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            fail: Some(String::from("transport down")),
+        }]);
+        assert_eq!(
+            client.complete(window_with_tail()).await,
+            Err((ErrorCode::ModelTransport, String::from("transport down")))
+        );
+        let exhausted = client
+            .complete(window_with_tail())
+            .await
+            .expect_err("second call exhausts the one-step script");
+        assert_eq!(exhausted.0, ErrorCode::Internal);
+        assert!(exhausted.1.contains("scenario exhausted"));
+        assert_eq!(client.captured().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn complete_submodel_wraps_context_question_and_sampling() {
+        let client = JailClient::new(vec![
+            JailStep {
+                text: String::from("sampled"),
+                tool_calls: Vec::new(),
+                usage: None,
+                fail: None,
+            },
+            JailStep {
+                text: String::from("plain"),
+                tool_calls: Vec::new(),
+                usage: None,
+                fail: None,
+            },
+        ]);
+        let sampled = AskRequest {
+            index: 3,
+            question: String::from("why?"),
+            context: String::from("evidence"),
+            sample_k: Some(4),
+        };
+        let sampled_window = submodel_window(&sampled);
+        assert_eq!(
+            sampled_window.system,
+            "Answer from the supplied transcript context only."
+        );
+        assert!(
+            sampled_window
+                .last_user_query
+                .contains("Context:\nevidence")
+        );
+        assert!(sampled_window.last_user_query.contains("Question:\nwhy?"));
+        assert!(
+            sampled_window
+                .last_user_query
+                .contains("Requested samples: 4.")
+        );
+        assert!(sampled_window.verbatim_tail.is_empty());
+
+        assert_eq!(
+            client
+                .complete_submodel(sampled)
+                .await
+                .expect("sampled completion")
+                .text,
+            "sampled"
+        );
+        let plain = AskRequest {
+            index: 4,
+            question: String::from("what?"),
+            context: String::from("facts"),
+            sample_k: None,
+        };
+        assert!(
+            !submodel_window(&plain)
+                .last_user_query
+                .contains("Requested samples")
+        );
+        assert_eq!(
+            client
+                .complete_submodel(plain)
+                .await
+                .expect("plain completion")
+                .text,
+            "plain"
+        );
+    }
+}
