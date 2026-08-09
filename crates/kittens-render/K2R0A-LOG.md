@@ -134,3 +134,21 @@ is a statically linked ARM executable retaining `_start`,
 `FrameDemand::new`, and the `kittens-render` demand-id state. The library's
 normal target dependency tree remains empty. No Xtensa, board-HIL, kernel
 admission, sealing, or bilateral-seam gate is claimed by this result.
+
+## Exit review round 3 (2026-08-08)
+
+Full text: `reviews/2026-08-08-exit-review-3-codex.md`. Verdict: **FAIL** —
+externally gated rows are not the cause; six host-core findings are, and
+the reviewer's sharpest observation is that our own external no-std
+fixture was the counterexample for finding 1 (a preclassified transfer
+minting coverage it never wrote). Disposition: **all six accepted**, plus
+the three advisories. Batch 6 (delegated to the reviewing engineer, with
+the author's agreed shapes): (1) structural target/start coupling — the
+only public path into flight starts the transfer FROM the target's
+region; (2) failure/cancellation poisons the sweep via a mandatory
+settlement witness (written-or-failed), only abort leaves a poisoned
+sweep; (3) single-outstanding target per position, settlement clears it;
+(4) blueprint relabeled as pseudocode delta; (5) manifest repairs +
+run-the-example CI step + missing rejection/state-unchanged oracles;
+(6) checked epoch increment, checked eligibility arithmetic, clone
+compile-fail controls, spare-aliasing escape documented. Round 4 follows.
