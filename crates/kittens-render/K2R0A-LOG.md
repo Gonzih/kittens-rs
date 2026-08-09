@@ -252,3 +252,20 @@ shutdown; the downstream fixture ran on host; and both the profile library and
 that external consumer built for `thumbv7em-none-eabi --release`. No external
 Xtensa, board-HIL, kernel-admission, sealing, or bilateral-seam result is
 claimed by those host/ARM gates.
+
+## Exit review round 5 (2026-08-08)
+
+Full text: `reviews/2026-08-08-exit-review-5-codex.md`. Verdict: **FAIL**;
+batch-7 internals sound, but `FlightStarter::start` is publicly callable
+(sealing restricts implementors, not callers), which also reopens sweep
+accounting; plus two missing privacy/regression fixtures and
+throttle-anchored rejection oracles. Disposition: **all five must-fixes
+accepted**; for item 4 the narrow-and-publish arm is chosen — lost or
+misapplied settlements and abandonment become explicitly published
+escapes, since enforcing settlement delivery would require linear types
+Rust does not have. Batch 8 (delegated): crate-issued unforgeable
+StartPermit parameter on FlightStarter::start with direct-invocation and
+raw-closure compile-fail controls; InFlight struct-literal privacy
+fixture; rejection oracles re-run against an established throttle anchor
+with exact future-eligibility and successor-epoch assertions; claims
+narrowed in SPEC/manifest/log/CHANGELOG.
