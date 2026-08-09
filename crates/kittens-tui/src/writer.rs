@@ -130,12 +130,22 @@ impl FrameWriter {
     /// Propagates the writer thread's panic payload, as `std::thread::join`
     /// does. The writer itself reports I/O failure through
     /// [`WriterEvent::Failed`], not through this result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the private thread-handle invariant is violated. No public
+    /// constructor can create a `FrameWriter` without its thread handle.
     pub fn finish(mut self, handle: WriterHandle) -> thread::Result<()> {
         drop(handle);
-        match self.thread.take() {
-            Some(thread) => thread.join(),
-            None => Ok(()),
-        }
+        // `spawn` is the only constructor, and `finish` consumes `self` before
+        // `Drop` can take the handle. `Option` exists solely to move the handle
+        // out during one of those two teardown paths; an empty live writer is
+        // not a constructible protocol state.
+        let thread = self
+            .thread
+            .take()
+            .expect("FrameWriter owns its thread until finish or drop");
+        thread.join()
     }
 }
 

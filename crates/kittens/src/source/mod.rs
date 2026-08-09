@@ -288,10 +288,9 @@ impl<T, const N: usize> FixedQueue<T, N> {
     /// Returns [`Full`] containing `item` when the fixed capacity is
     /// exhausted (including a zero-capacity source).
     pub fn push(&mut self, item: T) -> Result<(), Full<T>> {
-        if self.len == N {
-            return Err(Full { item });
-        }
-        if N == 0 {
+        // Keep the zero-capacity defense explicit alongside the ordinary full
+        // check so the modulo operation below is unreachable for `N == 0`.
+        if N == 0 || self.len == N {
             return Err(Full { item });
         }
         let tail = (self.head + self.len) % N;

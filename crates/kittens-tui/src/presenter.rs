@@ -37,6 +37,9 @@ pub enum Ack {
 
 /// The frame lane is closed; the payload is returned and the render request
 /// remains pending.
+///
+/// Its `Debug` representation reports the payload length without exposing the
+/// payload bytes themselves.
 pub struct WriterClosed {
     /// The payload that was not submitted.
     pub bytes: Vec<u8>,
@@ -298,6 +301,12 @@ mod tests {
             "an earlier sequence cannot unlock a newer frame"
         );
         assert_eq!(p.in_flight(), Some(second));
+        assert_eq!(
+            p.acknowledge(FrameSeq(second.get() + 1)),
+            Ack::Accepted,
+            "an acknowledgement beyond the target also unlocks the gate"
+        );
+        assert_eq!(p.in_flight(), None);
         writer.finish(handle).expect("writer joins");
     }
 
@@ -376,11 +385,11 @@ mod tests {
     fn commit_on_closed_lane_returns_bytes_and_retains_request() {
         struct FailingSink;
         impl std::io::Write for FailingSink {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("sink rejects every write"))
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
             }
             fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
+                Err(std::io::Error::other("sink rejects every flush"))
             }
         }
 
@@ -408,6 +417,13 @@ mod tests {
             .commit(&handle, b"payload".to_vec())
             .expect_err("lane is closed after the writer failure");
         assert_eq!(error.bytes, b"payload");
+        assert_eq!(error.to_string(), "the frame writer lane is closed");
+        let diagnostic = format!("{error:?}");
+        assert!(diagnostic.contains("bytes_len: 7"));
+        assert!(
+            !diagnostic.contains("payload"),
+            "error diagnostics do not duplicate the returned frame bytes"
+        );
         assert!(p.is_dirty(), "request survives a failed submission");
         assert_eq!(p.in_flight(), None);
         assert!(

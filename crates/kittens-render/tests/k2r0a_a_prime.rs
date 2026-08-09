@@ -195,13 +195,14 @@ impl FlightStarter for ModelStart {
     }
 }
 
-struct RejectStart {
+struct FallibleStart {
     expected: Region,
+    slot: Option<Arc<SharedSlot>>,
     transport: ModelTransport,
     buffer: ModelBuffer,
 }
 
-impl FlightStarter for RejectStart {
+impl FlightStarter for FallibleStart {
     type Transfer = ModelTransfer;
     type Error = (ModelTransport, ModelBuffer);
 
@@ -211,7 +212,10 @@ impl FlightStarter for RejectStart {
         _permit: StartPermit<'_>,
     ) -> Result<Self::Transfer, Self::Error> {
         assert_eq!(region, self.expected, "target supplies the starter region");
-        Err((self.transport, self.buffer))
+        match self.slot {
+            Some(slot) => Ok(start_on(&slot, self.transport, self.buffer, region)),
+            None => Err((self.transport, self.buffer)),
+        }
     }
 }
 
@@ -350,8 +354,9 @@ fn starter_error_returns_target_spare_and_error_for_retry() {
 
     let rejected = target.start_flight(
         ModelSpare("spare-0"),
-        RejectStart {
+        FallibleStart {
             expected,
+            slot: None,
             transport: ModelTransport("qspi"),
             buffer: ModelBuffer("buf-a"),
         },
@@ -377,8 +382,9 @@ fn starter_error_returns_target_spare_and_error_for_retry() {
     let mut flight = target
         .start_flight(
             spare,
-            ModelStart {
-                slot: Arc::clone(&slot),
+            FallibleStart {
+                expected,
+                slot: Some(Arc::clone(&slot)),
                 transport,
                 buffer,
             },
@@ -700,6 +706,67 @@ fn spare_is_writable_during_flight_and_drain_flag_clears() {
         "settled adapter is no longer draining"
     );
     let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    context.settle(settlement);
+}
+
+#[test]
+fn drain_is_idempotent_and_spent_flight_is_terminal() {
+    let slot = Arc::new(SharedSlot::default());
+    let (context, mut flight) = flight_on(&slot);
+    let (cancel_counter, cancel_waker) = counting_waker();
+    let mut cancel_cx = Context::from_waker(&cancel_waker);
+
+    assert!(flight.poll_complete(&mut cancel_cx).is_pending());
+    flight.begin_drain();
+    assert!(flight.is_draining());
+    assert_eq!(
+        cancel_counter.wakes.load(Ordering::SeqCst),
+        1,
+        "the first drain request wakes the registered poller"
+    );
+
+    flight.begin_drain();
+    assert_eq!(
+        cancel_counter.wakes.load(Ordering::SeqCst),
+        1,
+        "an idempotent repeated drain neither re-cancels nor re-wakes"
+    );
+
+    let Poll::Ready(settled) = flight.poll_complete(&mut cancel_cx) else {
+        panic!("the cancelled transfer must settle exactly once")
+    };
+    assert_eq!(settled.outcome(), TransferOutcome::Cancelled);
+    assert!(flight.is_spent());
+    assert!(!flight.is_draining());
+    assert!(
+        flight.spare_mut().is_none(),
+        "resource recovery removes the spare from the spent adapter"
+    );
+
+    let wakes_after_recovery = cancel_counter.wakes.load(Ordering::SeqCst);
+    flight.begin_drain();
+    assert_eq!(
+        cancel_counter.wakes.load(Ordering::SeqCst),
+        wakes_after_recovery,
+        "draining a spent adapter is inert"
+    );
+
+    let (spent_counter, spent_waker) = counting_waker();
+    let mut spent_cx = Context::from_waker(&spent_waker);
+    assert!(
+        flight.poll_complete(&mut spent_cx).is_pending(),
+        "a spent adapter cannot yield the resources a second time"
+    );
+    assert_eq!(spent_counter.wakes.load(Ordering::SeqCst), 0);
+    slot.complete();
+    assert_eq!(
+        spent_counter.wakes.load(Ordering::SeqCst),
+        0,
+        "a spent poll registers no waker for a late completion"
+    );
+
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    assert_eq!(settlement.outcome(), TransferOutcome::Cancelled);
     context.settle(settlement);
 }
 

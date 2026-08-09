@@ -111,12 +111,9 @@ where
         self.receiver.is_none()
     }
 
-    fn close(&mut self) -> Poll<C::Item> {
+    fn close(&mut self) -> Option<C::Item> {
         self.receiver = None;
-        match C::close_event() {
-            Some(event) => Poll::Ready(event),
-            None => Poll::Pending,
-        }
+        C::close_event()
     }
 }
 
@@ -133,7 +130,10 @@ where
         };
         match receiver.poll_recv(cx) {
             Poll::Ready(Some(item)) => Poll::Ready(C::map_item(item)),
-            Poll::Ready(None) => self.close(),
+            // Each sealed policy fixes one outcome statically. `map_or`
+            // expresses that choice without a runtime match whose opposite
+            // arm is impossible for the monomorphized policy.
+            Poll::Ready(None) => self.close().map_or(Poll::Pending, Poll::Ready),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -157,10 +157,7 @@ where
         match receiver.try_recv() {
             Ok(item) => TryNext::Item(C::map_item(item)),
             Err(TryRecvError::Empty) => TryNext::Empty,
-            Err(TryRecvError::Disconnected) => match self.close() {
-                Poll::Ready(event) => TryNext::Item(event),
-                Poll::Pending => TryNext::Dormant,
-            },
+            Err(TryRecvError::Disconnected) => self.close().map_or(TryNext::Dormant, TryNext::Item),
         }
     }
 }
@@ -252,10 +249,8 @@ where
 
     fn close(&mut self) -> Poll<C::Item> {
         self.receiver = None;
-        match C::close_event() {
-            Some(event) => Poll::Ready(event),
-            None => Poll::Pending,
-        }
+        // The sealed policy is a static choice, not adapter runtime state.
+        C::close_event().map_or(Poll::Pending, Poll::Ready)
     }
 }
 

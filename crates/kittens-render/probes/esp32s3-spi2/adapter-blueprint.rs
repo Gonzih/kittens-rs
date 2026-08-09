@@ -1,14 +1,19 @@
-//! **PSEUDOCODE DELTA — NOT COMPILE-READY ADAPTER SOURCE.**
+//! **SUPERSEDED HISTORICAL PSEUDOCODE — NOT IMPLEMENTATION EVIDENCE.**
+//!
+//! The current compile-ready adapter is
+//! `fixtures/render-xtensa-probe/src/adapter.rs`. This retained fragment
+//! predates SPEC revision 8's waker correction and MUST NOT be copied: the
+//! current implementation clones the candidate waker before entering the
+//! global critical section and moves every replaced/unused waker out for drop.
 //!
 //! This file records only the conceptual differences between `VERDICT.md`'s
 //! historical sketch and the landed host contract. It deliberately contains
 //! documentation comments rather than a Rust adapter: there are no imports,
 //! concrete type, `OwnedTransfer` implementation, complete `cancel` or
 //! `recover`, peripheral/DMA setup, or firmware entry point. Treating these
-//! comments as an empty Rust crate would exercise no adapter code; installing
-//! `espup` does not turn them into the missing source. The exact-HAL
-//! compile/link probe remains open and must be supplied as separate real
-//! source against the pinned SHA.
+//! comments as an empty Rust crate would exercise no adapter code. At the time
+//! of this record the exact-HAL compile/link probe remained open; it was later
+//! closed with scope by the separate real fixture against the pinned SHA.
 //!
 //! The interrupt/waker-slot mechanics remain those described in
 //! `VERDICT.md`; in particular, cancellation stores its settlement at the
@@ -69,6 +74,7 @@
 //!     else { Poll::Pending }
 //! }
 //!
-//! A future real adapter's `cancel()` and ISR follow `VERDICT.md`; its
-//! complete `recover()` must call the HAL's consuming `wait()` (no busy
-//! iterations after settlement), return all resources, and disarm the slot.
+//! The superseding real adapter's `cancel()` and ISR follow the reviewed
+//! lifecycle; its complete `recover()` calls the HAL's consuming `wait()` (no
+//! busy iterations after settlement), returns all resources, and disarms the
+//! slot.

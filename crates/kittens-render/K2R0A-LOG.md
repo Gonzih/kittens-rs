@@ -26,9 +26,10 @@ board's SH8601 path is TX-only, so that seal is acceptable and recorded.
 
 The generic `InFlight<X, S>` carrier implements `Unpin` exactly when
 `X: OwnedTransfer + Unpin` and `S: Unpin` (no bound on `X::Transport` or
-`X::Buffer`). The host-model types meet those bounds; the same assertions
-for the concrete Xtensa wrapper and buffers remain part of the target
-compile gate below.
+`X::Buffer`). The host-model types meet those bounds; the post-revision-8
+Xtensa artifact recorded below compiles the concrete wrapper and its
+`InFlight<_, DmaTxBuf>` carrier with those assertions and the corrected waker
+boundary.
 
 ## Reviewer corrections applied (2026-08-08)
 
@@ -42,12 +43,15 @@ open (below); (5) recovery is the sole outcome authority, `poll_done` is
 as abstract-boundary-only — the esp-hal adapter never produces it; (8)
 waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 
-## Open before spec amendment / freeze
+## Gate status before spec amendment / freeze
 
-1. **Xtensa compile probe** (`probes/esp32s3-spi2/`): linked firmware for
-   `xtensa-esp32s3-none-elf` per the verdict's checklist (real SPI2 + DMA
-   channel + two `DmaTxBuf`s, monomorphized `half_duplex_write`, `Unpin`
-   assertions, second-transfer reuse) — gated on espup approval.
+1. **Xtensa compile probe — CLOSED WITH SCOPE (2026-08-09)**: the
+   post-revision-8 `fixtures/render-xtensa-probe` artifact linked for
+   `xtensa-esp32s3-none-elf` with real SPI2 + GDMA_CH0 + two `DmaTxBuf`s, the
+   monomorphized SH8601 `half_duplex_write`, concrete `Unpin` assertions, and
+   second-transfer reuse. It includes revision 8's corrected source waker
+   boundary. The link closes feasibility only; item 2 remains the silicon
+   gate.
 2. **Board HIL**: silicon interrupt delivery (pending → one wake → ready;
    completion-before-first-poll level visibility; cancel-and-drain returns
    transport + sent buffer + spare).
@@ -57,11 +61,13 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 4. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
-## Toolchain gate
+## Toolchain status
 
 ESP32-S3 is Xtensa LX7: target probes need the Espressif Rust toolchain
-(`espup`). Until approved and installed, host-model + `thumbv7em-none-eabi`
-portability checks stand in; no HAL-fidelity claim is made from them.
+(`espup`). The `esp` toolchain is installed and the post-revision-8 target
+probe linked on 2026-08-09. This removes the basic toolchain/compile-link
+feasibility blocker; it does not supply the board-HIL observations in open
+item 2.
 
 ## Exit review round 1 (2026-08-08)
 
@@ -342,8 +348,90 @@ explicit drop-the-old-Sweep guidance on `abandon_active` plus the SPEC
 section-10 clarification that the seam gates full K2R-0 acceptance, not
 this host slice. Loop exit condition met: the codebase is done for the
 host slice, the reviewer passed it, and the author agrees with every
-outstanding proposal. Open beyond this slice, unchanged and honestly
-labeled: pixel equivalence (draw-target slice), bilateral seam co-sign,
-Xtensa probe (espup gate), board HIL (hardware in transit), kernel
-source admission, capability sealing at freeze, and the write_region
-transport gate.
+outstanding proposal. At that point in the chronology, the open work was:
+pixel equivalence (draw-target slice), bilateral seam co-sign, Xtensa probe
+(espup gate), board HIL (hardware in transit), kernel source admission,
+capability sealing at freeze, and the `write_region` transport gate.
+
+## Post-round-6 draw-target integration slice (2026-08-09)
+
+SPEC revision 7 adds the default-off `embedded-graphics` integration without
+changing the passed K2R-0 host protocol surface. Its canonical
+`Rgb565StripeDrawTarget` derives the full panel and outstanding stripe from
+the owning `Sweep`, borrows an exact caller byte buffer, preserves global
+full-panel layout bounds, clips and translates writes into the stripe, and
+packs raw RGB565 high byte then low byte. Feature-off keeps an empty normal
+dependency graph; feature-on remains `no_std` and no-alloc. The caller still
+repaints the background and complete ordered scene from the epoch snapshot
+for every stripe.
+
+The manifest's host pixel-equivalence row is closed by
+`full_frame_and_witnessed_stripe_sweep_are_pixel_equivalent`,
+`mid_sweep_scene_change_is_rendered_only_by_next_epoch`, and
+`post_failure_full_repaint_restores_pixel_equivalence`. The stripe side uses
+the real target/start/poll/recover/settle/written witness chain; the reference
+side uses an independent full-frame embedded-graphics framebuffer. A broken
+stripe-local `Dimensions` wrapper is the explicit sensitivity control.
+
+Package and workspace all-feature tests, untouched trybuild suites, fmt,
+clippy with warnings denied, workspace rustdoc with warnings denied, Rust 1.85
+feature-off/on checks, the empty feature-off dependency-tree assertion, both
+feature-off and feature-on `thumbv7em-none-eabi` builds, and the downstream
+render/kernel no-std fixtures passed. This closes only host-model pixel
+equivalence. At this point in the chronology, the exact `write_region`
+adapter, Xtensa probe, physical
+RGB565/channel/byte fidelity, board HIL, kernel source admission, bilateral
+seam, and capability sealing remain unchanged gates.
+
+## Xtensa compile/link probe (2026-08-09)
+
+**Fact — post-revision-8 build evidence (verbatim):**
+
+Run from `fixtures/render-xtensa-probe` in a network-enabled terminal,
+2026-08-09:
+
+> '. /Users/feral/export-esp.sh && cargo +esp build --release --target xtensa-esp32s3-none-elf' → 'Finished release profile [optimized] target(s) in 1.48s' (incremental over the pinned deps), exit 0. Artifact: target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe, 204292 bytes, 'ELF 32-bit LSB executable, Tensilica Xtensa, version 1 (SYSV), statically linked, not stripped'.
+
+**Fact:** `fixtures/render-xtensa-probe` is a standalone crate with an empty
+`[workspace]`. It pins `esp-hal` rev
+`d48f747ba28accdc51779ba193eba923138e0382`, disables default features, enables
+`esp32s3`, `rt`, and `unstable`, and depends on `critical-section` 1 plus the
+local `kittens-render` path without default features. Its adapter module
+forbids unsafe code; the firmware is `no_std`/`no_main`, supplies the esp-hal
+entry point and panic handler, and defines no allocator.
+
+**Fact:** the fixture source owns real SPI2, GDMA_CH0, SIO0–3 GPIO4–7, SCK
+GPIO11, CS GPIO12, static descriptors, and two `DmaTxBuf`s. It starts the
+SH8601 TX-only quad-data write using `Command::_8Bit(0x32, DataMode::Single)`,
+`Address::_24Bit(0x2c << 8, DataMode::Single)`, and zero dummy cycles. The
+concrete adapter implements the current `OwnedTransfer` contract:
+`poll_done -> Poll<()>`, register-then-recheck, cancellation linearization and
+wake, candidate-waker clone before the global critical section with every
+replaced/unused waker dropped after exclusion, consuming recovery as sole
+outcome authority, `wait()` recovery, and
+synchronous cancel/wait/disarm drop cleanup. The firmware compiles a second
+transfer using the recovered driver, statically asserts the concrete wrapper
+and `InFlight` carrier are `Unpin`, identity-checks the outer spare, and
+observes every returned resource on start rejection instead of suppressing
+dead-code warnings.
+
+**Observation:** the post-revision-8 linked firmware preserves the scoped HAL
+API, vector-binding, language, ownership, no-allocation, and no-self-reference
+feasibility result with the corrected software waker boundary. It is not
+evidence of behavior on silicon.
+
+**Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
+visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
+
+**Gap: the kernel-admitted completion source and real `kittens::reactor!`
+fixture remain a separate open gate (no data exists).**
+
+**Gap: the blocking `write_region` exact-stack integration remains open; this
+probe compiles the raw SH8601 pixel phase, not a complete display-driver
+transaction (no data exists).**
+
+## Publication mechanics evidence (2026-08-09)
+
+**Fact — crates.io dry-run evidence (verbatim):**
+
+> 'cargo publish -p kittens-render --dry-run --allow-dirty' from the workspace root succeeded — 'Packaged 103 files, 436.0KiB (122.1KiB compressed)', packaged crate verified/compiled, upload reached and aborted only by the dry-run flag.

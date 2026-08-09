@@ -13,8 +13,8 @@
 //!
 //! The five components:
 //!
-//! - [`TerminalSession`]: raw mode + optional alternate screen, restored on
-//!   drop including unwind (RAII).
+//! - [`TerminalSession`]: raw mode + optional alternate screen, with ordered
+//!   best-effort restoration attempts on drop including unwind (RAII).
 //! - [`InputReader`]: an owned reader thread with bounded polls and a
 //!   pause/park handshake; its reactor edge is an admitted
 //!   [`kittens::source::Mpsc`] whose typed `Closed` event means "the reader

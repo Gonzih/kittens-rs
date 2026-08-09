@@ -347,6 +347,25 @@ impl<S> Sweep<S> {
         self.plan.region_at(self.next)
     }
 
+    /// Admits the optional draw target only for this sweep's one outstanding
+    /// target and returns the private full-panel/stripe pair it must use.
+    ///
+    /// **Why this lives at the sweep boundary:** accepting caller-supplied
+    /// panel bounds would let a stripe-local rectangle change centering and
+    /// layout semantics. The private plan is the authority instead.
+    #[cfg(feature = "embedded-graphics")]
+    pub(crate) fn draw_target_regions(&self, target: &StripeTarget) -> Option<(Region, Region)> {
+        if self.state == SweepState::Outstanding
+            && target.demand_id == self.demand_id
+            && target.epoch == self.epoch
+            && Some(target.region) == self.next_region()
+        {
+            Some((self.plan.panel, target.region))
+        } else {
+            None
+        }
+    }
+
     /// Mints the one unforgeable target for the current planned stripe.
     /// While it is outstanding, or after any failed/cancelled settlement has
     /// poisoned the sweep, another mint returns `None` without mutation.
@@ -467,6 +486,8 @@ impl<S> Sweep<S> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     const PANEL: Region = Region {
@@ -511,9 +532,15 @@ mod tests {
 
     fn assert_rejected_unchanged(sweep: &mut Sweep<()>, settlement: StripeSettlement) {
         let before = private_state(sweep);
+        let debug_before = std::format!("{sweep:?}");
         let expected = sweep.next_region();
         assert_eq!(sweep.settle(settlement), Err(WrongStripe { expected }));
         assert_eq!(private_state(sweep), before);
+        assert_eq!(
+            std::format!("{sweep:?}"),
+            debug_before,
+            "rejection leaves the sweep's observable debug state unchanged"
+        );
     }
 
     #[test]

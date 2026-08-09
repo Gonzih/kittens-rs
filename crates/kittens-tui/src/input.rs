@@ -8,6 +8,8 @@
 //! [`kittens::source::Mpsc`]. The unbounded channel is deliberate: a
 //! synchronous reader thread cannot await capacity.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +17,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kittens::source::{Mpsc, close};
+
+#[cfg(not(test))]
+mod production;
+#[cfg(not(test))]
+use production::poller_for_reader;
 
 /// One timestamped terminal event.
 #[derive(Debug)]
@@ -32,24 +39,43 @@ pub struct InputEvent {
 /// long-lived harness it is usually fatal.
 pub type InputSource = Mpsc<InputEvent, close::Emit>;
 
-/// Seam between the reader loop and the terminal backend, so the handshake
-/// is deterministically testable without a tty. The crossterm
-/// implementation is kept thin.
-trait EventPoller: Send {
-    fn poll(&mut self, timeout: Duration) -> io::Result<bool>;
-    fn read(&mut self) -> io::Result<crossterm::event::Event>;
+type PollOperation = dyn FnMut(Duration) -> io::Result<bool> + Send;
+type ReadOperation = dyn FnMut() -> io::Result<crossterm::event::Event> + Send;
+
+/// Function-backed seam between the owned loop and terminal event I/O. The
+/// production constructor stores crossterm's functions directly; deterministic
+/// tests replace the operations without adding a second implementation whose
+/// behavior could drift.
+struct EventPoller {
+    poll: Box<PollOperation>,
+    read: Box<ReadOperation>,
 }
 
-struct CrosstermPoller;
-
-impl EventPoller for CrosstermPoller {
+impl EventPoller {
     fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
-        crossterm::event::poll(timeout)
+        (self.poll)(timeout)
     }
 
     fn read(&mut self) -> io::Result<crossterm::event::Event> {
-        crossterm::event::read()
+        (self.read)()
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// One-shot private override used by no-tty constructor oracles. It is
+    /// compiled only for unit tests; the owned reader loop is shared with
+    /// production and only the final live-crossterm binding is replaced.
+    static POLLER_OVERRIDE: RefCell<Option<EventPoller>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn poller_for_reader() -> EventPoller {
+    POLLER_OVERRIDE.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .expect("input tests install one poller before public spawn")
+    })
 }
 
 #[derive(Default)]
@@ -93,13 +119,10 @@ impl InputReader {
     /// Currently infallible in practice; the `io::Result` is the stable
     /// signature for backends whose setup can fail.
     pub fn spawn(poll_interval: Duration) -> io::Result<(Self, InputSource)> {
-        Ok(Self::spawn_with(CrosstermPoller, poll_interval))
+        Ok(Self::spawn_with(poller_for_reader(), poll_interval))
     }
 
-    fn spawn_with<P: EventPoller + 'static>(
-        mut poller: P,
-        poll_interval: Duration,
-    ) -> (Self, InputSource) {
+    fn spawn_with(mut poller: EventPoller, poll_interval: Duration) -> (Self, InputSource) {
         let flags = Arc::new(Flags::default());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<InputEvent>();
         let thread_flags = Arc::clone(&flags);
@@ -177,29 +200,146 @@ impl InputReader {
 impl Drop for InputReader {
     fn drop(&mut self) {
         self.flags.shutdown.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        // `spawn_with` is the only constructor and `Drop` is the only path
+        // that moves this handle. The `Option` enables that move; an empty live
+        // reader is not a constructible handshake state.
+        let thread = self
+            .thread
+            .take()
+            .expect("InputReader owns its thread until drop");
+        let _ = thread.join();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::collections::VecDeque;
+    use std::sync::{Mutex, mpsc as std_mpsc};
 
-    /// Scripted poller: yields each event once, then reports no events.
-    struct ScriptedPoller {
-        events: Mutex<Vec<crossterm::event::Event>>,
+    const TEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+    enum PollStep {
+        Ready,
+        Idle,
+        Error,
+        GatedReady {
+            entered: std_mpsc::SyncSender<()>,
+            release: std_mpsc::Receiver<()>,
+        },
     }
 
-    impl EventPoller for ScriptedPoller {
-        fn poll(&mut self, _timeout: Duration) -> io::Result<bool> {
-            Ok(!self.events.lock().expect("test lock").is_empty())
-        }
+    enum ReadStep {
+        Event(crossterm::event::Event),
+        Error,
+    }
 
-        fn read(&mut self) -> io::Result<crossterm::event::Event> {
-            Ok(self.events.lock().expect("test lock").remove(0))
+    struct ScriptState {
+        poll_steps: VecDeque<PollStep>,
+        read_steps: VecDeque<ReadStep>,
+        timeouts: Vec<Duration>,
+        reads: usize,
+    }
+
+    fn scripted_poller(
+        poll_steps: Vec<PollStep>,
+        read_steps: Vec<ReadStep>,
+    ) -> (EventPoller, Arc<Mutex<ScriptState>>) {
+        let state = Arc::new(Mutex::new(ScriptState {
+            poll_steps: poll_steps.into(),
+            read_steps: read_steps.into(),
+            timeouts: Vec::new(),
+            reads: 0,
+        }));
+        let poll_state = Arc::clone(&state);
+        let read_state = Arc::clone(&state);
+
+        let poll = move |timeout| {
+            let step = {
+                let mut state = poll_state.lock().expect("script lock");
+                state.timeouts.push(timeout);
+                state.poll_steps.pop_front().unwrap_or(PollStep::Idle)
+            };
+            match step {
+                PollStep::Ready => Ok(true),
+                PollStep::Idle => {
+                    thread::sleep(timeout);
+                    Ok(false)
+                }
+                PollStep::Error => Err(io::Error::other("scripted poll failure")),
+                PollStep::GatedReady { entered, release } => {
+                    entered.send(()).expect("test still waits for poll entry");
+                    release
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("test releases the poller before the deadline");
+                    Ok(true)
+                }
+            }
+        };
+        let read = move || {
+            let step = {
+                let mut state = read_state.lock().expect("script lock");
+                state.reads += 1;
+                state
+                    .read_steps
+                    .pop_front()
+                    .expect("every ready poll has a scripted read")
+            };
+            match step {
+                ReadStep::Event(event) => Ok(event),
+                ReadStep::Error => Err(io::Error::other("scripted read failure")),
+            }
+        };
+
+        (
+            EventPoller {
+                poll: Box::new(poll),
+                read: Box::new(read),
+            },
+            state,
+        )
+    }
+
+    fn install_poller(poller: EventPoller) {
+        POLLER_OVERRIDE.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            assert!(slot.is_none(), "test poller override is one-shot");
+            *slot = Some(poller);
+        });
+    }
+
+    fn wait_for_parked_after(
+        reader: &InputReader,
+        expected: bool,
+        release: Option<&std_mpsc::SyncSender<()>>,
+    ) {
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        let mut release = release;
+        loop {
+            if reader.is_parked() == expected {
+                return;
+            }
+            if let Some(release) = release.take() {
+                release
+                    .send(())
+                    .expect("reader still waits for the gated poll");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reader did not publish parked={expected} before the deadline"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    struct ReaderExitProbe {
+        reads: Arc<std::sync::atomic::AtomicUsize>,
+        exited: std_mpsc::SyncSender<()>,
+    }
+
+    impl Drop for ReaderExitProbe {
+        fn drop(&mut self) {
+            let _ = self.exited.send(());
         }
     }
 
@@ -210,55 +350,173 @@ mod tests {
         ))
     }
 
+    fn is_closed(event: &kittens::source::ChannelEvent<InputEvent>) -> bool {
+        match event {
+            kittens::source::ChannelEvent::Item(_) => false,
+            kittens::source::ChannelEvent::Closed => true,
+        }
+    }
+
     #[tokio::test]
     async fn events_are_forwarded_and_close_is_typed() {
         use kittens::source::{ChannelEvent, ReactorSource};
 
-        let poller = ScriptedPoller {
-            events: Mutex::new(vec![key('a'), key('b')]),
-        };
+        let before_spawn = Instant::now();
+        let (poller, _state) = scripted_poller(
+            vec![PollStep::Ready, PollStep::Ready],
+            vec![ReadStep::Event(key('a')), ReadStep::Event(key('b'))],
+        );
         let (reader, mut source) = InputReader::spawn_with(poller, Duration::from_millis(1));
 
         let mut received = Vec::new();
-        while received.len() < 2 {
+        let mut reader = Some(reader);
+        loop {
             let event = core::future::poll_fn(|cx| source.poll_next(cx)).await;
-            if let ChannelEvent::Item(item) = event {
-                if let crossterm::event::Event::Key(k) = item.event {
-                    received.push(k.code);
+            let closed = is_closed(&event);
+            match event {
+                ChannelEvent::Item(item) => {
+                    assert!(!closed, "an item is not the typed close event");
+                    received.push(item);
+                    if received.len() == 2 {
+                        // Drop signals shutdown and joins; polling once more
+                        // must yield the reader's typed close event.
+                        drop(reader.take());
+                    }
+                }
+                ChannelEvent::Closed => {
+                    assert!(closed, "reader exit is represented by typed close");
+                    break;
                 }
             }
         }
         assert_eq!(
-            received,
-            vec![
-                crossterm::event::KeyCode::Char('a'),
-                crossterm::event::KeyCode::Char('b')
-            ]
+            received.iter().map(|item| &item.event).collect::<Vec<_>>(),
+            vec![&key('a'), &key('b')]
         );
-
-        // Drop signals shutdown and joins; the source then yields Closed.
-        drop(reader);
-        let event = core::future::poll_fn(|cx| source.poll_next(cx)).await;
-        assert!(matches!(event, ChannelEvent::Closed));
+        assert!(received.iter().all(|item| item.at >= before_spawn));
+        assert!(
+            received.windows(2).all(|pair| pair[0].at <= pair[1].at),
+            "events retain reader observation order"
+        );
         assert!(source.is_dormant(), "closed input source is dormant");
     }
 
     #[test]
     fn pause_parks_and_resume_unparks() {
-        let poller = ScriptedPoller {
-            events: Mutex::new(Vec::new()),
-        };
+        let (entered_tx, entered_rx) = std_mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std_mpsc::sync_channel(1);
+        let (poller, _state) = scripted_poller(
+            vec![PollStep::GatedReady {
+                entered: entered_tx,
+                release: release_rx,
+            }],
+            vec![ReadStep::Event(key('p'))],
+        );
         let (reader, _source) = InputReader::spawn_with(poller, Duration::from_millis(1));
+        entered_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("reader enters its bounded poll");
+        assert!(
+            format!("{reader:?}").contains("paused: false"),
+            "Debug is a nonblocking snapshot of the handoff flags"
+        );
 
         reader.pause();
-        while !reader.is_parked() {
-            thread::sleep(Duration::from_millis(1));
-        }
+        assert!(
+            !reader.is_parked(),
+            "a pause request is not a park acknowledgement"
+        );
+        let requested = format!("{reader:?}");
+        assert!(requested.contains("paused: true"));
+        assert!(requested.contains("parked: false"));
+
+        wait_for_parked_after(&reader, true, Some(&release_tx));
+        let parked = format!("{reader:?}");
+        assert!(parked.contains("paused: true"));
+        assert!(parked.contains("parked: true"));
 
         reader.resume();
-        while reader.is_parked() {
-            thread::sleep(Duration::from_millis(1));
-        }
-        // Drop joins within a bounded number of poll intervals.
+        wait_for_parked_after(&reader, false, None);
+        let flags = Arc::clone(&reader.flags);
+        drop(reader);
+        assert!(
+            format!("{flags:?}").contains("shutdown: true"),
+            "Drop publishes shutdown before joining the reader"
+        );
+    }
+
+    #[tokio::test]
+    async fn public_spawn_forwards_poll_error_as_typed_close() {
+        use kittens::source::ReactorSource;
+
+        let interval = Duration::from_millis(7);
+        let (poller, state) = scripted_poller(vec![PollStep::Error], Vec::new());
+        install_poller(poller);
+        let (reader, mut source) =
+            InputReader::spawn(interval).expect("reader setup is infallible");
+
+        let event = core::future::poll_fn(|cx| source.poll_next(cx)).await;
+        assert!(is_closed(&event));
+        assert!(source.is_dormant());
+        let state = state.lock().expect("script lock");
+        assert_eq!(state.timeouts, vec![interval], "poll interval is forwarded");
+        assert_eq!(state.reads, 0, "a failed poll never attempts a read");
+        drop(state);
+        drop(reader);
+    }
+
+    #[tokio::test]
+    async fn read_error_exits_with_typed_close() {
+        use kittens::source::ReactorSource;
+
+        let (poller, state) = scripted_poller(vec![PollStep::Ready], vec![ReadStep::Error]);
+        let (reader, mut source) = InputReader::spawn_with(poller, Duration::from_millis(1));
+
+        let event = core::future::poll_fn(|cx| source.poll_next(cx)).await;
+        assert!(is_closed(&event));
+        assert!(source.is_dormant());
+        assert_eq!(state.lock().expect("script lock").reads, 1);
+        drop(reader);
+    }
+
+    #[test]
+    fn dropping_source_stops_the_reader_when_delivery_is_rejected() {
+        let (entered_tx, entered_rx) = std_mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std_mpsc::sync_channel(1);
+        let (exited_tx, exited_rx) = std_mpsc::sync_channel(1);
+        let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let probe = ReaderExitProbe {
+            reads: Arc::clone(&reads),
+            exited: exited_tx,
+        };
+        let poller = EventPoller {
+            poll: Box::new(move |_| {
+                entered_tx.send(()).expect("test waits for poll entry");
+                release_rx
+                    .recv_timeout(TEST_TIMEOUT)
+                    .expect("test releases the poller before the deadline");
+                Ok(true)
+            }),
+            read: Box::new(move || {
+                probe.reads.fetch_add(1, Ordering::SeqCst);
+                Ok(key('x'))
+            }),
+        };
+        let (reader, source) = InputReader::spawn_with(poller, Duration::from_millis(1));
+
+        entered_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("reader entered its bounded poll");
+        drop(source);
+        release_tx.send(()).expect("release the scripted event");
+        exited_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("receiver rejection terminates the reader");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "the rejected delivery terminates immediately after one read"
+        );
+        drop(reader);
     }
 }

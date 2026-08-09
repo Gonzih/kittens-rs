@@ -16,10 +16,14 @@ use kittens_tui::{FrameWriter, Presenter, RenderRequest, WriterEvent};
 struct SharedSink {
     bytes: Arc<Mutex<Vec<u8>>>,
     flushes: Arc<Mutex<usize>>,
+    fail_writes: bool,
 }
 
 impl Write for SharedSink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.fail_writes {
+            return Err(io::Error::other("terminal went away"));
+        }
         self.bytes.lock().expect("sink lock").extend_from_slice(buf);
         Ok(buf.len())
     }
@@ -59,6 +63,10 @@ async fn frames_write_in_order_and_each_is_acknowledged() {
     assert!(
         committed.windows(2).all(|w| w[0] < w[1]),
         "sequences are strictly monotonic"
+    );
+    assert!(
+        committed.windows(2).all(|w| w[0].get() < w[1].get()),
+        "raw sequence values preserve the documented monotonic ordering"
     );
     writer.finish(handle).expect("writer joins");
     assert_eq!(
@@ -123,18 +131,71 @@ async fn accepted_frames_drain_when_the_lane_closes() {
 }
 
 #[tokio::test]
-async fn write_failure_is_one_typed_event_then_exit() {
-    struct FailingSink;
-    impl Write for FailingSink {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(io::Error::other("terminal went away"))
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
+async fn cancelling_the_event_consumer_does_not_discard_accepted_output() {
+    let sink = SharedSink::default();
+    let (writer, handle, events) = FrameWriter::spawn(sink.clone());
+    let mut presenter = Presenter::new(Duration::ZERO);
+
+    // A reactor may disappear before the owned writer does. Its event lane is
+    // then closed, but the accepted-frame drain obligation still controls.
+    drop(events);
+    presenter.request(RenderRequest::Dirty);
+    presenter
+        .try_begin(Instant::now())
+        .expect("gate open")
+        .commit(&handle, b"survives-cancel".to_vec())
+        .expect("frame lane remains open");
+    writer.finish(handle).expect("writer drains then joins");
+
+    assert_eq!(
+        sink.bytes.lock().expect("sink lock").as_slice(),
+        b"survives-cancel",
+        "event-consumer cancellation cannot discard accepted bytes"
+    );
+    assert_eq!(
+        *sink.flushes.lock().expect("sink lock"),
+        1,
+        "the unacknowledgeable frame is still flushed"
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_live_writer_owner_detaches_until_the_handle_closes() {
+    let sink = SharedSink::default();
+    let (writer, handle, mut events) = FrameWriter::spawn(sink.clone());
+    let mut presenter = Presenter::new(Duration::ZERO);
+
+    // This is the documented non-canonical teardown path: dropping the owner
+    // must not cancel a thread that still has a live submission lane.
+    drop(writer);
+    presenter.request(RenderRequest::Dirty);
+    let seq = presenter
+        .try_begin(Instant::now())
+        .expect("gate open")
+        .commit(&handle, b"after-owner-drop".to_vec())
+        .expect("detached writer still accepts frames");
+    match core::future::poll_fn(|cx| events.poll_next(cx)).await {
+        ChannelEvent::Item(WriterEvent::Written(written)) => assert_eq!(written, seq),
+        other => panic!("expected the detached writer acknowledgement, got {other:?}"),
     }
 
-    let (writer, handle, mut events) = FrameWriter::spawn(FailingSink);
+    drop(handle);
+    let closed = core::future::poll_fn(|cx| events.poll_next(cx)).await;
+    assert!(matches!(closed, ChannelEvent::Closed));
+    assert_eq!(
+        sink.bytes.lock().expect("sink lock").as_slice(),
+        b"after-owner-drop",
+        "the live detached writer drains before self-termination"
+    );
+}
+
+#[tokio::test]
+async fn write_failure_is_one_typed_event_then_exit() {
+    let sink = SharedSink {
+        fail_writes: true,
+        ..SharedSink::default()
+    };
+    let (writer, handle, mut events) = FrameWriter::spawn(sink);
     let mut presenter = Presenter::new(Duration::ZERO);
     presenter.request(RenderRequest::Dirty);
     let seq = presenter

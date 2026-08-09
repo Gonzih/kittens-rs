@@ -2,10 +2,18 @@
 
 ## Unreleased
 
-- Add `kittens-render` (unpublished K2R-0 host slice): the embedded
-  rendering/interaction profile anchored on the Waveshare ESP32-S3 1.8"
-  AMOLED V1 — spec-first with five external exit-review rounds adopted in
-  full; witness-driven transfer→sweep→demand composition (under sealed
+- Add the default-off `kittens-render/embedded-graphics` integration: a
+  no-alloc, global-coordinate RGB565 target over an exact caller-owned stripe
+  byte buffer, with full-panel layout bounds, clipping/translation, and the
+  anchor driver's high-byte-first host encoding. Three independent full-frame
+  versus real-witness-chain host oracles cover ordinary reconstruction,
+  mid-sweep next-epoch scene changes, and post-failure full repaint. The
+  feature-off core keeps an empty normal-dependency graph, feature-on remains
+  `no_std`, and physical display color/format fidelity remains board-HIL.
+- Prepare `kittens-render` as an experimental 0.1.x K2R-0 evidence release:
+  the embedded rendering/interaction profile anchored on the Waveshare
+  ESP32-S3 1.8" AMOLED V1 — spec-first with seven external exit-review rounds
+  adopted in full; witness-driven transfer→sweep→demand composition (under sealed
   integrations and cooperative owning-sweep delivery, coverage cannot be
   caller-claimed and is constructed only from matching completed settlements;
   dropped/misapplied settlements and abandonment are published escapes);
@@ -14,7 +22,17 @@
   verdict (SPI2 TransferDone ISR completion in a carrier that is `Unpin`
   exactly when its owned transfer and spare are both `Unpin`); the historical
   verdict and its explicitly non-compile-ready pseudocode delta are retained
-  under probes/, while a real exact-HAL adapter remains behind the Xtensa gate.
+  under `probes/` as a superseded historical record. The real pinned-SHA
+  Xtensa firmware fixture closes compile/link feasibility with scope; board
+  HIL and silicon delivery, kernel admission, the bilateral seam,
+  `write_region`, and pre-freeze capability sealing remain open. Publication
+  of the 0.1.x evidence release is not that freeze.
+- Make the workspace coverage gate honest and durable: deterministic TUI
+  oracles no longer construct and discard live crossterm bindings merely to
+  mark lines covered; the two process-terminal binding files are explicit,
+  documented exclusions, while CI enforces 100% lines and functions for every
+  included source file and treats compiler-synthesized regions as
+  informational.
 - Complete the `kittens-render` exit-review Batch 5 evidence: add the
   runnable `host_sweep` lifecycle, trybuild proof-forgery failures with
   compiling escape-surface controls, and a separate downstream `no_std`

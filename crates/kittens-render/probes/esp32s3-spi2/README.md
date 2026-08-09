@@ -1,15 +1,21 @@
-# esp32s3-spi2 probe record (Xtensa-gated; no compile-ready adapter yet)
+# SUPERSEDED: historical esp32s3-spi2 probe record
+
+> **SUPERSEDED.** This directory retains the pre-implementation engineering
+> verdict and pseudocode for audit history. The current compile-ready adapter
+> and linked-firmware source live in
+> [`fixtures/render-xtensa-probe`](https://github.com/Gonzih/kittens-rs/tree/main/fixtures/render-xtensa-probe).
+> Nothing in this directory is current implementation evidence or guidance.
 
 The HAL-fidelity verdict and its historical adapter blueprint live in
 [VERDICT.md](VERDICT.md) (external engineering contribution, Codex
 gpt-5.6-sol ultra, 2026-08-08): a profile-owned SPI2 TransferDone ISR +
 critical-section waker slot implements the OwnedTransfer boundary on
 esp-hal v1.1.0 (`d48f747`), stable Rust, no alloc, no unsafe self-reference,
-no upstream changes. Turning that verdict into a real linked firmware for
-`xtensa-esp32s3-none-elf` still requires both source that does not yet exist in
-this probe directory and the espup toolchain (user approval pending); that
-would close the language/API half, while a small board HIL closes the
-silicon-interrupt half.
+no upstream changes. At the time of this record, turning that verdict into a
+real linked firmware for `xtensa-esp32s3-none-elf` still required source and
+the espup toolchain. That work subsequently landed in the fixture linked
+above, closing the language/API/ownership compile-link question with scope;
+board HIL still gates the silicon-interrupt half.
 
 ## Pseudocode delta over the retained verdict
 
@@ -23,9 +29,9 @@ with the target's exact region and a crate-issued `StartPermit<'_>`, and
 `StripeSettlement::{Written, Unwritten}`. The cooperative caller path delivers
 that witness to its owning `Sweep::settle`; Rust cannot force delivery or
 prevent a consuming wrong-owner rejection. The
-verdict text is retained unedited as the historical record; any future exact
-Xtensa probe must implement the corrected signatures and lifecycle. Pairing
-is structural under integrations reviewed and sealed at freeze; while both
+verdict text is retained unedited as the historical record; the subsequently
+landed exact Xtensa probe implements the corrected signatures and lifecycle.
+Pairing is structural under integrations reviewed and sealed at freeze; while both
 capability traits remain open for the experiment, region honesty and
 acceptance-atomic rejection remain explicit integration obligations:
 
@@ -48,7 +54,6 @@ adversarial oracle (`cancel_then_late_completion_stays_cancelled`).
 adapter source file**. It is a documentation-comment pseudocode delta over
 `VERDICT.md`: it has no imports, concrete adapter type,
 `OwnedTransfer`/`FlightStarter` implementations, complete `cancel`/`recover`,
-hardware setup, or firmware entry point. Compiling it as an empty Rust crate would exercise no
-adapter code; installing the Xtensa toolchain does not turn it into the missing
-source. A real, compile-ready adapter and linked firmware against the pinned
-esp-hal SHA remain an open Xtensa gate.
+hardware setup, or firmware entry point. Compiling it as an empty Rust crate
+would exercise no adapter code. The real pinned-SHA fixture linked above is the
+only compile/link evidence; this directory remains historical pseudocode.

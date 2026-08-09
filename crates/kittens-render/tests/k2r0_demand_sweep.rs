@@ -206,6 +206,7 @@ impl Drop for ModelTransfer {
 /// returns its move-only settlement witness for cooperative owner delivery.
 fn transfer_target(target: StripeTarget, outcome: TransferOutcome) -> StripeSettlement {
     let expected_region = target.region();
+    let expected_epoch = target.epoch();
     let hw = Arc::new(Hw {
         done: Mutex::new(false),
         fail: Mutex::new(false),
@@ -219,29 +220,63 @@ fn transfer_target(target: StripeTarget, outcome: TransferOutcome) -> StripeSett
             },
         )
         .expect("infallible model start");
+    let waker = Waker::noop().clone();
+    let mut cx = Context::from_waker(&waker);
+    assert!(
+        flight.poll_complete(&mut cx).is_pending(),
+        "a transfer cannot settle before completion or cancellation"
+    );
     match outcome {
         TransferOutcome::Completed => *hw.done.lock().expect("hw") = true,
         TransferOutcome::Failed => {
             *hw.done.lock().expect("hw") = true;
             *hw.fail.lock().expect("hw") = true;
         }
-        TransferOutcome::Cancelled => flight.begin_drain(),
+        TransferOutcome::Cancelled => {
+            flight.begin_drain();
+            flight.begin_drain();
+        }
     }
-    let waker = Waker::noop().clone();
-    let mut cx = Context::from_waker(&waker);
     let settled = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => settled,
         Poll::Pending => panic!("model settles immediately"),
     };
+    flight.begin_drain();
+    assert!(
+        flight.poll_complete(&mut cx).is_pending(),
+        "draining a recovered flight cannot yield its resources or settlement twice"
+    );
     assert_eq!(settled.region(), expected_region);
     let ((), (), (), settlement) = settled.into_parts();
+    assert_eq!(settlement.epoch(), expected_epoch);
+    assert_eq!(settlement.region(), expected_region);
     assert_eq!(settlement.outcome(), outcome);
+    match (&settlement, outcome) {
+        (StripeSettlement::Written(written), TransferOutcome::Completed) => {
+            assert_eq!(written.epoch(), expected_epoch);
+            assert_eq!(written.region(), expected_region);
+        }
+        (
+            StripeSettlement::Unwritten(unwritten),
+            TransferOutcome::Cancelled | TransferOutcome::Failed,
+        ) => {
+            assert_eq!(unwritten.epoch(), expected_epoch);
+            assert_eq!(unwritten.region(), expected_region);
+            assert_eq!(unwritten.outcome(), outcome);
+        }
+        _ => panic!("recovered outcome must mint its truthful settlement variant"),
+    }
     settlement
 }
 
 /// Issues, transfers, and reconciles the next stripe.
 fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> TransferOutcome {
     let target = sweep.next_target().expect("stripe remains");
+    assert_eq!(
+        target.epoch(),
+        sweep.epoch(),
+        "a minted target carries its owning sweep epoch"
+    );
     let settlement = transfer_target(target, outcome);
     sweep.settle(settlement).expect("matching settlement")
 }
@@ -254,6 +289,28 @@ fn write_all<S>(mut sweep: Sweep<S>) -> (kittens_render::sweep::SweepWritten, S)
             TransferOutcome::Completed
         );
     }
+    let complete = (
+        sweep.epoch(),
+        sweep.next_region(),
+        sweep.full_repaint(),
+        sweep.is_complete(),
+        sweep.is_poisoned(),
+    );
+    assert!(
+        sweep.next_target().is_none(),
+        "a fully covered plan cannot mint beyond its last stripe"
+    );
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        complete,
+        "exhausted target issuance leaves the complete sweep unchanged"
+    );
     sweep.finish().expect("fully covered")
 }
 
@@ -294,8 +351,14 @@ fn assert_unwritten_settlement_poisons(outcome: TransferOutcome) {
     demand.request();
     let mut sweep = demand.begin_sweep(Tick(0), ()).expect("sweep");
 
+    let poisoned_region = sweep.next_region();
     assert_eq!(transfer_next_stripe(&mut sweep, outcome), outcome);
     assert!(sweep.is_poisoned(), "unwritten settlement poisons");
+    assert_eq!(
+        sweep.next_region(),
+        poisoned_region,
+        "an unwritten settlement must not claim stripe progress"
+    );
     assert!(
         sweep.next_target().is_none(),
         "poisoned sweep cannot mint a retry target"
@@ -615,9 +678,16 @@ fn abandon_recovers_a_dropped_sweep() {
     assert!(demand.sweeping().is_none());
     assert!(demand.is_dirty(), "demand retained");
     assert!(demand.full_repaint_required());
-    assert!(demand.begin_sweep(Tick(0), ()).is_some(), "recovered");
 
-    // Idempotent when idle.
+    let recovered_idle = observable_demand_state(&demand);
+    demand.abandon_active();
+    assert_eq!(
+        observable_demand_state(&demand),
+        recovered_idle,
+        "abandon is idempotent while idle before the replacement"
+    );
+
+    assert!(demand.begin_sweep(Tick(0), ()).is_some(), "recovered");
     demand.abandon_active();
 }
 
@@ -829,8 +899,36 @@ fn invalid_plans_are_rejected_including_overflow() {
         InvalidPlan::EmptyPanel
     );
     assert_eq!(
+        SweepPlan::for_panel(
+            custom(Region {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 0
+            }),
+            2
+        )
+        .unwrap_err(),
+        InvalidPlan::EmptyPanel,
+        "zero panel height is empty independently of width"
+    );
+    assert_eq!(
         SweepPlan::for_panel(custom(PANEL), 0).unwrap_err(),
         InvalidPlan::ZeroStripe
+    );
+    assert_eq!(
+        SweepPlan::for_panel(
+            custom(Region {
+                x: u16::MAX,
+                y: 0,
+                width: 2,
+                height: 4
+            }),
+            2
+        )
+        .unwrap_err(),
+        InvalidPlan::Overflow,
+        "x + width overflow rejected"
     );
     assert_eq!(
         SweepPlan::for_panel(

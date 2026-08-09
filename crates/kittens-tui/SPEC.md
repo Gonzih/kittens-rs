@@ -1,6 +1,8 @@
 # kittens-tui profile specification (K1-TUI slice)
 
-- Status: controlling contract for the first TUI profile slice; authorized 2026-08-08 as the first post-K0 profile under root `SPEC.md` sections 9.4 and 37.13 step 10
+- Status: controlling contract for the first TUI profile slice; authorized
+  2026-08-08 as the first post-K0 profile under root `SPEC.md` sections 9.4 and
+  37.13 step 10; coverage-boundary correction recorded 2026-08-09
 - Parent contracts: root [`SPEC.md`](../../SPEC.md) (kernel semantics, section 9.4 profile rules, section 2.1 coverage thesis) and [`RESEARCH.md`](../../RESEARCH.md) section 4 (the inspected Grok Build TUI architecture, pinned commit `393430ee`)
 - Evidence basis: the K0 presenter parity oracles (`K0-REPORT.md`, behavioral oracles list) — request coalescing, no-payload draw, last-payload gating, stale acknowledgement, deadline under delayed acknowledgement — all of which ran against an application-owned presenter in both the raw and generated Grok fixtures
 - The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, and **MAY** are normative within this crate's boundary only; where this document conflicts with root `SPEC.md` kernel semantics, the root controls
@@ -19,7 +21,7 @@ Every hand-rolled async TUI reproduces the same five structures, and each is a d
 2. **Frame writing**: terminal writes are blocking I/O; correct loops move them to an owned writer and need a completion signal — or block the reactor per frame.
 3. **Render gating**: draw requests arrive faster than frames should be written; correct loops coalesce requests, keep exactly one frame in flight, gate on acknowledgement, and throttle via a deadline — or exhibit tearing, queue growth, and stale-frame overwrite races.
 4. **Ordering**: writer acknowledgements must outrank the render firehose, and input must not starve behind streaming — reactor topology, which the kernel already checks when declared.
-5. **Teardown**: input must be parked, accepted frames drained and the writer joined, and only then the terminal restored — or the shell is left in raw mode / the alternate screen on the failure paths that matter most.
+5. **Teardown**: input must be parked, accepted frames drained and the writer joined, and only then terminal restoration attempted — or the shell is left in raw mode / the alternate screen on the failure paths that matter most.
 
 The profile makes structures 1, 2, 3, and 5 library types with tested protocols, and leaves 4 to the kernel where it already is. Under the coverage thesis (root section 2.1): the profile shrinks the escape surface of a TUI codebase by giving the awkward producers and the render protocol one reviewed spelling each.
 
@@ -44,7 +46,7 @@ Five components, each with a named enforcement layer per root section 9.4. No co
 
 | Component | Provides | Guarantee | Enforcement layer |
 |---|---|---|---|
-| `TerminalSession` | raw mode + optional alternate screen | terminal restored on drop, including unwind | ordinary RAII `Drop` |
+| `TerminalSession` | raw mode + optional alternate screen | ordered best-effort restoration attempts on drop, including unwind | ordinary RAII `Drop` |
 | `InputReader` | owned reader thread, bounded polls, timestamped events | reactor edge is an admitted selection-loss-preserving channel source; reader exit is a typed `Closed` event | structural isolation (root section 20.5 precedent) + `close::Emit` |
 | `FrameWriter` | owned writer thread over a generic sink | frames written and flushed in submission order; each acknowledged with its sequence; failure is a typed terminal event; accepted frames drained before exit | runtime protocol + deterministic tests |
 | `Presenter` | render gate | coalescing, at most one frame in flight, monotonic sequences, stale-ack rejection, throttle deadline | private runtime state + `&mut` draw permit + deterministic tests |
@@ -75,9 +77,23 @@ impl TerminalSession {
     /// Enables raw mode, optionally enters the alternate screen.
     pub fn begin(alternate_screen: bool) -> io::Result<TerminalSession>;
 }
-// Drop: leaves alternate screen if entered, disables raw mode. Best-effort;
-// errors during restore are ignored because Drop has no channel to report.
+// Drop: attempts to leave the alternate screen if entered, then attempts to
+// disable raw mode and flush. Best-effort; errors during restore are ignored
+// because Drop has no channel to report.
 ```
+
+The production backend is crossterm over stdout. Its operations are held behind
+a private injectable seam so lifecycle oracles can drive raw-mode and
+alternate-screen success and failure without owning a real tty. The seam is
+test apparatus, not an enforcement layer: `TerminalSession` still owns the
+entered state and ordinary RAII `Drop` still enforces the ordered restoration
+attempts. The final binding from that seam to process stdout and crossterm's
+raw-mode functions lives in `src/terminal/production.rs`. Ordinary CI cannot
+behaviorally drive that process-global, live-tty boundary without owning a
+real PTY and platform terminal state, so that exact file is an explicit
+coverage exemption rather than being constructed and discarded under a fake.
+It remains type-checked, linted, documented here, and exercised by the manual
+real-terminal example gate.
 
 ### 6.3 Input reader
 
@@ -108,6 +124,14 @@ impl InputReader {
 ```
 
 The reactor-facing type is the K0-admitted unbounded `Mpsc` with `close::Emit`: `ChannelEvent::Closed` means "the reader thread exited" — a real, typed, fatal-or-handled event, exactly the Grok terminal-reader shape. The unbounded channel is deliberate and inherited from the inspected design: a synchronous reader thread cannot await capacity (root section 11.6 rationale).
+
+The final binding from the shared reader loop to
+`crossterm::event::{poll, read}` lives in `src/input/production.rs`. Like the
+terminal binding, it requires a real process terminal to exercise honestly and
+is an explicit coverage exemption. Deterministic tests cover the owned loop,
+pause/shutdown protocol, errors, delivery, and typed closure through the same
+`EventPoller` operations; they do not execute and discard the live binding to
+inflate coverage.
 
 ### 6.4 Frame writer
 
@@ -233,13 +257,13 @@ The canonical reactor shape (shipped as the crate's example, doc-comment rationa
 - `terminal_input` protected; every may-remain-ready predecessor yields to it;
 - `draw_deadline: OptionalDeadline`, armed in `before_poll` from `presenter.deadline()`, handler calls `on_deadline()`;
 - `initialize` and `after_event` run `try_begin` → render → `commit`/`no_output`;
-- teardown after the reactor returns: confirm input parked (or drop the reader), `writer.finish(handle)`, then drop `TerminalSession` — writer drained before the terminal is restored, session last.
+- teardown after the reactor returns: confirm input parked (or drop the reader), `writer.finish(handle)`, then drop `TerminalSession` — writer drained before terminal restoration is attempted, session last.
 
 ## 7. Cancellation and drop semantics (per root section 26.1 rule: beside each type)
 
 | Type | On drop |
 |---|---|
-| `TerminalSession` | restores terminal, best-effort, including panic unwind |
+| `TerminalSession` | attempts ordered terminal restoration, best-effort, including panic unwind |
 | `InputReader` | signals shutdown, joins the thread (bounded by `poll_interval`); the input source then yields `Closed` |
 | `WriterHandle` | closes the frame lane; the writer drains accepted frames, acks them, exits |
 | `FrameWriter` | does not join by itself if the handle is alive (documented; `finish` is canonical); joins a finished thread |
@@ -257,7 +281,9 @@ No component promises delivery after drop, async cleanup, or rollback of bytes a
 
 ## 9. Testing oracles (REQUIRED for this slice)
 
-Deterministic, no tty required (writer generic over sink; reader over a private poller seam with the crossterm implementation kept thin):
+Deterministic, no tty required (writer generic over sink; reader and terminal
+lifecycle over private backend seams with the two live-crossterm binding files
+explicitly exempted below):
 
 1. the five K0 parity scenarios, now against the library presenter: repeated requests coalesce; no-payload draw invents no ack target; stale/early ack does not unlock; ack at-or-beyond unlocks; scheduled deadline survives delayed ack and fires;
 2. writer roundtrip over a Vec sink: order, flush-per-frame, ack-per-frame, drain-on-close, typed failure then exit;
@@ -266,7 +292,29 @@ Deterministic, no tty required (writer generic over sink; reader over a private 
 5. monotonic `FrameSeq` across commits;
 6. reader pause/park/resume handshake and shutdown join via the test poller;
 7. an integration test wiring presenter + writer + sources through a real `kittens::reactor!` and running scenario 1 end-to-end — the profile's value proof;
-8. compile-fail: two simultaneous live `Draw`s (E0499).
+8. terminal lifecycle: raw-mode entry failure has no false restore, partial
+   alternate-screen entry attempts to roll raw mode back, ordinary drop and
+   panic unwind attempt restoration in leave-alternate → disable-raw → flush
+   order, and restore errors do not prevent later restore steps;
+9. compile-fail: two simultaneous live `Draw`s (E0499);
+10. coverage closure: `cargo llvm-cov --workspace --all-features
+    --ignore-filename-regex
+    'crates/kittens-tui/src/(input|terminal)/production\.rs$'
+    --fail-under-lines 100 --fail-under-functions 100
+    --fail-uncovered-lines 0 --fail-uncovered-functions 0
+    --summary-only` reports 100% line and function coverage with exactly zero
+    uncovered lines or functions across the included workspace. Zero uncovered
+    items also means every included crate source file is at 100%. Coverage
+    tests remain behavioral oracles for a requirement above or for an
+    adversarial path documented at the code site; executing an otherwise
+    meaningless path is not an oracle. The only source exemptions are
+    `src/input/production.rs` and `src/terminal/production.rs`: each is a thin,
+    process-global live-terminal binding that cannot be exercised honestly by
+    the deterministic no-tty suite. CI does not construct and discard either
+    binding. Region percentage is informational rather than a gate: the
+    remaining uncovered regions are compiler-synthesized control-flow regions
+    with no distinct uncovered source line or function, so CI deliberately
+    enforces lines/functions and does not hide source with a region threshold.
 
 Negative controls, published beside the tests per root section 37.9: a raw `write!` to the sink outside the writer lane compiles; a handler calling `presenter.request` in a tight loop compiles (coalescing bounds frames, not requests); nothing stops a caller from never presenting.
 
@@ -280,7 +328,7 @@ Root section 37.14 leaves "generic render gate and phase permit" open pending co
 
 ## 12. Deferred, with gates
 
-- **Editor/pager handoff choreography** (park → drain accepted frames → hand tty → restore): needs the pause/park primitive shipped here plus a drained-writer barrier; gate: a real handoff fixture with an assertion that no frame bytes interleave with the foreign process.
+- **Editor/pager handoff choreography** (park → drain accepted frames → hand tty → attempt restore): needs the pause/park primitive shipped here plus a drained-writer barrier; gate: a real handoff fixture with an assertion that no frame bytes interleave with the foreign process.
 - **Generic `SingleFlight` promotion**: gate as in section 10.
 - **Phase permits** (`try_begin` restricted to `initialize`/`after_event` by capability): deferred with the kernel's phase-capability row; wiring guidance carries the discipline until a permit proves value.
 - **Loom models** for the pause/park and shutdown atomics: gate: any reported or suspected handshake race; the K1 handshake is deliberately simple enough to review by hand.
@@ -288,4 +336,11 @@ Root section 37.14 leaves "generic render gate and phase permit" open pending co
 
 ## 13. Slice acceptance
 
-K1-TUI is done when: all section 9 oracles pass in CI on the workspace toolchains; the canonical example compiles and runs against a real terminal by hand; clippy/fmt/doc gates stay clean; the crate README states the boundary table; and the root README presents the monorepo layout with this crate as the first profile. Publication to crates.io is out of scope and remains gated by the root K0-REPORT decision process.
+K1-TUI is done when: all section 9 oracles pass in CI on the workspace
+toolchains; the section 9 coverage command reports 100% lines and functions
+for every non-exempt crate source file; the two named live-terminal binding
+files remain narrow and the canonical example compiles and runs against a real
+terminal by hand; clippy/fmt/doc gates stay clean; the crate README states the
+boundary table; and the root README presents the monorepo layout with this
+crate as the first profile. Publication to crates.io is out of scope and
+remains gated by the root K0-REPORT decision process.

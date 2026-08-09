@@ -3,13 +3,18 @@
 Embedded rendering/interaction profile for the [Kittens](../kittens)
 reactor kernel, anchored on the Waveshare ESP32-S3 1.8" AMOLED V1 board
 (SH8601 display, FT3168 touch, 368×448). The controlling contract is
-[`SPEC.md`](SPEC.md) (revision 6: section 6 is the normative K2R-0
+[`SPEC.md`](SPEC.md) (revision 8: section 6 is the normative K2R-0
 surface); [`K2R0A-LOG.md`](K2R0A-LOG.md) is the experiment record and
 [`TRACE-MANIFEST.md`](TRACE-MANIFEST.md) maps every required oracle to its
 status. Reviews are retained under [`reviews/`](reviews/).
 
-**Stage:** K2R-0 host slice. Not published; board bring-up (K2R-1) awaits
-hardware and the Xtensa toolchain gate.
+**Stage:** experimental 0.1.x evidence release of the K2R-0 host slice;
+protocols are not frozen. The linked Xtensa compile/link feasibility probe is
+**CLOSED WITH SCOPE**; replacement artifact metadata after revision 8's waker
+correction is explicitly pending in the trace manifest. Board HIL and silicon
+interrupt delivery, K2R-1 measurements, the kernel-admitted `reactor!`
+fixture, bilateral seam co-sign with `kittens-code`, blocking `write_region`,
+and capability sealing remain open gates.
 
 ## What each guarantee rests on
 
@@ -19,8 +24,33 @@ hardware and the Xtensa toolchain gate.
 | `Settled::into_parts` + `StripeSettlement` | every extraction returns exactly one move-only reconciliation witness: only real `Completed` recovery yields `Written(StripeWritten)`, while cancellation/failure yields `Unwritten(StripeUnwritten)` and cannot be relabeled as coverage; delivery to the owning sweep is cooperative | private settlement construction + consuming resource extraction + distinct private-field witness types + forge/rewrite/replay/clone compile-fail controls for witness integrity; documentation + `must_use` for delivery, which Rust cannot force |
 | `PanelGeometry` + `SweepPlan` | the canonical plan is tied to admitted anchor geometry; arbitrary geometry is a visibly named escape | private raw plan constructor + admission type + compile-fail/pass controls |
 | `sweep::Sweep<S>` | one owned snapshot value per epoch (shared-reference-only access), one outstanding target per plan position, and settlement-gated progression when the caller delivers the matching witness; an accepted written settlement advances once, an accepted unwritten settlement irreversibly poisons, and only healthy full coverage yields `SweepWritten`; `abort` rejects an outstanding target unchanged | crate-owned state machine + `&mut` target issuance + consuming provenance witnesses + poison/rejection oracles; the cooperative cancel/poll/recover/settle path clears outstanding before abort succeeds |
+| `draw_target::Rgb565StripeDrawTarget` (`embedded-graphics` feature) | drawing uses global panel coordinates and full-panel dimensions while clipping and translating into exactly one caller-owned stripe; pixels are row-major RGB565 high byte then low byte | private sweep/target provenance + constructor validation + ordinary mutable borrowing + focused packing/clipping/layout tests + independent full-frame versus real-witness-chain stripe oracles |
 | `demand::FrameDemand` | one machine-active epoch; provenance-branded settlement rejected without mutation; invalidation discards the affected epoch's settlement, including a sticky idle invalidation transferred to the next minted sweep; dropped/outstanding sweeps recoverable; epochs 0 through `u64::MAX` mint once and throttle deadlines never saturate past `Tick::MAX` | checked state machine and sticky checked horizons/latches + per-table-row oracles; `abandon_active` retains demand and forces full repaint, while reviewed adapters synchronously cancel and disarm dropped flights |
 | `touch` | wake-dedup without the idle-check TOCTOU; bounded service per activation; no edge for unchanged contacts; reviewed readers must return untorn snapshots | atomics protocol + adversarial interleaving oracles + negative control; reader atomicity is a documentation obligation |
+
+## Cargo features
+
+The default feature set is empty: the core remains dependency-free,
+`no_std`, no-alloc, and usable without a graphics framework. The optional
+`embedded-graphics` feature adds embedded-graphics' `no_std` API and exports
+the canonical integration as
+`kittens_render::draw_target::{Rgb565StripeDrawTarget, StripeDrawTargetError}`.
+
+The target binds a sweep's current outstanding `StripeTarget` to an exact
+caller-owned `&mut [u8]` of `region.width * region.height * 2` bytes. It keeps
+full-panel global `Dimensions`, clips all writes outside that stripe, and
+stores RGB565 high byte then low byte. It does not clear or reconstruct stale
+scratch storage: render the background and complete ordered scene from
+`Sweep::snapshot()` for every stripe before consuming the same target through
+`start_flight`.
+
+After constructor admission, the exact byte length and stripe clipping jointly
+prove that every accepted pixel's local coordinates, row-major byte offset, and
+two-byte slice are in range. The draw loop uses that invariant directly rather
+than retaining unreachable fallback branches. Checked length arithmetic is
+tested independently at both `usize` exhaustion edges; the maximum public
+`u16` geometry returns `BufferSizeOverflow` on targets where its byte count is
+not representable and the exact `WrongBufferLength` count otherwise.
 
 ## Runnable lifecycle
 
@@ -36,8 +66,12 @@ transition and verifies resource recovery without adding a dependency to the
 Not a display driver, widget/layout/scene framework, HAL, or executor. It
 does not claim physical presentation (milestones are `StripeWritten` /
 `SweepWritten` only), TE synchronization, power/AOD management, or DMA
-overlap — each is a named gate in the SPEC. Escape surfaces that compile by
-design: raw transport access outside the capability boundary;
+overlap — each is a named gate in the SPEC. The optional stripe target's host
+oracles establish byte-exact model reconstruction, not a future adapter's
+`write_region`, DMA/wire delivery, physical RGB channel/byte interpretation,
+or panel color fidelity; those remain exact-adapter and board-HIL questions.
+Escape surfaces that compile by design: raw transport access outside the
+capability boundary;
 an open experiment integration whose `FlightStarter` ignores the supplied
 target region, returns an unrelated prestarted transfer, or starts and then
 reports rejection (pairing becomes structural only after reviewed integrations
@@ -75,8 +109,12 @@ non-clearing, so another full repaint remains due.
 
 ## Deferred, with gates
 
-Xtensa compile probe (espup approval) → board HIL (hardware arrival) →
-K2R-1 numbers; kernel-admitted source carrier (root SPEC 37.6 slice) →
-real `reactor!` fixture; seam co-sign with `kittens-code`; `write_region`
-upstream/fork for stripes; draw-target integration → pixel-equivalence
-oracle; `FlightStarter` and `OwnedTransfer` sealing before any freeze.
+The pinned Xtensa compile/link feasibility probe is **CLOSED WITH SCOPE**: it
+proves the HAL/API/language/ownership/no-allocation/no-self-reference shape,
+not behavior on silicon. Remaining gates are board HIL (hardware in transit),
+including silicon interrupt delivery and physical RGB565/channel/byte
+fidelity, before K2R-1 measurements; a kernel-admitted source carrier (root
+SPEC 37.6 slice) and real `reactor!` fixture; bilateral seam co-sign with
+`kittens-code`; the blocking `write_region` upstream/fork decision; and
+`FlightStarter`/`OwnedTransfer` sealing before any freeze. Publishing this
+experimental 0.1.x evidence release is not that freeze.
