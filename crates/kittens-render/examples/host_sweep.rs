@@ -1,4 +1,5 @@
-//! Canonical host-side walk through one complete written-frame lifecycle.
+//! Canonical host-side walk through a complete written-frame lifecycle and
+//! an accepted-flight shutdown lifecycle.
 //!
 //! The transport below is deliberately small and synchronous, but it uses
 //! the same ownership and proof boundaries as a hardware integration: the
@@ -12,7 +13,7 @@ use std::task::{Context, Poll, Waker};
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::{StripeTarget, Sweep, SweepPlan};
-use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
 
 const STRIPE_HEIGHT: u16 = 112;
 
@@ -112,8 +113,8 @@ impl OwnedTransfer for HostTransfer {
         Poll::Ready(())
     }
 
-    /// Cancellation remains an idempotent settlement path even though this
-    /// runnable success cycle never asks the immediate model to drain.
+    /// Cancellation remains an idempotent settlement path; the runnable
+    /// shutdown cycle drains before the model's first completion poll.
     fn cancel(&mut self) {
         if self.outcome.is_none() {
             self.outcome = Some(TransferOutcome::Cancelled);
@@ -128,6 +129,23 @@ impl OwnedTransfer for HostTransfer {
             buffer: self.buffer,
             outcome: self.outcome.expect("recover only after settlement"),
         }
+    }
+}
+
+#[derive(Debug)]
+struct HostStart {
+    transport: HostTransport,
+    buffer: StripeBuffer,
+}
+
+impl FlightStarter for HostStart {
+    type Transfer = HostTransfer;
+    type Error = core::convert::Infallible;
+
+    /// Consuming this one-shot operation lets the target supply the only
+    /// region that can reach the concrete transport start boundary.
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        Ok(self.transport.start(self.buffer, region))
     }
 }
 
@@ -184,9 +202,13 @@ fn write_next_stripe(
     } = resources;
     ready.render(sweep.snapshot(), &target);
     let mut in_flight = target
-        .start_flight(spare, |target_region| {
-            Ok::<_, core::convert::Infallible>(transport.start(ready, target_region))
-        })
+        .start_flight(
+            spare,
+            HostStart {
+                transport,
+                buffer: ready,
+            },
+        )
         .expect("the infallible host starter accepts the target");
     in_flight
         .spare_mut()
@@ -225,12 +247,13 @@ fn write_next_stripe(
 /// epoch.
 fn begin_requested_frame(
     demand: &mut FrameDemand,
+    now: Tick,
     snapshot: FrameSnapshot,
 ) -> Sweep<FrameSnapshot> {
     println!("demand: request frame for scene {:?}", snapshot.scene);
     demand.request();
     let sweep = demand
-        .begin_sweep(Tick(0), snapshot)
+        .begin_sweep(now, snapshot)
         .expect("fresh demand is immediately eligible");
     println!(
         "sweep:  begin epoch {} (full_repaint={})",
@@ -264,8 +287,90 @@ fn finish_written_frame(
     snapshot
 }
 
-/// Runs one full-panel frame over the admitted Waveshare geometry and prints
-/// every lifecycle boundary in the order a host or board coordinator owns it.
+/// An accepted flight cannot be bypassed during shutdown: drain it, recover
+/// every resource, reconcile its cancelled settlement (which poisons the
+/// sweep), and only then abort and settle the active demand as failed.
+fn drain_and_abort_frame(
+    demand: &mut FrameDemand,
+    mut sweep: Sweep<FrameSnapshot>,
+    resources: HostResources,
+    now: Tick,
+) -> (HostResources, FrameSnapshot) {
+    let target = sweep.next_target().expect("shutdown starts one flight");
+    let region = target.region();
+    let HostResources {
+        transport,
+        mut ready,
+        spare,
+    } = resources;
+    let writes_before_drain = transport.written_stripes;
+    let sent_name = ready.name;
+    let spare_name = spare.name;
+
+    ready.render(sweep.snapshot(), &target);
+    let mut in_flight = target
+        .start_flight(
+            spare,
+            HostStart {
+                transport,
+                buffer: ready,
+            },
+        )
+        .expect("the shutdown flight is accepted before draining");
+    in_flight
+        .spare_mut()
+        .expect("spare remains available in flight")
+        .prepare_as_spare();
+
+    println!("shutdown: begin_drain accepted flight at y={}", region.y);
+    in_flight.begin_drain();
+    assert!(in_flight.is_draining());
+    let mut context = Context::from_waker(Waker::noop());
+    let settled = match in_flight.poll_complete(&mut context) {
+        Poll::Ready(settled) => settled,
+        Poll::Pending => panic!("the cancelled host model settles on its first poll"),
+    };
+    assert_eq!(settled.outcome(), TransferOutcome::Cancelled);
+    assert_eq!(settled.region(), region);
+
+    let (transport, sent, next_ready, settlement) = settled.into_parts();
+    assert_eq!(transport.written_stripes, writes_before_drain);
+    assert_eq!(sent.name, sent_name);
+    assert!(sent.rendered.is_some());
+    assert_eq!(next_ready.name, spare_name);
+    assert!(next_ready.rendered.is_none());
+    assert_eq!(
+        sweep
+            .settle(settlement)
+            .expect("the cancelled settlement matches the outstanding target"),
+        TransferOutcome::Cancelled,
+    );
+    assert!(sweep.is_poisoned());
+    println!("shutdown: cancelled settlement poisoned the sweep");
+
+    let (aborted, snapshot) = sweep
+        .abort()
+        .expect("settlement cleared outstanding work before abort");
+    demand
+        .finish_failed(aborted, now)
+        .expect("abort witness belongs to the active demand");
+    assert!(demand.is_dirty());
+    assert!(demand.sweeping().is_none());
+    assert!(demand.full_repaint_required());
+    println!("shutdown: abort succeeded; demand retained for full repaint");
+
+    (
+        HostResources {
+            transport,
+            ready: next_ready,
+            spare: sent,
+        },
+        snapshot,
+    )
+}
+
+/// Runs one full-panel frame and one accepted-flight shutdown over the admitted
+/// Waveshare geometry, printing each owned lifecycle boundary in order.
 fn main() {
     let geometry = PanelGeometry::WAVESHARE_18_V1;
     let panel = geometry.panel();
@@ -281,7 +386,7 @@ fn main() {
         scene: "hello kittens",
         tone: 0x5a,
     };
-    let mut sweep = begin_requested_frame(&mut demand, snapshot);
+    let mut sweep = begin_requested_frame(&mut demand, Tick(0), snapshot);
     let mut resources = HostResources::new();
 
     for index in 0..stripe_count {
@@ -296,5 +401,24 @@ fn main() {
     println!(
         "frame:  {:?} returned; {} stripes written; both buffers recovered",
         snapshot.scene, resources.transport.written_stripes,
+    );
+
+    let shutdown_tick = Tick(u64::from(resources.transport.written_stripes));
+    let shutdown_sweep = begin_requested_frame(
+        &mut demand,
+        shutdown_tick,
+        FrameSnapshot {
+            scene: "shutdown recovery",
+            tone: 0xa5,
+        },
+    );
+    let writes_before_drain = resources.transport.written_stripes;
+    let (resources, shutdown_snapshot) =
+        drain_and_abort_frame(&mut demand, shutdown_sweep, resources, shutdown_tick);
+    assert_eq!(resources.transport.written_stripes, writes_before_drain);
+    assert_ne!(resources.ready.name, resources.spare.name);
+    println!(
+        "shutdown: {:?} returned; transport and buffers {} / {} recovered",
+        shutdown_snapshot.scene, resources.ready.name, resources.spare.name,
     );
 }

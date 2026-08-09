@@ -4,7 +4,7 @@
 //! Exit-review restructuring through round 3 (round-1 findings 4, 5, 9;
 //! round-3 findings 1–3):
 //!
-//! - coverage consumes **every transfer settlement**, not caller claims:
+//! - coverage consumes **every driven transfer settlement**, not caller claims:
 //!   [`crate::transfer::Settled::into_parts`] returns exactly one
 //!   [`StripeSettlement`]; written settlements advance, while failed or
 //!   cancelled settlements poison the epoch and leave only abort;
@@ -24,8 +24,9 @@ use crate::transfer::TransferOutcome;
 /// transfer must carry to witness coverage. Minted only by
 /// [`Sweep::next_target`]; non-`Clone`, private fields, and consumed by
 /// [`StripeTarget::start_flight`]. The target itself supplies the starter's
-/// region, so public code cannot independently pass a claimed identity into
-/// an in-flight carrier (exit-review round-3 finding 1).
+/// region. Pairing is structural under sealed `FlightStarter` integrations;
+/// an open experiment-phase implementation can still be dishonest about the
+/// region (exit-review round-3 finding 1; round-4 finding 1).
 #[derive(Debug)]
 pub struct StripeTarget {
     pub(crate) demand_id: u64,
@@ -419,22 +420,32 @@ impl<S> Sweep<S> {
         }
     }
 
-    /// Aborts the sweep at any point, including shutdown with an outstanding
-    /// target or flight, and returns the snapshot. Bookkeeping cannot revoke
-    /// either value: a retained target can still be started and a live flight
-    /// can still write. Drop the target and drain the flight before replacement
-    /// whenever shutdown permits it. Accepting the abort forces a full repaint;
-    /// if a stale write can overlap a replacement, call
-    /// [`crate::demand::FrameDemand::invalidate`] so that replacement is
-    /// discarded and another full repaint remains due.
-    pub fn abort(self) -> (AbortedSweep, S) {
-        (
+    /// Aborts a ready or poisoned sweep and returns the snapshot. An
+    /// outstanding target or flight must settle first.
+    ///
+    /// This restriction adds no liveness cost to an accepted flight:
+    /// [`crate::transfer::InFlight::begin_drain`] requests cancellation,
+    /// `poll_complete` settles by the [`crate::transfer::OwnedTransfer`]
+    /// contract, `Settled::into_parts` returns the mandatory witness, and
+    /// [`Sweep::settle`] clears outstanding (poisoning on cancellation) before
+    /// retrying `abort`. A never-accepted target instead requires retry to
+    /// settlement or the explicit drop-plus-`FrameDemand::abandon_active`
+    /// recovery boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns the sweep unchanged while a target is outstanding.
+    pub fn abort(self) -> Result<(AbortedSweep, S), Self> {
+        if self.state == SweepState::Outstanding {
+            return Err(self);
+        }
+        Ok((
             AbortedSweep {
                 demand_id: self.demand_id,
                 epoch: self.epoch,
             },
             self.snapshot,
-        )
+        ))
     }
 }
 

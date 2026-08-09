@@ -17,15 +17,19 @@ The verdict's blueprint implements `poll_done -> Poll<TransferOutcome>`.
 The trait as landed uses `poll_done -> Poll<()>` with recovery as the sole
 outcome authority (the verdict's own correction 5, applied after it was
 written). The landed host API also removed public `InFlight::new`:
-`StripeTarget::start_flight` now invokes the starter with the target's exact
-region, and `Settled::into_parts` returns the mandatory
+`StripeTarget::start_flight` now invokes an operation-bound `FlightStarter`
+with the target's exact region, and `Settled::into_parts` returns the mandatory
 `StripeSettlement::{Written, Unwritten}` consumed by `Sweep::settle`. The
 verdict text is retained unedited as the historical record; any future exact
-Xtensa probe must implement the corrected signatures and lifecycle:
+Xtensa probe must implement the corrected signatures and lifecycle. Pairing
+is structural under integrations reviewed and sealed at freeze; while both
+capability traits remain open for the experiment, region honesty and
+acceptance-atomic rejection remain explicit integration obligations:
 
 ```rust
 fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()>;      // settlement only
 fn recover(self) -> Recovered<Self::Transport, Self::Buffer>;   // sole outcome authority
+fn start(self, region: Region) -> Result<Self::Transfer, Self::Error>; // FlightStarter
 ```
 
 Additionally, per finding 2, the blueprint's `cancel()` already stores the
@@ -36,8 +40,8 @@ adversarial oracle (`cancel_then_late_completion_stays_cancelled`).
 [adapter-blueprint.rs](adapter-blueprint.rs) is emphatically **not a corrected
 adapter source file**. It is a documentation-comment pseudocode delta over
 `VERDICT.md`: it has no imports, concrete adapter type,
-`OwnedTransfer` implementation, complete `cancel`/`recover`, hardware setup,
-or firmware entry point. Compiling it as an empty Rust crate would exercise no
+`OwnedTransfer`/`FlightStarter` implementations, complete `cancel`/`recover`,
+hardware setup, or firmware entry point. Compiling it as an empty Rust crate would exercise no
 adapter code; installing the Xtensa toolchain does not turn it into the missing
 source. A real, compile-ready adapter and linked firmware against the pinned
 esp-hal SHA remain an open Xtensa gate.

@@ -81,6 +81,13 @@ fn eligibility_or_panic(last_written: Tick, min_interval: u64) -> Tick {
     )
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum InvalidationState {
+    Clear,
+    Pending,
+    Active,
+}
+
 /// The demand policy state machine. Owns the fixed, validated panel plan;
 /// sweeps cannot substitute another (finding 5).
 ///
@@ -99,14 +106,15 @@ fn eligibility_or_panic(last_written: Tick, min_interval: u64) -> Tick {
 /// | any | `finish_written`/`finish_failed` (foreign/stale token) | `Err(ForeignSweep)`, **no mutation** |
 /// | sweeping | `finish_failed` (active token) | idle, dirty retained, full-repaint set, throttle unchanged |
 /// | sweeping | `abandon_active` | idle, dirty + full-repaint set, throttle unchanged (dropped-sweep recovery, finding 8) |
-/// | any | `invalidate` | dirty + full-repaint set; an active sweep is marked non-clearing |
+/// | sweeping | `invalidate` | dirty + full-repaint set; active sweep marked non-clearing |
+/// | idle | `invalidate` | dirty + full-repaint set; sticky pending invalidation transfers to the next minted sweep |
 #[derive(Debug)]
 pub struct FrameDemand {
     id: u64,
     plan: SweepPlan,
     dirty: bool,
     sweeping: Option<FrameEpoch>,
-    active_invalidated: bool,
+    invalidation: InvalidationState,
     last_written: Option<Tick>,
     scheduled: Option<Tick>,
     min_interval: u64,
@@ -130,7 +138,7 @@ impl FrameDemand {
             plan,
             dirty: false,
             sweeping: None,
-            active_invalidated: false,
+            invalidation: InvalidationState::Clear,
             last_written: None,
             scheduled: None,
             min_interval: min_interval_ticks,
@@ -162,13 +170,18 @@ impl FrameDemand {
     /// External invalidation: transport reset, panel reinitialization, any
     /// epoch discontinuity. Raises demand, records the full-repaint
     /// obligation, and marks an in-flight sweep non-clearing: its eventual
-    /// written settlement is discarded rather than trusted (finding 7). A
-    /// bool latch, not a wrappable counter.
+    /// written settlement is discarded rather than trusted (finding 7). If
+    /// idle, the invalidation sticks until the next successful
+    /// [`FrameDemand::begin_sweep`] transfers it into that minted sweep's
+    /// discard state. Rejected, throttled, or panicking begin attempts cannot
+    /// lose the latch. A finite private state, not a wrappable counter.
     pub fn invalidate(&mut self) {
         self.dirty = true;
         self.full_repaint = true;
         if self.sweeping.is_some() {
-            self.active_invalidated = true;
+            self.invalidation = InvalidationState::Active;
+        } else {
+            self.invalidation = InvalidationState::Pending;
         }
     }
 
@@ -198,10 +211,15 @@ impl FrameDemand {
             }
         }
         let epoch = mint_epoch_or_panic(&mut self.next_epoch);
+        let active_invalidated = self.invalidation == InvalidationState::Pending;
         self.dirty = false;
         self.scheduled = None;
         self.sweeping = Some(epoch);
-        self.active_invalidated = false;
+        self.invalidation = if active_invalidated {
+            InvalidationState::Active
+        } else {
+            InvalidationState::Clear
+        };
         Some(Sweep::mint(
             snapshot,
             self.plan,
@@ -244,10 +262,10 @@ impl FrameDemand {
             return Err(ForeignSweep);
         }
         self.sweeping = None;
-        if self.active_invalidated {
+        if self.invalidation == InvalidationState::Active {
             // The panel changed under this sweep: output is suspect. Retain
             // demand and the obligation; do not advance the throttle.
-            self.active_invalidated = false;
+            self.invalidation = InvalidationState::Clear;
             self.dirty = true;
             self.full_repaint = true;
             return Ok(WrittenDisposition::DiscardedByInvalidation);
@@ -262,11 +280,11 @@ impl FrameDemand {
     }
 
     /// Settles the active sweep as failed/aborted: demand retained, the
-    /// full-repaint obligation recorded, the throttle not advanced. This
-    /// bookkeeping cannot revoke an outstanding target or already-started
-    /// physical write: drop the target and drain the flight before replacement
-    /// when possible, and call [`FrameDemand::invalidate`] if a stale write can
-    /// overlap a replacement so that another full repaint remains due.
+    /// full-repaint obligation recorded, the throttle not advanced. Because
+    /// [`crate::sweep::Sweep::abort`] rejects outstanding work, an abort
+    /// witness proves that no target or flight remains independently live.
+    /// Calling [`FrameDemand::invalidate`] while idle still marks the next
+    /// replacement non-clearing; its sticky latch cannot be erased by mint.
     ///
     /// # Errors
     ///
@@ -278,7 +296,7 @@ impl FrameDemand {
             return Err(ForeignSweep);
         }
         self.sweeping = None;
-        self.active_invalidated = false;
+        self.invalidation = InvalidationState::Clear;
         self.dirty = true;
         self.full_repaint = true;
         Ok(())
@@ -292,14 +310,16 @@ impl FrameDemand {
     /// **Caller obligation (round-2 finding on premature abandonment):**
     /// this machine can terminally reject the abandoned epoch's witnesses
     /// (`ForeignSweep`), but it cannot stop a retained old `Sweep` from
-    /// minting a target later or an already-started transfer from physically
-    /// writing the panel. Drop every unstarted target and drain every old
-    /// transfer before beginning the replacement. If a late write can
-    /// overlap the replacement, call [`FrameDemand::invalidate`] so that
-    /// replacement is discarded and another forced full repaint remains due.
+    /// minting a target later. Drop every unstarted target and every old flight
+    /// before beginning the replacement; a reviewed transfer adapter
+    /// synchronously cancels/disarms on `Drop`, but safe Rust cannot force the
+    /// caller to drop rather than retain or drive it. If that bounded stale
+    /// write window can overlap the replacement, call
+    /// [`FrameDemand::invalidate`] while idle: the sticky latch marks that next
+    /// sweep non-clearing so another forced full repaint remains due.
     pub fn abandon_active(&mut self) {
         if self.sweeping.take().is_some() {
-            self.active_invalidated = false;
+            self.invalidation = InvalidationState::Clear;
             self.dirty = true;
             self.full_repaint = true;
         }
@@ -360,5 +380,35 @@ mod tests {
         let panic = std::panic::catch_unwind(|| eligibility_or_panic(Tick::MAX, 1))
             .expect_err("positive interval beyond MAX must not saturate");
         assert_eq!(panic_message(panic.as_ref()), Some(TICK_HORIZON_EXHAUSTED));
+    }
+
+    #[test]
+    fn panicking_begin_preserves_pending_invalidation() {
+        let plan = SweepPlan::for_panel(crate::geometry::PanelGeometry::WAVESHARE_18_V1, 448)
+            .expect("anchor plan");
+
+        let mut epoch_exhausted = FrameDemand::new(0, plan);
+        epoch_exhausted.invalidate();
+        epoch_exhausted.next_epoch = None;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            epoch_exhausted.begin_sweep(Tick(0), ())
+        }))
+        .expect_err("epoch exhaustion must panic before mint");
+        assert_eq!(panic_message(panic.as_ref()), Some(EPOCH_EXHAUSTED));
+        assert_eq!(epoch_exhausted.invalidation, InvalidationState::Pending);
+        assert!(epoch_exhausted.dirty);
+        assert_eq!(epoch_exhausted.sweeping, None);
+
+        let mut tick_exhausted = FrameDemand::new(1, plan);
+        tick_exhausted.last_written = Some(Tick::MAX);
+        tick_exhausted.invalidate();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tick_exhausted.begin_sweep(Tick::MAX, ())
+        }))
+        .expect_err("tick exhaustion must panic before mint");
+        assert_eq!(panic_message(panic.as_ref()), Some(TICK_HORIZON_EXHAUSTED));
+        assert_eq!(tick_exhausted.invalidation, InvalidationState::Pending);
+        assert!(tick_exhausted.dirty);
+        assert_eq!(tick_exhausted.sweeping, None);
     }
 }

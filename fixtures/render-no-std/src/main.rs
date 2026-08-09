@@ -8,7 +8,7 @@ use core::task::{Context, Poll, Waker};
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::SweepPlan;
-use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
 
 #[derive(Debug)]
 struct ProbeTransport {
@@ -67,6 +67,22 @@ impl OwnedTransfer for ProbeTransfer {
     }
 }
 
+struct ProbeStart {
+    transport: ProbeTransport,
+    buffer: [u8; 1],
+}
+
+impl FlightStarter for ProbeStart {
+    type Transfer = ProbeTransfer;
+    type Error = (ProbeTransport, [u8; 1]);
+
+    /// The target supplies the region at the consuming operation boundary;
+    /// rejection returns every resource captured by this start attempt.
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        self.transport.start_region(region, self.buffer)
+    }
+}
+
 /// Exercises the public render proof chain from a separate crate so the
 /// bare-metal gate links real downstream use rather than only building the
 /// profile rlib.
@@ -89,9 +105,13 @@ fn linked_render_path(stripe_height: u16) -> bool {
         sequence: 0,
         written_region: None,
     };
-    let Ok(mut in_flight) =
-        target.start_flight([0xc3], |region| transport.start_region(region, [0x5a]))
-    else {
+    let Ok(mut in_flight) = target.start_flight(
+        [0xc3],
+        ProbeStart {
+            transport,
+            buffer: [0x5a],
+        },
+    ) else {
         return false;
     };
     let mut cx = Context::from_waker(Waker::noop());
@@ -113,14 +133,71 @@ fn linked_render_path(stripe_height: u16) -> bool {
         return false;
     };
 
-    disposition == WrittenDisposition::Effective
-        && !demand.is_dirty()
+    if disposition != WrittenDisposition::Effective
+        || demand.is_dirty()
+        || demand.sweeping().is_some()
+        || transport.sequence != 1
+        || transport.written_region != Some(expected_region)
+        || sent != [0x5a]
+        || spare != [0xc3]
+        || snapshot != 0xa5
+    {
+        return false;
+    }
+
+    // Shutdown after acceptance must drive the transfer to a real cancelled
+    // settlement before the poisoned sweep may abort. Rotate the resources
+    // recovered above so the fixture proves both buffers return again.
+    demand.request();
+    let Some(mut shutdown_sweep) = demand.begin_sweep(Tick(1), 0x3c_u8) else {
+        return false;
+    };
+    let Some(shutdown_target) = shutdown_sweep.next_target() else {
+        return false;
+    };
+    let shutdown_region = shutdown_target.region();
+    let Ok(mut shutdown_flight) = shutdown_target.start_flight(
+        sent,
+        ProbeStart {
+            transport,
+            buffer: spare,
+        },
+    ) else {
+        return false;
+    };
+
+    shutdown_flight.begin_drain();
+    if !shutdown_flight.is_draining() {
+        return false;
+    }
+    let Poll::Ready(cancelled) = shutdown_flight.poll_complete(&mut cx) else {
+        return false;
+    };
+    if cancelled.outcome() != TransferOutcome::Cancelled || cancelled.region() != shutdown_region {
+        return false;
+    }
+
+    let (transport, cancelled_sent, cancelled_spare, settlement) = cancelled.into_parts();
+    if shutdown_sweep.settle(settlement) != Ok(TransferOutcome::Cancelled)
+        || !shutdown_sweep.is_poisoned()
+    {
+        return false;
+    }
+    let Ok((aborted, shutdown_snapshot)) = shutdown_sweep.abort() else {
+        return false;
+    };
+    if demand.finish_failed(aborted, Tick(1)).is_err() {
+        return false;
+    }
+
+    demand.is_dirty()
         && demand.sweeping().is_none()
-        && transport.sequence == 1
-        && transport.written_region == Some(expected_region)
-        && sent == [0x5a]
-        && spare == [0xc3]
-        && snapshot == 0xa5
+        && demand.full_repaint_required()
+        && transport.sequence == 2
+        && transport.written_region == Some(shutdown_region)
+        && cancelled_sent == [0xc3]
+        && cancelled_spare == [0x5a]
+        && shutdown_snapshot == 0x3c
 }
 
 #[cfg(target_os = "none")]

@@ -21,9 +21,12 @@
 //!   settlement (`Poll<()>`), `recover` reports how;
 //! - the spare buffer is carried through the in-flight state and returned at
 //!   settlement, per SPEC section 7's resource-recovery criterion;
-//! - sealing this trait to reviewed integrations is a pre-freeze obligation
-//!   recorded in `K2R0A-LOG.md`; during the experiment it stays open so
-//!   probes and models can implement it.
+//! - sealing [`OwnedTransfer`] and [`FlightStarter`] to reviewed integrations
+//!   is a pre-freeze obligation recorded in `K2R0A-LOG.md`; during the
+//!   experiment they stay open so probes and models can implement them. A
+//!   dishonest experiment-phase starter can ignore its region, return a
+//!   prestarted transfer, or start and then reject; that is the documented
+//!   integration-honesty escape, not a structural guarantee.
 
 use core::task::{Context, Poll};
 
@@ -31,6 +34,11 @@ use crate::geometry::Region;
 use crate::sweep::{StripeSettlement, StripeTarget, StripeUnwritten, StripeWritten};
 
 /// An owned, in-flight region transfer at the HAL boundary.
+///
+/// A reviewed implementation's `Drop` MUST synchronously cancel any pending
+/// physical operation and disarm its completion registration. The trait is
+/// intentionally open during the experiment, so that obligation becomes
+/// structural only when integrations are reviewed and sealed at freeze.
 pub trait OwnedTransfer: Sized {
     /// The transport (bus/display handle) consumed by the transfer.
     type Transport;
@@ -52,6 +60,36 @@ pub trait OwnedTransfer: Sized {
     /// Consumes a settled transfer, returning the transport, the sent
     /// buffer, and the settlement outcome.
     fn recover(self) -> Recovered<Self::Transport, Self::Buffer>;
+}
+
+/// One operation-bound capability for starting a transfer at a crate-supplied
+/// region.
+///
+/// This trait is deliberately open during the experiment and MUST be sealed
+/// to reviewed integrations on the same pre-freeze schedule as
+/// [`OwnedTransfer`]. Under those sealed integrations, consuming the starter
+/// and invoking it inside [`StripeTarget::start_flight`] makes target/start
+/// pairing structural. While it remains open, safe dishonest implementations
+/// can ignore `region`, return a transfer started for another region, or start
+/// and then return `Err`; those are explicit integration-honesty escapes in
+/// the same class as `TouchReader`'s untorn-snapshot obligation.
+pub trait FlightStarter: Sized {
+    /// The accepted, already-started transfer.
+    type Transfer: OwnedTransfer;
+    /// Rejection plus every resource captured by this operation.
+    type Error;
+
+    /// Starts exactly `region`, consuming the operation and its resources.
+    ///
+    /// `Err` is acceptance-atomic by contract: no live transfer exists and no
+    /// later physical write can result. An operation that may still complete
+    /// MUST return its [`OwnedTransfer`] in `Ok`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Self::Error` only when no transfer was accepted; it owns every
+    /// resource captured by this operation so the caller can recover them.
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error>;
 }
 
 /// How an in-flight transfer settled. Produced only by
@@ -104,9 +142,9 @@ impl<T, B, S> Settled<T, B, S> {
         self.outcome
     }
 
-    /// The exact target region supplied to the starter that produced this
-    /// transfer. Whether the integration really wrote it remains a reviewed
-    /// adapter obligation.
+    /// The exact target region supplied to the [`FlightStarter`] that produced
+    /// this transfer. Whether an experiment-phase implementation really wrote
+    /// it remains a reviewed-integration obligation.
     pub const fn region(&self) -> Region {
         self.target.region()
     }
@@ -135,13 +173,17 @@ impl<T, B, S> Settled<T, B, S> {
     }
 }
 
-/// A target-driven start was rejected before any transfer was accepted.
+/// A target-driven start was reported rejected before any transfer was
+/// accepted.
 ///
 /// The error owns the starter-defined recovery value, the untouched spare,
-/// and the same target, so callers can retry that exact position or abort the
-/// sweep. Any transport or sent-buffer resources captured by the starter
-/// must be returned inside `E`; safe Rust cannot infer that integration
-/// detail.
+/// and the same target, so callers can retry that exact position. The owning
+/// sweep remains outstanding and cannot abort until an accepted retry settles;
+/// callers that stop retrying must instead drop the target and sweep, then use
+/// `FrameDemand::abandon_active`. Any transport or sent-buffer resources
+/// captured by the starter must be returned inside `E`; while [`FlightStarter`]
+/// remains open, safe Rust cannot enforce that acceptance-atomic integration
+/// obligation.
 #[derive(Debug)]
 pub struct StartFlightError<E, S> {
     error: E,
@@ -151,7 +193,7 @@ pub struct StartFlightError<E, S> {
 
 impl<E, S> StartFlightError<E, S> {
     /// Returns the rejected start's error, spare, and original target.
-    /// Consuming all three together makes the retry/abort ownership decision
+    /// Consuming all three together makes the retry/resource-recovery decision
     /// explicit and prevents minting a second target for the position.
     pub fn into_parts(self) -> (E, S, StripeTarget) {
         (self.error, self.spare, self.target)
@@ -162,27 +204,27 @@ impl StripeTarget {
     /// Starts the transfer from this target's exact region and, on success,
     /// moves the returned transfer, spare, and same target into flight.
     ///
-    /// This is the only public path into [`InFlight`]. It removes the old
-    /// ability to pair an independently started transfer with an unrelated
-    /// target. The starter remains an integration boundary: reviewed code
-    /// must actually start a write of the supplied region.
+    /// This is the only public path into [`InFlight`]. Target/start pairing is
+    /// structural once [`FlightStarter`] is sealed to reviewed integrations.
+    /// During the experiment, a dishonest implementation can still ignore the
+    /// supplied region or return an independently started transfer.
     ///
     /// # Errors
     ///
     /// [`StartFlightError`] returns `E`, the spare, and the original target.
-    /// Returning `Err` is an acceptance-atomic contract: no transfer was
-    /// started and no later physical write can result from the attempt. A
-    /// start that may still complete must return an [`OwnedTransfer`] in
-    /// `Ok`, not `Err`.
-    pub fn start_flight<X, S, E>(
+    /// Returning `Err` is an acceptance-atomic [`FlightStarter`] contract: no
+    /// transfer was started and no later physical write can result from the
+    /// attempt. A start that may still complete must return its
+    /// [`OwnedTransfer`] in `Ok`, not `Err`.
+    pub fn start_flight<F, S>(
         self,
         spare: S,
-        starter: impl FnOnce(Region) -> Result<X, E>,
-    ) -> Result<InFlight<X, S>, StartFlightError<E, S>>
+        starter: F,
+    ) -> Result<InFlight<F::Transfer, S>, StartFlightError<F::Error, S>>
     where
-        X: OwnedTransfer,
+        F: FlightStarter,
     {
-        match starter(self.region) {
+        match starter.start(self.region) {
             Ok(transfer) => Ok(InFlight::from_started(transfer, spare, self)),
             Err(error) => Err(StartFlightError {
                 error,
@@ -201,12 +243,15 @@ impl StripeTarget {
 /// spare buffer, whose owned value stays writable during the flight. The
 /// generic types do not prove that sent and spare buffers have disjoint
 /// backing storage: safe shared/interior-mutable aliases remain a documented
-/// integration escape (SPEC 6.2).
+/// integration escape (SPEC 6.2). Ordinary `InFlight` drop returns no
+/// resources or settlement witness; the reviewed `OwnedTransfer` adapter MUST
+/// synchronously cancel the physical operation and disarm its registration in
+/// its own `Drop` implementation, bounding that explicit escape.
 ///
 /// ```text
 /// InFlight ── poll_complete Ready ─────────────▶ Settled { .., Completed/Failed }
 /// InFlight ── begin_drain ─▶ draining ── poll_complete Ready ─▶ Settled { .., Cancelled/Completed }
-/// InFlight ── drop ─▶ resources lost (documented non-returning boundary)
+/// InFlight ── drop ─▶ adapter synchronously cancels/disarms; resources lost
 /// ```
 #[derive(Debug)]
 pub struct InFlight<X: OwnedTransfer, S> {

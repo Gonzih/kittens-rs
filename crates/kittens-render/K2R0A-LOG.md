@@ -19,7 +19,7 @@ board's SH8601 path is TX-only, so that seal is acceptable and recorded.
 
 | Candidate | Status | Evidence |
 |---|---|---|
-| A′ carrier + C completion | **selected**; host-model PASS with 12 tests: 11 positive traces (including adversarial registration race, cancel-wake, waker replacement, late-IRQ inertness, reuse, and spare identity) plus the check-then-register lost-wake negative control | `src/transfer.rs`, `tests/k2r0a_a_prime.rs`, `probes/esp32s3-spi2/VERDICT.md` |
+| A′ carrier + C completion | **selected**; host-model PASS with 13 tests: 12 positive traces (including starter rejection, adversarial registration race, cancel-wake, settlement-gated abort, waker replacement, late-IRQ inertness, reuse, and spare identity) plus the check-then-register lost-wake negative control | `src/transfer.rs`, `tests/k2r0a_a_prime.rs`, `probes/esp32s3-spi2/VERDICT.md` |
 | A — kernel pin admission | not needed for this boundary | — |
 | B — named task + channel boundary | not needed for this boundary | — |
 | ∅ | not reached | — |
@@ -54,7 +54,8 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 3. **Kernel-admitted completion source + `reactor!` fixture**: raw-`Context`
    oracles do not prove delivery into Kittens; the kernel admission path for
    this profile's sources is the remaining kernel conversation.
-4. **Seal `OwnedTransfer`** to reviewed integrations before any freeze.
+4. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
+   any freeze.
 
 ## Toolchain gate
 
@@ -203,8 +204,51 @@ pairing becomes structural under sealed integrations, and SPEC/blueprint
 prose states the experiment-phase boundary honestly instead of claiming
 nonexistence; (3) `abort` requires settlement — `Err(sweep)` while a
 target is outstanding — which has no liveness cost because cancel-and-
-drain settles by contract; with drop-cancellation bounded by the adapter
-Drop contract, the stale-write window closes and SPEC 5.3's every-
-started-transfer-settles rule becomes literally true; `invalidate`'s
+drain settles by contract; drop-cancellation is bounded by the adapter `Drop`
+contract and remains the explicit non-returning drop-plus-abandon escape,
+while every started transfer on the driven, resource-returning path settles
+through its owning sweep; `invalidate`'s
 idle-time timing hole closes by making the pending invalidation stick to
 the next mint instead of being cleared by it. Batch 7 delegated.
+
+## Exit-review batch 7 landed and verified (2026-08-08)
+
+SPEC revision 5 is implemented in the host surface. The closure starter is
+replaced by the operation-bound `FlightStarter` trait: the crate invokes
+`start` with the target's region, and `FlightStarter` now shares
+`OwnedTransfer`'s seal-at-freeze gate. Target/start pairing is therefore
+structural under sealed, reviewed integrations. During the experiment both
+traits remain deliberately open; a dishonest safe starter can ignore the
+region, return an unrelated prestarted transfer, or start and then report
+rejection. That integration-honesty boundary is published beside the
+`TouchReader` untorn-snapshot obligation rather than claimed away.
+
+`Sweep::abort` now returns the sweep unchanged while its target is outstanding
+and succeeds only from ready or poisoned state. An accepted flight can always
+use the contractually settling path — begin drain, poll completion, recover the
+mandatory settlement, reconcile it through `Sweep::settle`, then abort — so
+the restriction adds no driven-path liveness cost. The remaining explicit
+escape is drop plus `FrameDemand::abandon_active`: reviewed adapters must
+synchronously cancel the physical operation and disarm completion registration
+when a flight is dropped, while safe Rust cannot force a dishonest caller to
+drop an old sweep rather than retain and drive it.
+
+Idle invalidation is now sticky. `invalidate()` records a pending latch that
+only the next successful `begin_sweep` transfers into that minted epoch's
+discard state; rejected, throttled, or panicking begin attempts cannot erase
+it. Thus invalidation between abort/abandon and replacement cannot be lost.
+The remaining finding-5 evidence repairs cover the private `from_started`
+constructor, `StartFlightError`'s move-only boundary, and every observable
+epoch/throttle state after demand-settlement rejection. With those oracles
+landed, the sweep-coverage manifest row is corrected.
+
+Batch 7 verification passed: 59 runtime oracles plus 25 compile-fail and 7
+compile-pass UI controls; trybuild first ran with `TRYBUILD=overwrite`, every
+changed snapshot was read, and then passed clean. `cargo fmt --all --check`,
+workspace/all-target/all-feature clippy with warnings denied, the full
+workspace/all-feature test suite, and workspace rustdoc with warnings denied
+all passed. The canonical example ran both a written frame and settled
+shutdown; the downstream fixture ran on host; and both the profile library and
+that external consumer built for `thumbv7em-none-eabi --release`. No external
+Xtensa, board-HIL, kernel-admission, sealing, or bilateral-seam result is
+claimed by those host/ARM gates.

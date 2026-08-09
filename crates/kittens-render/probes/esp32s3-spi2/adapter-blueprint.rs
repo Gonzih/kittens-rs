@@ -17,10 +17,13 @@
 //! Differences from VERDICT.md's historical blueprint:
 //! 1. `poll_done` returns `Poll<()>`; the outcome is stored internally and
 //!    reported only by `recover` (correction 5).
-//! 2. Public code cannot pair an already-started transfer with a target.
-//!    `StripeTarget::start_flight(spare, starter)` calls `starter` with that
-//!    target's exact `Region`; `StartFlightError` returns the starter error,
-//!    spare, and unchanged target when no transfer was accepted.
+//! 2. `StripeTarget::start_flight(spare, starter)` calls the operation-bound
+//!    `FlightStarter::start` implementation with that target's exact `Region`;
+//!    `StartFlightError` returns the starter error, spare, and unchanged target
+//!    when the integration reports that no transfer was accepted. This is
+//!    structural only after `FlightStarter` is sealed to reviewed adapters.
+//!    During the experiment, a dishonest safe implementation can still return
+//!    a prestarted transfer for another region or start and then return `Err`.
 //! 3. `Settled::into_parts` returns resources plus exactly one
 //!    `StripeSettlement`; `Sweep::settle` advances on `Written` and poisons
 //!    irreversibly on `Unwritten` (cancelled/failed).
@@ -29,9 +32,19 @@
 //!
 //! Conceptual call-site delta (also pseudocode):
 //!
-//! let flight = target.start_flight(spare, |region| {
-//!     adapter.start_region(sent, region) // Result<StartedTransfer, StartError>
-//! })?;
+//! struct Esp32s3RegionStart { adapter: Adapter, sent: SentBuffer }
+//!
+//! impl FlightStarter for Esp32s3RegionStart {
+//!     type Transfer = StartedTransfer;
+//!     type Error = StartError;
+//!
+//!     fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+//!         self.adapter.start_region(self.sent, region)
+//!     }
+//! }
+//!
+//! let starter = Esp32s3RegionStart { adapter, sent };
+//! let flight = target.start_flight(spare, starter)?;
 //!
 //! fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()> {
 //!     if self.settled.is_some() { return Poll::Ready(()); }

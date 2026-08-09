@@ -9,26 +9,63 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
+use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
-use kittens_render::sweep::{StripeSettlement, StripeTarget};
-use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::sweep::{StripeSettlement, StripeTarget, Sweep};
+use kittens_render::transfer::{
+    FlightStarter, InFlight, OwnedTransfer, Recovered, TransferOutcome,
+};
+
+fn relinquish_owned<T>(_value: T) {}
 
 /// Targets are unforgeable; the transfer suite mints them through a
-/// throwaway demand/sweep, which is exactly the only legal path.
-fn target() -> StripeTarget {
+/// live demand/sweep, which is exactly the only legal path. The context keeps
+/// that owning sweep available until the transfer settlement is reconciled.
+struct TargetContext {
+    demand: FrameDemand,
+    sweep: Sweep<()>,
+}
+
+impl TargetContext {
+    fn settle(self, settlement: StripeSettlement) {
+        let Self {
+            mut demand,
+            mut sweep,
+        } = self;
+        let outcome = settlement.outcome();
+        assert_eq!(sweep.settle(settlement), Ok(outcome));
+        match outcome {
+            TransferOutcome::Completed => {
+                let (written, ()) = sweep.finish().expect("one-stripe sweep written");
+                assert_eq!(
+                    demand.finish_written(written, Tick(1)),
+                    Ok(WrittenDisposition::Effective)
+                );
+            }
+            TransferOutcome::Cancelled | TransferOutcome::Failed => {
+                let (aborted, ()) = sweep.abort().expect("settlement cleared outstanding");
+                demand
+                    .finish_failed(aborted, Tick(1))
+                    .expect("active abort");
+            }
+        }
+    }
+
+    fn abandon(self) {
+        let Self { mut demand, sweep } = self;
+        relinquish_owned(sweep);
+        demand.abandon_active();
+    }
+}
+
+fn target() -> (TargetContext, StripeTarget) {
     let geometry = PanelGeometry::custom_unvalidated_panel(REGION_FULL);
     let plan = kittens_render::sweep::SweepPlan::for_panel(geometry, 4).expect("plan");
-    let mut demand = kittens_render::demand::FrameDemand::new(0, plan);
+    let mut demand = FrameDemand::new(0, plan);
     demand.request();
-    let mut sweep = demand
-        .begin_sweep(kittens_render::demand::Tick(0), ())
-        .expect("mint");
+    let mut sweep = demand.begin_sweep(Tick(0), ()).expect("mint");
     let target = sweep.next_target().expect("first stripe");
-    let (aborted, ()) = sweep.abort();
-    demand
-        .finish_failed(aborted, kittens_render::demand::Tick(0))
-        .expect("active");
-    target
+    (TargetContext { demand, sweep }, target)
 }
 
 const REGION_FULL: Region = Region {
@@ -139,6 +176,37 @@ fn start_on(
     }
 }
 
+struct ModelStart {
+    slot: Arc<SharedSlot>,
+    transport: ModelTransport,
+    buffer: ModelBuffer,
+}
+
+impl FlightStarter for ModelStart {
+    type Transfer = ModelTransfer;
+    type Error = core::convert::Infallible;
+
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        Ok(start_on(&self.slot, self.transport, self.buffer, region))
+    }
+}
+
+struct RejectStart {
+    expected: Region,
+    transport: ModelTransport,
+    buffer: ModelBuffer,
+}
+
+impl FlightStarter for RejectStart {
+    type Transfer = ModelTransfer;
+    type Error = (ModelTransport, ModelBuffer);
+
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        assert_eq!(region, self.expected, "target supplies the starter region");
+        Err((self.transport, self.buffer))
+    }
+}
+
 impl ModelTransfer {
     fn disarm_slot(&self) {
         let mut state = self.slot.state.lock().expect("slot lock");
@@ -235,25 +303,29 @@ impl OwnedTransfer for ModelTransfer {
 
 impl Drop for ModelTransfer {
     fn drop(&mut self) {
-        // A dropped pending transfer must not leave a stale registration:
-        // the adapter's Drop disarms the slot (finding 1's drop trace).
+        // A dropped pending transfer must cancel the physical operation and
+        // leave no stale registration: this is the reviewed adapter Drop
+        // contract that bounds the non-returning path.
         if self.transport.is_some() {
+            self.cancel();
             self.disarm_slot();
         }
     }
 }
 
-fn flight_on(slot: &Arc<SharedSlot>) -> InFlight<ModelTransfer, ModelSpare> {
-    target()
-        .start_flight(ModelSpare("spare-0"), |region| {
-            Ok::<_, core::convert::Infallible>(start_on(
-                slot,
-                ModelTransport("qspi"),
-                ModelBuffer("buf-a"),
-                region,
-            ))
-        })
-        .expect("infallible model start")
+fn flight_on(slot: &Arc<SharedSlot>) -> (TargetContext, InFlight<ModelTransfer, ModelSpare>) {
+    let (context, target) = target();
+    let flight = target
+        .start_flight(
+            ModelSpare("spare-0"),
+            ModelStart {
+                slot: Arc::clone(slot),
+                transport: ModelTransport("qspi"),
+                buffer: ModelBuffer("buf-a"),
+            },
+        )
+        .expect("infallible model start");
+    (context, flight)
 }
 
 #[test]
@@ -270,9 +342,10 @@ fn starter_error_returns_target_spare_and_error_for_retry() {
 
     let rejected = target.start_flight(
         ModelSpare("spare-0"),
-        |region| -> Result<ModelTransfer, (ModelTransport, ModelBuffer)> {
-            assert_eq!(region, expected, "target supplies the starter region");
-            Err((ModelTransport("qspi"), ModelBuffer("buf-a")))
+        RejectStart {
+            expected,
+            transport: ModelTransport("qspi"),
+            buffer: ModelBuffer("buf-a"),
         },
     );
     let Err(rejected) = rejected else {
@@ -287,12 +360,21 @@ fn starter_error_returns_target_spare_and_error_for_retry() {
         sweep.next_target().is_none(),
         "the returned target remains the sole outstanding target"
     );
+    let Err(returned) = sweep.abort() else {
+        panic!("a rejected start leaves the target outstanding")
+    };
+    sweep = returned;
 
     let slot = Arc::new(SharedSlot::default());
     let mut flight = target
-        .start_flight(spare, |region| {
-            Ok::<_, core::convert::Infallible>(start_on(&slot, transport, buffer, region))
-        })
+        .start_flight(
+            spare,
+            ModelStart {
+                slot: Arc::clone(&slot),
+                transport,
+                buffer,
+            },
+        )
         .expect("retry accepts the same target");
     slot.complete();
     let (_counter, waker) = counting_waker();
@@ -316,7 +398,7 @@ fn starter_error_returns_target_spare_and_error_for_retry() {
 #[test]
 fn polled_then_lost_arbitration_gets_exactly_one_wake() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -330,46 +412,53 @@ fn polled_then_lost_arbitration_gets_exactly_one_wake() {
         "one completion wake"
     );
 
-    match flight.poll_complete(&mut cx) {
+    let settlement = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
             assert_eq!(settled.outcome(), TransferOutcome::Completed);
             let (transport, buffer, spare, settlement) = settled.into_parts();
-            assert!(matches!(settlement, StripeSettlement::Written(_)));
+            assert_eq!(settlement.outcome(), TransferOutcome::Completed);
             assert_eq!(transport.0, "qspi");
             assert_eq!(buffer.0, "buf-a");
             assert_eq!(spare.0, "spare-0");
+            settlement
         }
         Poll::Pending => panic!("completed transfer must recover"),
-    }
+    };
     assert!(flight.is_spent());
     assert!(slot.is_disarmed(), "recovery disarms the shared slot");
+    context.settle(settlement);
 }
 
 #[test]
 fn unpolled_below_winner_recovers_on_first_poll() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     slot.complete();
 
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
-    assert!(flight.poll_complete(&mut cx).is_ready());
+    let Poll::Ready(settled) = flight.poll_complete(&mut cx) else {
+        panic!("completed transfer recovers on first poll")
+    };
     assert_eq!(counter.wakes.load(Ordering::SeqCst), 0);
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    context.settle(settlement);
 }
 
 #[test]
 fn completion_during_registration_is_not_lost() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     slot.state.lock().expect("slot lock").complete_on_register = true;
 
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
-    assert!(
-        flight.poll_complete(&mut cx).is_ready(),
-        "register-then-recheck observes the racing completion in the same poll"
-    );
+    let Poll::Ready(settled) = flight.poll_complete(&mut cx) else {
+        panic!("register-then-recheck observes the racing completion in the same poll")
+    };
     assert_eq!(counter.wakes.load(Ordering::SeqCst), 0);
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    context.settle(settlement);
 }
 
 /// Finding 2's adversarial oracle: cancel first, hardware completes late,
@@ -378,7 +467,7 @@ fn completion_during_registration_is_not_lost() {
 #[test]
 fn cancel_then_late_completion_stays_cancelled() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -390,7 +479,7 @@ fn cancel_then_late_completion_stays_cancelled() {
     // before the repoll.
     slot.complete();
 
-    match flight.poll_complete(&mut cx) {
+    let settlement = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
             assert_eq!(
                 settled.outcome(),
@@ -398,63 +487,61 @@ fn cancel_then_late_completion_stays_cancelled() {
                 "late completion cannot rewrite a cancelled settlement"
             );
             let (_transport, _buffer, _spare, settlement) = settled.into_parts();
-            assert!(
-                matches!(settlement, StripeSettlement::Unwritten(ref unwritten)
-                    if unwritten.outcome() == TransferOutcome::Cancelled),
-                "cancellation mints the mandatory poison witness"
-            );
+            assert_eq!(settlement.outcome(), TransferOutcome::Cancelled);
+            settlement
         }
         Poll::Pending => panic!("a drained transfer must settle"),
-    }
+    };
+    context.settle(settlement);
 }
 
 #[test]
 fn drain_racing_prior_completion_reports_completed() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     slot.complete();
     flight.begin_drain();
 
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
-    match flight.poll_complete(&mut cx) {
+    let settlement = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
             assert_eq!(settled.outcome(), TransferOutcome::Completed);
             let (_transport, _buffer, _spare, settlement) = settled.into_parts();
-            assert!(matches!(settlement, StripeSettlement::Written(_)));
+            assert_eq!(settlement.outcome(), TransferOutcome::Completed);
+            settlement
         }
         Poll::Pending => panic!("settled transfer must recover"),
-    }
+    };
+    context.settle(settlement);
 }
 
 #[test]
 fn failure_settles_returns_resources_and_mints_unwritten_witness() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
     assert!(flight.poll_complete(&mut cx).is_pending());
 
     slot.fail();
-    match flight.poll_complete(&mut cx) {
+    let settlement = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
             assert_eq!(settled.outcome(), TransferOutcome::Failed);
             let (_transport, buffer, _spare, settlement) = settled.into_parts();
-            assert!(matches!(
-                settlement,
-                StripeSettlement::Unwritten(ref unwritten)
-                    if unwritten.outcome() == TransferOutcome::Failed
-            ));
+            assert_eq!(settlement.outcome(), TransferOutcome::Failed);
             assert_eq!(buffer.0, "buf-a", "buffer recovered");
+            settlement
         }
         Poll::Pending => panic!("failed transfer must settle"),
-    }
+    };
+    context.settle(settlement);
 }
 
 #[test]
 fn waker_replacement_wakes_only_the_newest() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (old_counter, old_waker) = counting_waker();
     let (new_counter, new_waker) = counting_waker();
 
@@ -476,6 +563,11 @@ fn waker_replacement_wakes_only_the_newest() {
         "stale waker silent"
     );
     assert_eq!(new_counter.wakes.load(Ordering::SeqCst), 1, "newest woken");
+    let Poll::Ready(settled) = flight.poll_complete(&mut Context::from_waker(&new_waker)) else {
+        panic!("completed transfer settles after replacement wake")
+    };
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    context.settle(settlement);
 }
 
 /// Finding 1's late-IRQ trace, now meaningful: recovery disarmed the
@@ -484,13 +576,16 @@ fn waker_replacement_wakes_only_the_newest() {
 #[test]
 fn late_completion_after_recovery_is_inert_via_disarm() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
     assert!(flight.poll_complete(&mut cx).is_pending());
     slot.complete();
-    assert!(flight.poll_complete(&mut cx).is_ready());
+    let Poll::Ready(settled) = flight.poll_complete(&mut cx) else {
+        panic!("completed transfer recovers")
+    };
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
     let wakes_at_recovery = counter.wakes.load(Ordering::SeqCst);
     assert!(slot.is_disarmed());
 
@@ -500,6 +595,7 @@ fn late_completion_after_recovery_is_inert_via_disarm() {
         wakes_at_recovery,
         "wakes nobody"
     );
+    context.settle(settlement);
 }
 
 /// Finding 1's drop trace: dropping a pending in-flight transfer disarms
@@ -510,15 +606,23 @@ fn late_completion_after_recovery_is_inert_via_disarm() {
 fn dropped_pending_transfer_disarms_the_slot() {
     let slot = Arc::new(SharedSlot::default());
     let (counter, waker) = counting_waker();
-    {
-        let mut flight = flight_on(&slot);
+    let context = {
+        let (context, mut flight) = flight_on(&slot);
         let mut cx = Context::from_waker(&waker);
         assert!(flight.poll_complete(&mut cx).is_pending());
         // flight dropped here with the transfer pending.
-    }
+        context
+    };
     assert!(slot.is_disarmed(), "drop disarms");
+    let wakes_at_drop = counter.wakes.load(Ordering::SeqCst);
+    assert_eq!(wakes_at_drop, 1, "adapter Drop cancellation wakes progress");
     slot.complete();
-    assert_eq!(counter.wakes.load(Ordering::SeqCst), 0, "no stale wake");
+    assert_eq!(
+        counter.wakes.load(Ordering::SeqCst),
+        wakes_at_drop,
+        "late completion adds no stale wake"
+    );
+    context.abandon();
 }
 
 /// Finding 1's N→N+1 trace against the SAME shared slot: the second
@@ -529,7 +633,7 @@ fn sequential_transfers_reuse_the_same_slot() {
     let (_c, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
-    let mut first = flight_on(&slot);
+    let (first_context, mut first) = flight_on(&slot);
     slot.complete();
     let settled = match first.poll_complete(&mut cx) {
         Poll::Ready(s) => s,
@@ -539,35 +643,39 @@ fn sequential_transfers_reuse_the_same_slot() {
 
     // Second transfer on the SAME slot with the recovered transport.
     let (transport, _buffer, spare, first_settlement) = settled.into_parts();
-    assert!(matches!(first_settlement, StripeSettlement::Written(_)));
-    let mut second = target()
-        .start_flight(spare, |region| {
-            Ok::<_, core::convert::Infallible>(start_on(
-                &slot,
+    assert_eq!(first_settlement.outcome(), TransferOutcome::Completed);
+    first_context.settle(first_settlement);
+    let (second_context, second_target) = target();
+    let mut second = second_target
+        .start_flight(
+            spare,
+            ModelStart {
+                slot: Arc::clone(&slot),
                 transport,
-                ModelBuffer("buf-b"),
-                region,
-            ))
-        })
+                buffer: ModelBuffer("buf-b"),
+            },
+        )
         .expect("infallible second start");
     assert!(second.poll_complete(&mut cx).is_pending());
     slot.complete();
-    match second.poll_complete(&mut cx) {
+    let settlement = match second.poll_complete(&mut cx) {
         Poll::Ready(s) => {
             assert_eq!(s.outcome(), TransferOutcome::Completed);
             let (transport, _b, spare, settlement) = s.into_parts();
-            assert!(matches!(settlement, StripeSettlement::Written(_)));
+            assert_eq!(settlement.outcome(), TransferOutcome::Completed);
             assert_eq!(transport.0, "qspi", "same transport identity");
             assert_eq!(spare.0, "spare-0", "same spare identity");
+            settlement
         }
         Poll::Pending => panic!("second settles"),
-    }
+    };
+    second_context.settle(settlement);
 }
 
 #[test]
 fn spare_is_writable_during_flight_and_drain_flag_clears() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot);
+    let (context, mut flight) = flight_on(&slot);
     let (_c, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -576,11 +684,15 @@ fn spare_is_writable_during_flight_and_drain_flag_clears() {
 
     flight.begin_drain();
     assert!(flight.is_draining());
-    assert!(flight.poll_complete(&mut cx).is_ready());
+    let Poll::Ready(settled) = flight.poll_complete(&mut cx) else {
+        panic!("drained transfer settles")
+    };
     assert!(
         !flight.is_draining(),
         "settled adapter is no longer draining"
     );
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    context.settle(settlement);
 }
 
 // ---------------------------------------------------------------------------

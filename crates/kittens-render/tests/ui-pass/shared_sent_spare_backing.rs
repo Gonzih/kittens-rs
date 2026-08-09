@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 use kittens_render::demand::{FrameDemand, Tick};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::SweepPlan;
-use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
 
 struct AliasTransfer {
     region: Region,
@@ -35,6 +35,22 @@ impl OwnedTransfer for AliasTransfer {
     }
 }
 
+struct AliasStart {
+    sent: Rc<Cell<u8>>,
+}
+
+impl FlightStarter for AliasStart {
+    type Transfer = AliasTransfer;
+    type Error = Infallible;
+
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        Ok(AliasTransfer {
+            region,
+            buffer: self.sent,
+        })
+    }
+}
+
 fn main() {
     let plan = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, 56).expect("valid plan");
     let mut demand = FrameDemand::new(0, plan);
@@ -46,12 +62,7 @@ fn main() {
     let sent = Rc::clone(&shared);
     let spare = Rc::clone(&shared);
     let mut flight = target
-        .start_flight(spare, |region| {
-            Ok::<AliasTransfer, Infallible>(AliasTransfer {
-                region,
-                buffer: sent,
-            })
-        })
+        .start_flight(spare, AliasStart { sent })
         .expect("infallible start");
 
     flight.spare_mut().expect("spare").set(7);
@@ -64,6 +75,6 @@ fn main() {
     assert_eq!(spare.get(), 7);
     sweep.settle(settlement).expect("own settlement");
 
-    let (aborted, ()) = sweep.abort();
+    let (aborted, ()) = sweep.abort().expect("settled target permits abort");
     demand.finish_failed(aborted, Tick(0)).expect("active");
 }

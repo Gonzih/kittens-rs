@@ -15,7 +15,7 @@ use std::task::{Context, Poll, Waker};
 use kittens_render::demand::{ForeignSweep, FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{FrameEpoch, PanelGeometry, Region};
 use kittens_render::sweep::{InvalidPlan, StripeSettlement, StripeTarget, Sweep, SweepPlan};
-use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
 
 const PANEL: Region = Region {
     x: 0,
@@ -23,6 +23,8 @@ const PANEL: Region = Region {
     width: 8,
     height: 4,
 };
+
+fn relinquish_owned<T>(_value: T) {}
 
 fn plan() -> SweepPlan {
     SweepPlan::for_panel(PanelGeometry::custom_unvalidated_panel(PANEL), 2).expect("valid plan")
@@ -41,6 +43,42 @@ fn observable_demand_state(demand: &FrameDemand) -> (bool, Option<FrameEpoch>, b
     )
 }
 
+/// Completes the rightful active epoch through failure, then proves a prior
+/// rejected terminal witness changed neither the hidden next-epoch sequence
+/// nor the hidden throttle position. These machines use a nonzero interval;
+/// with no successful write, the successor must still mint immediately.
+fn assert_rejection_preserved_future(
+    demand: &mut FrameDemand,
+    active: Sweep<()>,
+    expected_successor: u64,
+) {
+    let (aborted, ()) = active
+        .abort()
+        .expect("rightful sweep has no outstanding target");
+    demand
+        .finish_failed(aborted, Tick(1))
+        .expect("rightful abort remains accepted");
+    assert_eq!(
+        demand.eligible_at(),
+        None,
+        "rejection left no hidden deadline or scheduled wake after rightful settlement"
+    );
+    let successor = demand
+        .begin_sweep(Tick(1), ())
+        .expect("rejection did not install a hidden throttle position");
+    assert_eq!(
+        successor.epoch().get(),
+        expected_successor,
+        "rejection did not skip or reuse a hidden epoch"
+    );
+    let (aborted, ()) = successor
+        .abort()
+        .expect("successor has no outstanding target");
+    demand
+        .finish_failed(aborted, Tick(1))
+        .expect("successor cleanup");
+}
+
 // --- minimal model transfer for witness minting -------------------------
 
 struct Hw {
@@ -52,6 +90,28 @@ struct ModelTransfer {
     hw: Arc<Hw>,
     resources: Option<((), ())>,
     settled: Option<TransferOutcome>,
+}
+
+struct ModelStart {
+    hw: Arc<Hw>,
+    expected_region: Region,
+}
+
+impl FlightStarter for ModelStart {
+    type Transfer = ModelTransfer;
+    type Error = core::convert::Infallible;
+
+    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+        assert_eq!(
+            region, self.expected_region,
+            "target supplies the start region"
+        );
+        Ok(ModelTransfer {
+            hw: self.hw,
+            resources: Some(((), ())),
+            settled: None,
+        })
+    }
 }
 
 impl OwnedTransfer for ModelTransfer {
@@ -90,6 +150,14 @@ impl OwnedTransfer for ModelTransfer {
     }
 }
 
+impl Drop for ModelTransfer {
+    fn drop(&mut self) {
+        if self.resources.is_some() {
+            self.cancel();
+        }
+    }
+}
+
 /// Drives one already-issued target to the requested model outcome and
 /// returns its mandatory move-only settlement witness.
 fn transfer_target(target: StripeTarget, outcome: TransferOutcome) -> StripeSettlement {
@@ -99,14 +167,13 @@ fn transfer_target(target: StripeTarget, outcome: TransferOutcome) -> StripeSett
         fail: Mutex::new(false),
     });
     let mut flight = target
-        .start_flight((), |region| {
-            assert_eq!(region, expected_region, "target supplies the start region");
-            Ok::<_, core::convert::Infallible>(ModelTransfer {
+        .start_flight(
+            (),
+            ModelStart {
                 hw: Arc::clone(&hw),
-                resources: Some(((), ())),
-                settled: None,
-            })
-        })
+                expected_region,
+            },
+        )
         .expect("infallible model start");
     match outcome {
         TransferOutcome::Completed => *hw.done.lock().expect("hw") = true,
@@ -174,7 +241,7 @@ fn requests_coalesce_and_epochs_are_monotonic() {
     demand.request();
     let sweep = demand.begin_sweep(Tick(1), ()).expect("second");
     assert_eq!(sweep.epoch().get(), 1, "strictly monotonic");
-    let (aborted, ()) = sweep.abort();
+    let (aborted, ()) = sweep.abort().expect("new sweep has no outstanding target");
     demand.finish_failed(aborted, Tick(1)).expect("active");
 }
 
@@ -212,7 +279,9 @@ fn assert_unwritten_settlement_poisons(outcome: TransferOutcome) {
         "failed finish returns the poisoned sweep unchanged"
     );
     assert!(sweep.next_target().is_none(), "only abort remains");
-    let (aborted, ()) = sweep.abort();
+    let (aborted, ()) = sweep
+        .abort()
+        .expect("poisoned settlement cleared outstanding");
     demand.finish_failed(aborted, Tick(1)).expect("active");
     assert!(demand.is_dirty());
     assert!(demand.sweeping().is_none());
@@ -249,14 +318,13 @@ const fn alloc_free_scene(value: u32) -> u32 {
 #[test]
 fn foreign_and_stale_settlement_is_rejected_without_mutation() {
     let mut left = demand();
-    let mut right = demand();
+    let mut right = FrameDemand::new(10, plan());
     left.request();
     right.request();
 
     let left_sweep = left.begin_sweep(Tick(0), ()).expect("left sweep");
     let right_sweep = right.begin_sweep(Tick(0), ()).expect("right sweep");
     let (left_written, ()) = write_all(left_sweep);
-    let (right_written, ()) = write_all(right_sweep);
 
     // Both minted epoch 0 — provenance branding, not epoch numbers, must
     // reject the swap (finding 6), in release builds, without mutation.
@@ -271,28 +339,25 @@ fn foreign_and_stale_settlement_is_rejected_without_mutation() {
         "every observable stays unchanged on foreign written rejection"
     );
 
-    // The rightful witnesses settle normally afterwards.
-    assert_eq!(
-        right.finish_written(right_written, Tick(1)),
-        Ok(WrittenDisposition::Effective)
-    );
     // left's witness was consumed by the failed attempt on `right`;
     // recover left via abandon (its sweep value is gone).
     left.abandon_active();
     assert!(left.is_dirty());
+    assert_rejection_preserved_future(&mut right, right_sweep, 1);
 }
 
 #[test]
 fn foreign_failed_settlement_is_rejected_without_mutation() {
     let mut left = demand();
-    let mut right = demand();
+    let mut right = FrameDemand::new(10, plan());
     left.request();
     right.request();
 
     let left_sweep = left.begin_sweep(Tick(0), ()).expect("left sweep");
     let right_sweep = right.begin_sweep(Tick(0), ()).expect("right sweep");
-    let (left_aborted, ()) = left_sweep.abort();
-    let (right_aborted, ()) = right_sweep.abort();
+    let (left_aborted, ()) = left_sweep
+        .abort()
+        .expect("left sweep has no outstanding target");
 
     let before = observable_demand_state(&right);
     assert_eq!(
@@ -304,21 +369,18 @@ fn foreign_failed_settlement_is_rejected_without_mutation() {
         before,
         "foreign abort cannot disturb the active demand state"
     );
-    right
-        .finish_failed(right_aborted, Tick(1))
-        .expect("rightful abort still settles");
     left.abandon_active();
+    assert_rejection_preserved_future(&mut right, right_sweep, 1);
 }
 
 #[test]
 fn stale_failed_settlement_is_rejected_without_mutation() {
-    let mut demand = demand();
+    let mut demand = FrameDemand::new(10, plan());
     demand.request();
     let old = demand.begin_sweep(Tick(0), ()).expect("old");
-    let (old_aborted, ()) = old.abort();
+    let (old_aborted, ()) = old.abort().expect("old sweep has no outstanding target");
     demand.abandon_active();
     let replacement = demand.begin_sweep(Tick(0), ()).expect("replacement");
-    let (replacement_aborted, ()) = replacement.abort();
 
     let before = observable_demand_state(&demand);
     assert_eq!(
@@ -330,9 +392,7 @@ fn stale_failed_settlement_is_rejected_without_mutation() {
         before,
         "stale abort rejection leaves all observable state unchanged"
     );
-    demand
-        .finish_failed(replacement_aborted, Tick(1))
-        .expect("replacement abort remains valid");
+    assert_rejection_preserved_future(&mut demand, replacement, 2);
 }
 
 #[test]
@@ -369,6 +429,88 @@ fn invalidation_mid_sweep_discards_that_sweeps_settlement() {
     );
 }
 
+fn assert_idle_invalidation_discards_exactly_next(demand: &mut FrameDemand, expected_epoch: u64) {
+    demand.invalidate();
+    let replacement = demand
+        .begin_sweep(Tick(50), ())
+        .expect("sticky idle invalidation raises immediately eligible demand");
+    assert_eq!(replacement.epoch().get(), expected_epoch);
+    let (written, ()) = write_all(replacement);
+    assert_eq!(
+        demand.finish_written(written, Tick(50)),
+        Ok(WrittenDisposition::DiscardedByInvalidation),
+        "the next minted sweep inherits the idle invalidation"
+    );
+    assert!(demand.is_dirty());
+    assert!(demand.full_repaint_required());
+
+    let repaint = demand.begin_sweep(Tick(50), ()).expect(
+        "discarded replacement did not advance throttle and consumed the pending latch once",
+    );
+    assert_eq!(repaint.epoch().get(), expected_epoch + 1);
+    let (written, ()) = write_all(repaint);
+    assert_eq!(
+        demand.finish_written(written, Tick(51)),
+        Ok(WrittenDisposition::Effective),
+        "only the first replacement is marked non-clearing"
+    );
+    assert!(!demand.full_repaint_required());
+}
+
+#[test]
+fn idle_invalidation_after_abort_sticks_to_the_replacement() {
+    let mut demand = FrameDemand::new(10, plan());
+    demand.request();
+    let sweep = demand.begin_sweep(Tick(0), ()).expect("initial sweep");
+    let (aborted, ()) = sweep
+        .abort()
+        .expect("initial sweep has no outstanding target");
+    demand
+        .finish_failed(aborted, Tick(1))
+        .expect("active abort");
+
+    assert_idle_invalidation_discards_exactly_next(&mut demand, 1);
+}
+
+#[test]
+fn idle_invalidation_after_abandon_sticks_to_the_replacement() {
+    let mut demand = FrameDemand::new(10, plan());
+    demand.request();
+    {
+        let _relinquished_sweep = demand.begin_sweep(Tick(0), ()).expect("initial sweep");
+    }
+    demand.abandon_active();
+
+    assert_idle_invalidation_discards_exactly_next(&mut demand, 1);
+}
+
+#[test]
+fn throttled_begin_does_not_consume_idle_invalidation() {
+    let mut demand = FrameDemand::new(10, plan());
+    demand.request();
+    let first = demand.begin_sweep(Tick(0), ()).expect("initial sweep");
+    let (written, ()) = write_all(first);
+    assert_eq!(
+        demand.finish_written(written, Tick(0)),
+        Ok(WrittenDisposition::Effective)
+    );
+
+    demand.invalidate();
+    assert!(
+        demand.begin_sweep(Tick(9), ()).is_none(),
+        "the forced repaint is still throttled by the prior effective write"
+    );
+    let replacement = demand
+        .begin_sweep(Tick(10), ())
+        .expect("first eligible mint still receives the pending invalidation");
+    assert_eq!(replacement.epoch().get(), 1);
+    let (written, ()) = write_all(replacement);
+    assert_eq!(
+        demand.finish_written(written, Tick(10)),
+        Ok(WrittenDisposition::DiscardedByInvalidation)
+    );
+}
+
 #[test]
 fn effective_settlement_advances_throttle_and_clears_obligation() {
     let mut demand = FrameDemand::new(10, plan());
@@ -397,7 +539,9 @@ fn failed_sweep_retains_demand_and_throttle_position() {
 
     demand.request();
     let sweep = demand.begin_sweep(Tick(10), ()).expect("second");
-    let (aborted, ()) = sweep.abort();
+    let (aborted, ()) = sweep
+        .abort()
+        .expect("failed sweep has no outstanding target");
     demand.finish_failed(aborted, Tick(11)).expect("active");
 
     assert!(demand.is_dirty());
@@ -507,6 +651,21 @@ fn only_one_target_is_outstanding_and_settlement_clears_it() {
         before,
         "outstanding-finish rejection returns the sweep unchanged"
     );
+    let Err(returned) = sweep.abort() else {
+        panic!("an outstanding target prevents abort")
+    };
+    sweep = returned;
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        before,
+        "outstanding-abort rejection returns the sweep unchanged"
+    );
 
     let settlement = transfer_target(target, TransferOutcome::Completed);
     assert_eq!(sweep.settle(settlement), Ok(TransferOutcome::Completed));
@@ -533,11 +692,23 @@ fn only_one_target_is_outstanding_and_settlement_clears_it() {
         incomplete,
         "incomplete-finish rejection returns the sweep unchanged"
     );
-    let _second = sweep
+    let second = sweep
         .next_target()
         .expect("settlement cleared outstanding for the next position");
-
-    let (aborted, ()) = sweep.abort();
+    let Err(returned) = sweep.abort() else {
+        panic!("the second outstanding target also prevents abort")
+    };
+    sweep = returned;
+    let cancelled = transfer_target(second, TransferOutcome::Cancelled);
+    assert_eq!(
+        sweep.settle(cancelled),
+        Ok(TransferOutcome::Cancelled),
+        "begin_drain + poll_complete produces the settlement that clears outstanding"
+    );
+    assert!(sweep.is_poisoned());
+    let (aborted, ()) = sweep
+        .abort()
+        .expect("settled cancellation permits shutdown abort");
     demand.finish_failed(aborted, Tick(1)).expect("active");
 }
 
@@ -588,10 +759,11 @@ fn cross_demand_stripe_settlement_is_rejected_without_mutation() {
         "the rightful settlement still advances"
     );
 
-    let (left_aborted, ()) = left.abort();
-    left_demand
-        .finish_failed(left_aborted, Tick(1))
-        .expect("left abort");
+    // The left settlement witness was consumed by the deliberate foreign
+    // reconciliation attempt, so its sweep remains outstanding and cannot
+    // abort. No transfer remains live; use the explicit lost-token recovery.
+    relinquish_owned(left);
+    left_demand.abandon_active();
     let (right_written, ()) = write_all(right);
     right_demand
         .finish_written(right_written, Tick(1))
@@ -648,7 +820,7 @@ fn request_during_active_sweep_survives_settlement() {
     assert!(demand.is_dirty(), "mid-sweep demand survives settlement");
     let sweep = demand.begin_sweep(Tick(1), ()).expect("next epoch");
     assert_eq!(sweep.epoch().get(), 1);
-    let (aborted, ()) = sweep.abort();
+    let (aborted, ()) = sweep.abort().expect("next epoch has no outstanding target");
     demand.finish_failed(aborted, Tick(1)).expect("active");
 }
 
@@ -721,18 +893,19 @@ fn tick_horizon_is_checked_without_state_mutation() {
 
 #[test]
 fn abandoned_epochs_witnesses_are_terminally_rejected() {
-    let mut demand = demand();
+    let mut demand = FrameDemand::new(10, plan());
     demand.request();
     let old_sweep = demand.begin_sweep(Tick(0), ()).expect("epoch 0");
+    // Produce the old terminal witness before abandonment. The explicit
+    // ui-pass escape, not this positive oracle, owns post-abandon stale start.
+    let (old_written, ()) = write_all(old_sweep);
     demand.abandon_active();
 
     let new_sweep = demand.begin_sweep(Tick(0), ()).expect("epoch 1");
     assert_eq!(new_sweep.epoch().get(), 1);
 
-    // The old sweep is still live and can still produce a witness — the
-    // documented caller obligation is to drain it; the machine's guarantee
-    // is that its witness is terminally rejected without mutation.
-    let (old_written, ()) = write_all(old_sweep);
+    // The machine's guarantee is that the abandoned epoch's already-minted
+    // witness is terminally rejected without immediate or hidden mutation.
     let before = observable_demand_state(&demand);
     assert_eq!(
         demand.finish_written(old_written, Tick(1)),
@@ -744,7 +917,5 @@ fn abandoned_epochs_witnesses_are_terminally_rejected() {
         "stale rejection did not disturb any observable live-sweep state"
     );
     assert_eq!(demand.sweeping(), Some(new_sweep.epoch()));
-
-    let (written, ()) = write_all(new_sweep);
-    demand.finish_written(written, Tick(1)).expect("active");
+    assert_rejection_preserved_future(&mut demand, new_sweep, 2);
 }

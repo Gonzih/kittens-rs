@@ -4,9 +4,10 @@
 
 - Add `kittens-render` (unpublished K2R-0 host slice): the embedded
   rendering/interaction profile anchored on the Waveshare ESP32-S3 1.8"
-  AMOLED V1 — spec-first with three external exit-review rounds adopted in
-  full; witness-driven transfer→sweep→demand composition (coverage cannot be
-  claimed, only constructed from completed settlements); provenance-branded
+  AMOLED V1 — spec-first with four external exit-review rounds adopted in
+  full; witness-driven transfer→sweep→demand composition (under sealed
+  integrations, coverage cannot be caller-claimed and is constructed only from
+  completed settlements); provenance-branded
   demand settlement; generation-latched touch protocol; K2R-0A mechanism
   verdict (SPI2 TransferDone ISR completion in a carrier that is `Unpin`
   exactly when its owned transfer and spare are both `Unpin`); the historical
@@ -27,6 +28,13 @@
   `invalidate()` remedy; use checked, profile-independent epoch and
   `Tick::MAX` horizons; add explicit move-only witness controls; and publish
   the safe shared-backing sent-buffer/spare escape.
+- Complete the `kittens-render` exit-review Batch 7 repair: replace the
+  callback starter with seal-at-freeze `FlightStarter` and state target/start
+  structure only for sealed integrations; reject sweep abort while a target is
+  outstanding; carry idle invalidation into the next minted sweep; bound the
+  explicit drop-plus-abandon escape with the reviewed adapter's synchronous
+  cancel/disarm contract; and complete the constructor-privacy, move-only start
+  error, and demand-rejection state evidence.
 
 ## 0.1.1 (kittens-tui) — 2026-08-08
 
