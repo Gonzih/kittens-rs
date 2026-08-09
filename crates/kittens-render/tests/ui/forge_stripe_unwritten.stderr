@@ -1,0 +1,14 @@
+error[E0451]: fields `demand_id`, `epoch`, `region` and `outcome` of struct `StripeUnwritten` are private
+  --> tests/ui/forge_stripe_unwritten.rs:7:9
+   |
+ 6 |     StripeUnwritten {
+   |     --------------- in this type
+ 7 |         demand_id: 0,
+   |         ^^^^^^^^^ private field
+ 8 |         epoch,
+   |         ^^^^^ private field
+ 9 |         region: Region {
+   |         ^^^^^^ private field
+...
+15 |         outcome: TransferOutcome::Failed,
+   |         ^^^^^^^ private field

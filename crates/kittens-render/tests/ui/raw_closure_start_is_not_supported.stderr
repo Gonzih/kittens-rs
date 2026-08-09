@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `{closure@$DIR/tests/ui/raw_closure_start_is_not_supported.rs:7:36: 7:58}: FlightStarter` is not satisfied
+ --> tests/ui/raw_closure_start_is_not_supported.rs:7:36
+  |
+7 |         target.start_flight(spare, move |_region: Region| Ok::<X, ()>(transfer));
+  |                ------------        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |                |
+  |                required by a bound introduced by this call
+  |
+  = help: the trait `FlightStarter` is not implemented for closure `{closure@$DIR/tests/ui/raw_closure_start_is_not_supported.rs:7:36: 7:58}`
+note: required by a bound in `transfer::<impl StripeTarget>::start_flight`
+ --> src/transfer.rs
+  |
+  |     pub fn start_flight<F, S>(
+  |            ------------ required by a bound in this associated function
+...
+  |         F: FlightStarter,
+  |            ^^^^^^^^^^^^^ required by this bound in `transfer::<impl StripeTarget>::start_flight`

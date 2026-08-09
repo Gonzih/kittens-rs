@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/construct_start_permit.rs:5:32
+  |
+5 |     let _permit = StartPermit::new(&mut key);
+  |                                ^^^ private associated function
+  |
+ ::: src/transfer.rs
+  |
+  |     pub(crate) const fn new(key: &'a mut ()) -> Self {
+  |     ------------------------------------------------ private associated function defined here

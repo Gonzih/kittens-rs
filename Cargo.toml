@@ -2,9 +2,11 @@
 members = [
     "crates/kittens",
     "crates/kittens-macros",
+    "crates/kittens-render",
     "crates/kittens-tui",
     "fixtures/feature-unifier",
     "fixtures/no-std",
+    "fixtures/render-no-std",
     "fixtures/renamed-dependency",
 ]
 resolver = "2"

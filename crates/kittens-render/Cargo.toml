@@ -1,0 +1,20 @@
+[package]
+name = "kittens-render"
+description = "Embedded rendering/interaction profile for the Kittens reactor kernel (K2R-0 host slice; unpublished)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["embedded", "rendering", "no-std", "reactor", "orchestration"]
+categories = ["embedded", "no-std", "rendering"]
+readme = "README.md"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+trybuild.workspace = true
+
+[lints]
+workspace = true

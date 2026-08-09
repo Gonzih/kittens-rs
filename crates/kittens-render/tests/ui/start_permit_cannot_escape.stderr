@@ -1,0 +1,8 @@
+error: lifetime may not live long enough
+  --> tests/ui/start_permit_cannot_escape.rs:15:9
+   |
+13 |         permit: StartPermit<'_>,
+   |         ------ has type `StartPermit<'1>`
+14 |     ) -> Result<Self::Transfer, Self::Error> {
+15 |         Err(permit)
+   |         ^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`

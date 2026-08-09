@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `Settled<T, B, S>` in the current scope
+ --> tests/ui/clone_settled.rs:4:46
+  |
+4 |     let _copy: Settled<(), (), ()> = witness.clone();
+  |                                              ^^^^^ method not found in `Settled<(), (), ()>`

@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/private_sweep_plan_constructor.rs:5:28
+  |
+5 |     let _plan = SweepPlan::new(
+  |                            ^^^ private associated function
+  |
+ ::: src/sweep.rs
+  |
+  |     pub(crate) const fn new(panel: Region, stripe_height: u16) -> Result<Self, InvalidPlan> {
+  |     --------------------------------------------------------------------------------------- private associated function defined here

@@ -1,0 +1,16 @@
+error[E0624]: associated function `mint` is private
+ --> tests/ui/private_sweep_mint.rs:5:12
+  |
+5 |       Sweep::mint((), plan, true, 0, epoch)
+  |              ^^^^ private associated function
+  |
+ ::: src/sweep.rs
+  |
+  | /     pub(crate) const fn mint(
+  | |         snapshot: S,
+  | |         plan: SweepPlan,
+  | |         full_repaint: bool,
+  | |         demand_id: u64,
+  | |         epoch: FrameEpoch,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here
