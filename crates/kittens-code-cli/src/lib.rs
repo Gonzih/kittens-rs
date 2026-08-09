@@ -3,7 +3,7 @@
 //!
 //! The binary owns bootstrap configuration and model selection. This library
 //! owns the transport-neutral stdin/stdout behavior: deserialize one
-//! [`Op`](kittens_code_protocol::op::Op) per line, assign a submission id,
+//! `kittens_code_protocol::op::Op` per line, assign a submission id,
 //! drive the supplied [`Runner`] to quiescence, and serialize newly published
 //! events exactly once.
 

@@ -21,6 +21,7 @@ jobs:
       - run: cargo test --workspace --all-targets --all-features
       - run: cargo test -p kittens --doc --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc -p kittens --all-features --no-deps
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc -p kittens-code-protocol -p kittens-code-core -p kittens-code-driver-tokio -p kittens-code-cli --no-deps
       - run: cargo build -p kittens-no-std-fixture -p kittens-code-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release --bins
       - run: cargo build -p kittens-code-protocol -p kittens-code-core --target wasm32-unknown-unknown --release
 

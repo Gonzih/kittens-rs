@@ -1,7 +1,8 @@
 //! The turn engine: a synchronous sans-io state machine (SPEC section 6).
 //!
-//! Drivers feed [`CoreInput`]s in and discharge the bounded [`CoreAction`]
-//! batches that come back. The engine owns session/turn state, the
+//! Drivers feed [`CoreInput`](crate::engine::CoreInput) values in and
+//! discharge the bounded [`CoreAction`](crate::engine::CoreAction) batches
+//! that come back. The engine owns session/turn state, the
 //! exactly-once terminal ledger (first terminal wins; late or duplicate
 //! completions are dropped with a trace record, SPEC L-T1), epoch-scoped
 //! cancellation (L-T2), the stationarity guard (L-T3), and window assembly.
