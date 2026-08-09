@@ -7,17 +7,17 @@
     <meta name="color-scheme" content="light">
     <meta
       name="description"
-      content="Kittens is an experimental no_std Rust SDK for explicit, compiler-checked async orchestration—with soft paws and an honest escape surface."
+      content="Kittens is an experimental no_std Rust SDK for compiler-checked async orchestration. Meet kittens-code, its flagship coding-agent harness demo."
     >
     <meta name="robots" content="index,follow,max-image-preview:large">
     <link rel="canonical" href="https://gonzih.github.io/kittens-rs/">
 
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Kittens">
-    <meta property="og:title" content="Kittens — Compiler-checked async orchestration">
+    <meta property="og:title" content="Kittens + kittens-code — Async orchestration with explicit law">
     <meta
       property="og:description"
-      content="Make selected async ordering defects harder to write, easier to catch, and honest at the edges."
+      content="Meet kittens-code: the flagship coding-agent harness built around typed effects, durable replay, budgeted recall, and honest boundaries."
     >
     <meta property="og:url" content="https://gonzih.github.io/kittens-rs/">
     <meta
@@ -26,13 +26,13 @@
     >
     <meta
       property="og:image:alt"
-      content="Kittens: compiler-checked async orchestration, illustrated with playful kittens and coral yarn"
+      content="Kittens and its flagship kittens-code harness, illustrated with playful kittens and coral yarn"
     >
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Kittens — Compiler-checked async orchestration">
+    <meta name="twitter:title" content="Kittens + kittens-code — Explicit async orchestration">
     <meta
       name="twitter:description"
-      content="Explicit orchestration law for long-lived Rust systems. Experimental, no_std, and evidence-led."
+      content="The flagship coding-agent demo for Kittens: typed wire, sans-IO core, durable transcript, budgeted RLM recall, and an installable CLI."
     >
     <meta
       name="twitter:image"
@@ -52,7 +52,7 @@
     <link rel="stylesheet" href="styles.css">
     <script src="script.js" defer></script>
 
-    <title>Kittens — Compiler-checked async orchestration in Rust</title>
+    <title>Kittens + kittens-code — Compiler-checked async orchestration in Rust</title>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to the good stuff</a>
@@ -60,9 +60,9 @@
     <div class="release-bar">
       <div class="release-bar__inner">
         <span class="release-bar__dot" aria-hidden="true"></span>
-        <span><strong>Experimental 0.1.1 evidence releases</strong> — sharp claims, open gates.</span>
-        <a href="https://github.com/Gonzih/kittens-rs/blob/main/K0-REPORT.md">
-          Read the evidence <span aria-hidden="true">↗</span>
+        <span><strong>kittens-code 0.0.1 is live</strong> — our flagship demo, still experimental.</span>
+        <a href="https://github.com/Gonzih/kittens-rs/tree/kc0">
+          Explore the release <span aria-hidden="true">↗</span>
         </a>
       </div>
     </div>
@@ -74,10 +74,10 @@
           <span>kittens</span>
         </a>
         <div class="nav__links">
+          <a href="#kittens-code">kittens-code</a>
           <a href="#vision">Vision</a>
-          <a href="#stack">What ships</a>
+          <a href="#stack">Foundation</a>
           <a href="#evidence">Evidence</a>
-          <a href="#start">Start</a>
         </div>
         <a class="nav__github" href="https://github.com/Gonzih/kittens-rs">
           GitHub <span aria-hidden="true">↗</span>
@@ -93,21 +93,22 @@
             <span aria-hidden="true">·</span>
             <span><code>no_std</code></span>
             <span aria-hidden="true">·</span>
-            <span>experimental</span>
+            <span>flagship: <code>kittens-code</code></span>
           </p>
           <h1 id="hero-title">Make async orchestration harder to get wrong.</h1>
           <p class="hero__lede">
             Kittens turns selected ordering facts in long-lived Rust systems into compiler
             inputs—so shutdown order, starvation hazards, bounded work, and source lifecycles
-            are visible before an edit ships.
+            are visible before an edit ships. Its flagship demo carries that discipline into a
+            complete coding-agent harness.
           </p>
           <p class="hero__qualifier">
             It is a small orchestration kernel, not a runtime, scheduler, HAL, or sandbox.
             Handlers stay ordinary Rust. The boundaries stay visible.
           </p>
           <div class="hero__actions">
-            <a class="button button--primary" href="#start">
-              Meet the reactor <span aria-hidden="true">↓</span>
+            <a class="button button--primary" href="#kittens-code">
+              Meet kittens-code <span aria-hidden="true">↓</span>
             </a>
             <a class="button button--secondary" href="https://github.com/Gonzih/kittens-rs">
               Explore the repo <span aria-hidden="true">↗</span>
@@ -115,8 +116,8 @@
           </div>
           <ul class="hero__proofs" aria-label="Project properties">
             <li><span aria-hidden="true">✓</span> Compiler-checked topology</li>
-            <li><span aria-hidden="true">✓</span> Persistent admitted sources</li>
-            <li><span aria-hidden="true">✓</span> Bare-metal-linkable kernel</li>
+            <li><span aria-hidden="true">✓</span> Durable, queryable agent state</li>
+            <li><span aria-hidden="true">✓</span> Bare-metal-linkable core</li>
           </ul>
         </div>
 
@@ -148,6 +149,413 @@
           <span>Concurrency through declared sources.</span>
           <span aria-hidden="true">✦</span>
           <span>Local feedback when topology drifts.</span>
+        </div>
+      </section>
+
+      <section class="section flagship" id="kittens-code" aria-labelledby="kittens-code-title">
+        <div class="shell">
+          <div class="flagship__intro">
+            <div class="flagship__headline">
+              <p class="eyebrow eyebrow--coral">Flagship demo · KC0 · published 0.0.1</p>
+              <h2 id="kittens-code-title">Meet <code>kittens-code</code>, the harness Kittens was built to hold.</h2>
+              <p class="flagship__lede">
+                A coding agent is where streaming, cancellation, tools, persistence, context,
+                budgets, and human input all pull on the same ball of yarn. <code>kittens-code</code>
+                makes those seams explicit: typed operations enter, a sans-IO engine decides,
+                drivers discharge effects, durable events leave.
+              </p>
+              <div class="flagship__actions">
+                <a class="button button--primary" href="#kittens-code-demo">
+                  Run the deterministic demo <span aria-hidden="true">↓</span>
+                </a>
+                <a class="button button--secondary" href="https://github.com/Gonzih/kittens-rs/tree/kc0">
+                  Browse the <code>kc0</code> source <span aria-hidden="true">↗</span>
+                </a>
+              </div>
+            </div>
+
+            <aside class="flagship-boundary" aria-labelledby="flagship-boundary-title">
+              <p class="mini-label">Status boundary</p>
+              <h3 id="flagship-boundary-title">A real release on a separate source branch.</h3>
+              <p>
+                All four crates are published, unyanked experimental evidence releases. Their
+                source lives on <code>kc0</code>, not deployed <code>main</code>. The current Tokio
+                runner proves the core/driver/CLI spine; the full <code>kittens::reactor!</code>
+                driver topology and E1 evaluation rig remain deferred KC0 scope.
+              </p>
+              <p>
+                “Flagship” names product priority—not production stability, an MCU runtime, or
+                closure of every imported SPEC gate.
+              </p>
+              <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/crates/kittens-code-driver-tokio/README.md">
+                Read the driver boundary <span aria-hidden="true">↗</span>
+              </a>
+            </aside>
+          </div>
+
+          <section class="agent-decomposition" aria-labelledby="agent-decomposition-title">
+            <div class="agent-decomposition__copy">
+              <p class="eyebrow eyebrow--teal">One agent, three separable layers</p>
+              <h3 id="agent-decomposition-title">Frontmatter in front. Harness in the middle. Model behind the wire.</h3>
+              <p>
+                The architecture refuses to collapse presentation, orchestration, and cognition
+                into one privileged process. Each layer can move without rewriting the others.
+              </p>
+              <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/FRONTMATTER.md">
+                Read the FRONTMATTER orientation <span aria-hidden="true">↗</span>
+              </a>
+            </div>
+            <ol class="agent-stack" aria-label="The three layers of a complete agent">
+              <li class="agent-stack__cognition">
+                <span class="agent-stack__label">COGNITION</span>
+                <div>
+                  <strong>The model</strong>
+                  <p>Token generation and tool proposals, local or reached over a wire.</p>
+                </div>
+                <code>window in · text/tools out</code>
+              </li>
+              <li class="agent-stack__orchestration">
+                <span class="agent-stack__label">ORCHESTRATION</span>
+                <div>
+                  <strong>kittens-code</strong>
+                  <p>Turn law, effects, replay, context/RLM, budgets, and cancellation.</p>
+                </div>
+                <code>no_std + alloc core</code>
+              </li>
+              <li class="agent-stack__display">
+                <span class="agent-stack__label">DISPLAY</span>
+                <div>
+                  <strong>Frontmatter</strong>
+                  <p><code>kittens-tui</code> in a terminal or <code>kittens-render</code> on a panel.</p>
+                </div>
+                <code>Ops up · Events down</code>
+              </li>
+            </ol>
+          </section>
+
+          <div class="flagship-subhead">
+            <p class="eyebrow eyebrow--lavender">A turn, end to end</p>
+            <h3>Every handoff has a name.</h3>
+          </div>
+          <ol class="turn-flow">
+            <li>
+              <span>01</span>
+              <div>
+                <strong>Accept an Op</strong>
+                <p>The headless CLI reads one JSON object per line and assigns a submission id.</p>
+              </div>
+              <code>Op → Submission</code>
+            </li>
+            <li>
+              <span>02</span>
+              <div>
+                <strong>Decide in core</strong>
+                <p>The synchronous engine consumes a <code>CoreInput</code> and returns one bounded action batch.</p>
+              </div>
+              <code>handle() → Transition</code>
+            </li>
+            <li>
+              <span>03</span>
+              <div>
+                <strong>Persist before authority</strong>
+                <p><code>Commit</code> records enter the sole appender; authoritative events wait for durability.</p>
+              </div>
+              <code>Commit → Persisted</code>
+            </li>
+            <li>
+              <span>04</span>
+              <div>
+                <strong>Discharge effects</strong>
+                <p>The driver owns model calls, transcript pages, filesystem tools, timers, and cancellation.</p>
+              </div>
+              <code>StartEffect ⇄ Finished</code>
+            </li>
+            <li>
+              <span>05</span>
+              <div>
+                <strong>Publish an Event</strong>
+                <p>Committed turn, model, tool, budget, compaction, query, error, and shutdown facts stream out.</p>
+              </div>
+              <code>Event → JSONL</code>
+            </li>
+          </ol>
+
+          <div class="flagship-subhead flagship-subhead--crates">
+            <p class="eyebrow eyebrow--orange">The published family</p>
+            <h3>Four crates. Four boundaries. One demo.</h3>
+          </div>
+          <div class="code-crate-grid">
+            <article class="code-crate code-crate--protocol">
+              <div class="code-crate__topline">
+                <span>01 · WIRE</span>
+                <span>0.0.1</span>
+              </div>
+              <h4><code>kittens-code-protocol</code></h4>
+              <p>Frontend-safe <code>Op</code>, <code>Event</code>, error, policy, config, budget, and identity data.</p>
+              <dl>
+                <div><dt>Enforced by</dt><dd>closed wire shapes, serde, additive evolution</dd></div>
+                <div><dt>Deliberately absent</dt><dd>engine law, IO, endpoints, clocks, UUID dependencies</dd></div>
+              </dl>
+              <div class="link-row">
+                <a href="https://crates.io/crates/kittens-code-protocol">crates.io <span aria-hidden="true">↗</span></a>
+                <a href="https://docs.rs/kittens-code-protocol/0.0.1/kittens_code_protocol/">docs.rs <span aria-hidden="true">↗</span></a>
+                <a href="https://github.com/Gonzih/kittens-rs/tree/kc0/crates/kittens-code-protocol">source <span aria-hidden="true">↗</span></a>
+              </div>
+            </article>
+
+            <article class="code-crate code-crate--core">
+              <div class="code-crate__topline">
+                <span>02 · LAW</span>
+                <span>0.0.1</span>
+              </div>
+              <h4><code>kittens-code-core</code></h4>
+              <p>The <code>no_std + alloc</code> turn machine, context engine, RLM executor, replay, and budget law.</p>
+              <dl>
+                <div><dt>Enforced by</dt><dd>sealed caps, private ledgers, checked integers, deterministic tests</dd></div>
+                <div><dt>Deliberately absent</dt><dd>runtime, IO, clock, entropy, HTTP, filesystem access</dd></div>
+              </dl>
+              <div class="link-row">
+                <a href="https://crates.io/crates/kittens-code-core">crates.io <span aria-hidden="true">↗</span></a>
+                <a href="https://docs.rs/kittens-code-core/0.0.1/kittens_code_core/">docs.rs <span aria-hidden="true">↗</span></a>
+                <a href="https://github.com/Gonzih/kittens-rs/tree/kc0/crates/kittens-code-core">source <span aria-hidden="true">↗</span></a>
+              </div>
+            </article>
+
+            <article class="code-crate code-crate--driver">
+              <div class="code-crate__topline">
+                <span>03 · EFFECTS</span>
+                <span>0.0.1</span>
+              </div>
+              <h4><code>kittens-code-driver-tokio</code></h4>
+              <p>The host for the appender, deterministic and live model clients, filesystem tools, and runner.</p>
+              <dl>
+                <div><dt>Enforced by</dt><dd>one-writer lock, atomic replacement, path checks, fault scenarios</dd></div>
+                <div><dt>Deliberately absent</dt><dd>full reactor macro topology in this evidence release</dd></div>
+              </dl>
+              <div class="link-row">
+                <a href="https://crates.io/crates/kittens-code-driver-tokio">crates.io <span aria-hidden="true">↗</span></a>
+                <a href="https://docs.rs/kittens-code-driver-tokio/0.0.1/kittens_code_driver_tokio/">docs.rs <span aria-hidden="true">↗</span></a>
+                <a href="https://github.com/Gonzih/kittens-rs/tree/kc0/crates/kittens-code-driver-tokio">source <span aria-hidden="true">↗</span></a>
+              </div>
+            </article>
+
+            <article class="code-crate code-crate--cli">
+              <div class="code-crate__topline">
+                <span>04 · COMPOSE</span>
+                <span>0.0.1</span>
+              </div>
+              <h4><code>kittens-code-cli</code></h4>
+              <p>The installable <code>kittens-code</code> binary: JSONL Ops in, flushed Events out, resumable log beside it.</p>
+              <dl>
+                <div><dt>Enforced by</dt><dd>typed decode, monotonic submission ids, drain-on-shutdown tests</dd></div>
+                <div><dt>Deliberately absent</dt><dd>TUI, hidden daemon, account system, hosted model service</dd></div>
+              </dl>
+              <div class="link-row">
+                <a href="https://crates.io/crates/kittens-code-cli">crates.io <span aria-hidden="true">↗</span></a>
+                <a href="https://docs.rs/kittens-code-cli/0.0.1/kittens_code_cli/">docs.rs <span aria-hidden="true">↗</span></a>
+                <a href="https://github.com/Gonzih/kittens-rs/tree/kc0/crates/kittens-code-cli">source <span aria-hidden="true">↗</span></a>
+              </div>
+            </article>
+          </div>
+
+          <div class="flagship-laws">
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">↻</span>
+              <h3>Transcript law</h3>
+              <p>
+                One checksummed append-only JSONL log is recovery source, audit trail, and RLM
+                ground truth. Resume replays it; torn tails truncate to the last valid frame;
+                incomplete streams receive persisted crash terminals.
+              </p>
+              <small>Driver protocol + adversarial second-reopen tests</small>
+            </article>
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">⌕</span>
+              <h3>Context law</h3>
+              <p>
+                The live window compacts, but records do not disappear. A budgeted continuation
+                can <code>grep</code>, slice, partition, ask sub-models, and return a capped answer
+                through the ordinary <code>recall</code> tool path.
+              </p>
+              <small>Core state machine + typed RLM IR</small>
+            </article>
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">≤</span>
+              <h3>Budget law</h3>
+              <p>
+                Model-visible values pass through branded caps; query and aggregate meters stop
+                work at compiled ceilings. Every behavioral counter uses checked or saturating
+                integer math for byte-identical replay.
+              </p>
+              <small>Type system + private admission + property tests</small>
+            </article>
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">◇</span>
+              <h3>Effect law</h3>
+              <p>
+                IO cannot sneak into core. Model, store-page, VFS, timer, and sub-model work is
+                correlated by effect id and turn epoch; only an owned, current effect can close
+                a lifecycle.
+              </p>
+              <small>Sans-IO API + exactly-once terminal ledger</small>
+            </article>
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">▣</span>
+              <h3>Model law</h3>
+              <p>
+                The default jail is scripted, offline, and deterministic. The optional
+                <code>live</code> feature adds Anthropic-dialect SSE, bounded retry with jitter and
+                <code>Retry-After</code>, cancellation, and a circuit breaker.
+              </p>
+              <small>Default-lean feature boundary + deterministic scenarios</small>
+            </article>
+            <article>
+              <span class="flagship-laws__mark" aria-hidden="true">μ</span>
+              <h3>Portability law</h3>
+              <p>
+                Protocol and core link on <code>thumbv7em-none-eabi</code> and
+                <code>wasm32-unknown-unknown</code>. That proves the center is portable—not that an
+                Embassy/WASI/Web driver or on-silicon agent already exists.
+              </p>
+              <small>Cross-target link gates + dependency-tree discipline</small>
+            </article>
+          </div>
+
+          <div class="flagship-demo" id="kittens-code-demo">
+            <div class="flagship-demo__copy">
+              <p class="eyebrow">Run it without a network</p>
+              <h3>The default model is a deterministic jail.</h3>
+              <p>
+                Install the headless composition root, script one model response, then send
+                newline-delimited Ops. You will get turn and model Events on stdout plus a
+                checksummed session log you can reopen.
+              </p>
+              <div class="install-command install-command--flagship">
+                <code id="kittens-code-install">cargo install kittens-code-cli --version 0.0.1</code>
+                <button
+                  class="copy-button copy-button--light"
+                  type="button"
+                  data-copy-target="kittens-code-install"
+                  aria-describedby="kittens-code-install-status"
+                >
+                  Copy
+                </button>
+              </div>
+              <p class="copy-status copy-status--light" id="kittens-code-install-status" aria-live="polite"></p>
+              <ul class="flagship-demo__notes">
+                <li>Default backend: <code>jail</code>; no HTTP/TLS dependency or network call.</li>
+                <li>Optional live mode: rebuild with <code>--features live</code> and provide bootstrap-only credentials.</li>
+                <li>CLI args override environment, which overrides documented defaults.</li>
+              </ul>
+            </div>
+
+            <div class="demo-terminal">
+              <div class="demo-terminal__bar">
+                <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
+                <span>deterministic demo · shell</span>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy-target="kittens-code-demo-script"
+                  aria-describedby="kittens-code-demo-status"
+                >
+                  Copy
+                </button>
+              </div>
+              <pre><code id="kittens-code-demo-script"><span class="tok-comment"># One offline model response.</span>
+<span class="tok-fn">printf</span> <span class="tok-str">'[{"text":"The topology is explicit. The yarn is intact."}]\n'</span> \
+  &gt; kittens-code-scenario.json
+
+<span class="tok-comment"># One turn, then a drained shutdown.</span>
+<span class="tok-fn">printf</span> <span class="tok-str">'%s\n'</span> \
+  <span class="tok-str">'{"op":"user_input","text":"Explain the Kittens architecture."}'</span> \
+  <span class="tok-str">'{"op":"shutdown"}'</span> \
+  | kittens-code --scenario ./kittens-code-scenario.json</code></pre>
+              <p class="copy-status" id="kittens-code-demo-status" aria-live="polite"></p>
+            </div>
+          </div>
+
+          <div class="recall-layout">
+            <div class="recall-layout__copy">
+              <p class="eyebrow eyebrow--teal">Recall, not amnesia</p>
+              <h3>The model can query the transcript it no longer keeps in-window.</h3>
+              <p>
+                The <code>recall</code> tool lowers one tiny, typed, versioned verb language into a
+                suspendable continuation. Store pages and sub-model asks leave as effects; caps
+                and meters remain core law. Compaction removes window copies, never log truth.
+              </p>
+              <ul class="verb-cloud" aria-label="Available RLM verbs">
+                <li><code>grep</code></li>
+                <li><code>slice</code></li>
+                <li><code>head</code></li>
+                <li><code>tail</code></li>
+                <li><code>count</code></li>
+                <li><code>partition</code></li>
+                <li><code>ask</code></li>
+                <li><code>ask-each</code></li>
+                <li><code>final</code></li>
+              </ul>
+            </div>
+            <div class="recall-script">
+              <div class="recall-script__label">recall script · typed lowering</div>
+              <pre><code><span class="tok-fn">grep</span> <span class="tok-str">"store_io|cancelled"</span> --ctx=<span class="tok-num">2</span>
+<span class="tok-fn">partition</span> %<span class="tok-num">1</span> --by=turns --size=<span class="tok-num">8</span>
+<span class="tok-fn">ask-each</span> %<span class="tok-num">2</span> <span class="tok-str">"What failed, and what recovered?"</span>
+<span class="tok-fn">final</span> %<span class="tok-num">3</span></code></pre>
+              <p>Value caps truncate. Aggregate meters stop the query. Full records stay in the log.</p>
+            </div>
+          </div>
+
+          <div class="flagship-evidence">
+            <div class="flagship-evidence__shipped">
+              <p class="mini-label">Published evidence</p>
+              <h3>What 0.0.1 actually carries</h3>
+              <ul>
+                <li>four unyanked crates in dependency order;</li>
+                <li>typed JSONL protocol and installable headless binary;</li>
+                <li>replayable, checksummed, crash-repaired transcript;</li>
+                <li>turn/context/RLM/budget core with branded cap bypasses rejected;</li>
+                <li>offline jail plus optional live Anthropic-dialect client;</li>
+                <li>protocol/core link gates on bare-metal ARM and WebAssembly.</li>
+              </ul>
+            </div>
+            <div class="flagship-evidence__open">
+              <p class="mini-label">Still open</p>
+              <h3>What “flagship” does not erase</h3>
+              <ul>
+                <li>the full <code>kittens::reactor!</code> driver wiring and bounded funnels;</li>
+                <li>the preregistered E1 context-law evaluation and real-endpoint G10 evidence;</li>
+                <li>Embassy, Web, and WASI drivers plus their kernel adapters;</li>
+                <li>on-silicon FRONTMATTER + HARNESS composition;</li>
+                <li>L2 embeddings, swarm mounts, subagents, and stable APIs.</li>
+              </ul>
+            </div>
+          </div>
+
+          <nav class="flagship-library" aria-label="kittens-code evidence library">
+            <div>
+              <p class="eyebrow eyebrow--lavender">Follow every thread</p>
+              <h3>The complete kittens-code evidence library.</h3>
+            </div>
+            <a href="https://github.com/Gonzih/kittens-rs/tree/kc0">
+              <span>Source branch</span><strong><code>kc0</code></strong><i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/SPEC.md">
+              <span>Frozen contract</span><strong>SPEC</strong><i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/RESEARCH.md">
+              <span>Landscape + bets</span><strong>Research synthesis</strong><i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/FRONTMATTER.md">
+              <span>Agent layering</span><strong>FRONTMATTER</strong><i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/Gonzih/kittens-rs/blob/kc0/CHANGELOG.md#kittens-code-family-001--2026-08-09">
+              <span>0.0.1 evidence</span><strong>Release changelog</strong><i aria-hidden="true">↗</i>
+            </a>
+            <a href="https://github.com/Gonzih/kittens-rs/tree/kc0/docs/kittens-code/research-inputs">
+              <span>21 pinned inputs</span><strong>Research archive</strong><i aria-hidden="true">↗</i>
+            </a>
+          </nav>
         </div>
       </section>
 
@@ -222,11 +630,12 @@
       <section class="section stack" id="stack" aria-labelledby="stack-title">
         <div class="shell">
           <div class="section-heading">
-            <p class="eyebrow eyebrow--teal">What ships on main</p>
-            <h2 id="stack-title">One vocabulary. Three evidence surfaces.</h2>
+            <p class="eyebrow eyebrow--teal">The foundation on main</p>
+            <h2 id="stack-title">One vocabulary. Three foundation surfaces.</h2>
             <p>
-              Each crate owns a narrow protocol and names the layer that enforces it. None
-              quietly absorbs the rest of your application.
+              These are the kernel and profiles beneath the flagship direction. Each crate owns
+              a narrow protocol and names the layer that enforces it. None quietly absorbs the
+              rest of your application.
             </p>
           </div>
 
@@ -492,10 +901,10 @@
             <li>
               <span class="horizon-list__step">Now</span>
               <div>
-                <h3>Agents building one harness</h3>
+                <h3>One harness, visible end to end</h3>
                 <p>
-                  Canonical syntax, local rationale, actionable diagnostics, and explicit
-                  escape hatches reduce the search space of every repair.
+                  <code>kittens-code</code> makes the agent loop inspectable from JSONL wire to
+                  sans-IO transition, durable effect, budgeted recall, and client Event.
                 </p>
               </div>
             </li>
@@ -535,15 +944,15 @@
             <img src="assets/kittens-logo.webp" width="220" height="220" alt="" loading="lazy">
           </div>
           <div class="start-card__copy">
-            <p class="eyebrow">Follow the yarn</p>
-            <h2 id="start-title">Start with the smallest reactor.</h2>
+            <p class="eyebrow">Run the flagship</p>
+            <h2 id="start-title">Start with <code>kittens-code</code>.</h2>
             <p>
-              Add the experimental kernel, read the lean grammar, and keep the evidence report
-              open beside it. If a constraint disappears to make a build pass, repair the
-              topology—not the declaration.
+              Install the experimental headless CLI and begin with the deterministic jail: no
+              account, network, or hidden daemon. Then inspect the frozen contract beside every
+              event the harness emits.
             </p>
             <div class="install-command">
-              <code id="install-code">cargo add kittens</code>
+              <code id="install-code">cargo install kittens-code-cli --version 0.0.1</code>
               <button
                 class="copy-button copy-button--light"
                 type="button"
@@ -555,13 +964,17 @@
             </div>
             <p class="copy-status copy-status--light" id="install-copy-status" aria-live="polite"></p>
             <div class="start-card__links">
-              <a class="button button--cream" href="https://github.com/Gonzih/kittens-rs/blob/main/docs/agent-guide.md">
-                Read the agent guide <span aria-hidden="true">↗</span>
+              <a class="button button--cream" href="https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/SPEC.md">
+                Read the kittens-code SPEC <span aria-hidden="true">↗</span>
               </a>
-              <a class="text-link" href="https://github.com/Gonzih/kittens-rs/blob/main/docs/diagnostics.md">
-                Browse diagnostics <span aria-hidden="true">↗</span>
+              <a class="text-link" href="https://github.com/Gonzih/kittens-rs/tree/kc0/crates/kittens-code-cli">
+                Browse the CLI source <span aria-hidden="true">↗</span>
               </a>
             </div>
+            <p class="kernel-path">
+              Building the primitive instead? <code>cargo add kittens</code> and
+              <a href="https://github.com/Gonzih/kittens-rs/blob/main/docs/agent-guide.md">read the lean reactor grammar</a>.
+            </p>
           </div>
         </div>
       </section>
@@ -578,13 +991,14 @@
         </div>
         <nav class="footer-links" aria-label="Project links">
           <a href="https://github.com/Gonzih/kittens-rs">GitHub</a>
+          <a href="https://crates.io/crates/kittens-code-cli">kittens-code</a>
           <a href="https://crates.io/crates/kittens">crates.io</a>
           <a href="https://docs.rs/kittens">docs.rs</a>
           <a href="https://github.com/Gonzih/kittens-rs/blob/main/SPEC.md">SPEC</a>
         </nav>
         <p class="footer-meta">
           MIT or Apache-2.0 · Source
-          <a href="https://github.com/Gonzih/kittens-rs/commit/73411b911f5704c6b32daf79eeb1aaba7aa2abfd"><code>73411b91</code></a>
+          <a href="https://github.com/Gonzih/kittens-rs/commit/c48db4325e6ecd0490818ee12d95b13574f6fc9b"><code>c48db432</code></a>
           · No cookies. No analytics.
         </p>
       </div>
