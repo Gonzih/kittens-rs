@@ -1,8 +1,8 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
 - Status: revision 9, 2026-08-09 (kernel-carrier contract: the one
-  no-allocation source shape is now specified, with implementation and
-  host/portable-link evidence still required before its gate closes).
+  no-allocation source shape is specified and its real-reactor gate is closed
+  with host + portable-link scope; target execution and silicon remain open).
   Revision 8's publication-readiness correction recorded that the linked
   Xtensa compile/link feasibility probe is closed with scope; task
   wakers are cloned, dropped, and woken outside the adapter's global critical
@@ -20,10 +20,9 @@
   full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
   **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
-  Kernel-carrier implementation/evidence, bilateral seam co-sign,
-  `write_region`, board HIL and
-  silicon interrupt delivery, and capability sealing remain separately named
-  gates below.
+  The kernel-carrier gate is separately closed with host + portable-link scope.
+  Bilateral seam co-sign, `write_region`, board HIL and silicon interrupt
+  delivery, and capability sealing remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -186,12 +185,16 @@ the same inline future across selection loss and return one owned output;
 establish level-visible completion and wake behavior; the owning-sweep
 delivery remains the existing cooperative documentation boundary. The generic
 carrier does not certify an arbitrary future's producer semantics, and direct
-`.await`/manual `poll_complete` remain compiling raw bypasses. Dropping an
-armed source drops the flight, invoking the reviewed synchronous cancel/disarm
-contract but returning no resources. Arming is local-only and schedules no
-wake; rearm occurs inside a handler/phase whose continuation starts the next
-arbitration. The section-8 controls independently pin an inert inner future
-that still compiles and a readiness-declaration mismatch that does not.
+`.await`/manual `poll_complete` remain compiling raw bypasses. The mutable
+future borrow used for `begin_drain` also permits ordinary
+`mem::replace`; raw handler-side replacement can discard the cooperative
+resource-return path and is a published compiling escape, not something the
+carrier claims to prevent. Dropping an armed source drops the flight, invoking
+the reviewed synchronous cancel/disarm contract but returning no resources.
+Arming is local-only and schedules no wake; rearm occurs inside a handler/phase
+whose continuation starts the next arbitration. The section-8 controls
+independently pin an inert inner future and raw mutable replacement that still
+compile, plus a readiness-declaration mismatch that does not.
 
 `Settled<T, B, S>` — private resources, outcome, and target; safe external
 code cannot construct one or rewrite its proof-bearing state.
@@ -390,7 +393,8 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
   `future_mut` (with dormant `None` a no-op) and proves settlement before stop,
   while a separate drop trace proves synchronous disarm with intentionally
   non-returned resources; an inert inner future compiles as the carrier-honesty
-  negative control, while declaring the carrier `may_remain_ready` fails the
+  negative control, raw `future_mut` replacement compiles as the handler-side
+  mutation escape, while declaring the carrier `may_remain_ready` fails the
   sealed readiness check;
 - cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
@@ -487,5 +491,16 @@ Unpin`, carrying the existing conditionally-`Unpin` `InFlight` future. The
 required evidence is a real reactor over both selection-loss positions,
 same-carrier rearm, graceful drain, drop behavior, and external thumb/wasm
 links. Arbitrary-future honesty, direct polling/await, cooperative settlement
-delivery, silicon behavior, `write_region`, capability sealing, and the
-bilateral seam remain explicit non-guarantees or gates.
+delivery, mutable-handler replacement, silicon behavior, `write_region`,
+capability sealing, and the bilateral seam remain explicit non-guarantees or
+gates. Implementation review later corrected the draft's overstatement that
+`future_mut` could not remove work: `&mut F` necessarily permits
+`mem::replace`, so that path is now a named compiling escape.
+
+Revision-9 implementation review, 2026-08-09: Claude Code
+`claude-opus-4-8` at maximum effort reported **SOUND, 0 P0–P2 issues** after
+statically tracing the carrier, generated reactor, every new oracle/control,
+dependency boundary, and scope claim. Its three P3 notes were verification
+hygiene (discharged separately), optional selection-loss/rearm symmetry (not a
+contract gap), and cosmetic README wrapping (adopted). The retained review is
+`reviews/2026-08-09-carrier-precommit-claude.md`.

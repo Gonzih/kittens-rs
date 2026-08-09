@@ -15,7 +15,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy,rustfmt
-          targets: thumbv7em-none-eabi
+          targets: thumbv7em-none-eabi,wasm32-unknown-unknown
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-targets --all-features
@@ -27,6 +27,7 @@ jobs:
       - run: cargo build -p kittens-render --no-default-features --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render --no-default-features --features embedded-graphics --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render-no-std-fixture --target thumbv7em-none-eabi --release
+      - run: cargo build -p kittens-render-no-std-fixture --target wasm32-unknown-unknown --release
 
   website:
     runs-on: ubuntu-latest

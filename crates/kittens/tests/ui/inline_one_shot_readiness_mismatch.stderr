@@ -1,0 +1,22 @@
+error[E0271]: type mismatch resolving `<OptionalInlineOneShot<Ready<u8>> as ReactorSource>::Readiness == MayRemainReady`
+  --> tests/ui/inline_one_shot_readiness_mismatch.rs:11:5
+   |
+11 | /     kittens::reactor! {
+12 | |         policy { selection: biased; required_phases: []; }
+13 | |
+14 | |         #[source(completion)]
+15 | |         #[readiness(may_remain_ready)]
+16 | |         _ = sources.completion => { Ok(Control::Continue) }
+17 | |     }
+   | |_____^ expected `MayRemainReady`, found `Quiescent`
+   |
+   = note: required for `OptionalInlineOneShot<std::future::Ready<u8>>` to implement `kittens::source::HasReadiness<MayRemainReady>`
+note: required by a bound in `kittens::__private::assert_KTR006_declared_readiness_matches`
+  --> src/lib.rs
+   |
+   |     pub fn assert_KTR006_declared_readiness_matches<R, S>(_: &S)
+   |            ---------------------------------------- required by a bound in this function
+...
+   |         S: HasReadiness<R>,
+   |            ^^^^^^^^^^^^^^^ required by this bound in `assert_KTR006_declared_readiness_matches`
+   = note: this error originates in the macro `kittens::reactor` (in Nightly builds, run with -Z macro-backtrace for more info)

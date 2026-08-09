@@ -8,6 +8,7 @@
 - Implementation-readiness refinement: 2026-08-07 (K0 normativity imports; lean readiness vocabulary fixed; adapter budget disclosure imported into 37.6; positive K0 gate checklist; `K0-REPORT.md` evidence artifact; K0 toolchain policy; `Control` import; predeclared embedded footprint budget; annotated-baseline representation rule; stale cross-reference and KTR014 reconciliation)
 - Usage-sketch enrichment: 2026-08-07 (section 38: lean-surface usage sketches — minimal reactor, Grok-shape excerpt, dynamic source lifecycle, edit-and-repair loop, embedded shape, producer isolation, rehydration walkthrough; each with an explicit checked/not-checked boundary)
 - Coverage-thesis and consumer-expansion refinement: 2026-08-07 (section 2.1 layered defect-elimination model with the six-nines goal as a falsifiable per-class claim; escape-surface terminology and benchmark metric; meta-harness and engine-author consumer tiers in sections 3, 5, 9.4; re-weighted post-K0 priorities in sections 21.1, 34.2, 37.14; `RESEARCH.md` section 20B)
+- Profile-driven source extension: 2026-08-09 (section 37.6.1 admits one sealed, locally armed, allocation-free inline one-shot for the render completion gate; selection-loss retention is separated from inner-future honesty and raw mutation/drop escapes)
 - Research basis: [`RESEARCH.md`](./RESEARCH.md), Grok Build commit [`393430ee4934bc791b0d538f304a21691c517433`](https://github.com/xai-org/grok-build/commit/393430ee4934bc791b0d538f304a21691c517433), and the revision-keyed embedded fixtures in section 37
 
 The Rust blocks in this document are specification sketches and proposed test fixtures. They are documentation, not implementation source.
@@ -3595,7 +3596,11 @@ The carrier stores `Option<F>` inline and exposes exactly `new`,
 `is_dormant`. `arm` requires exclusive access and returns `AlreadyArmed<F>`
 with the rejected future rather than replacing or dropping live work.
 `future_mut` returns `None` while dormant and provides borrowed access for an
-operation-specific drain request while armed; it cannot remove the future.
+operation-specific drain request while armed; the method itself does not
+consume the future. Ordinary Rust still permits `mem::replace` through the
+returned `&mut F`, so handler-side replacement/removal is a documented
+compiling escape rather than a structural guarantee. The canonical render
+path uses this borrow only for `begin_drain`.
 The carrier is a sealed
 `ReactorSource<Item = F::Output, Readiness = Quiescent>`. It polls the same
 stored future with the reactor's current `Context`, removes the completed
@@ -3621,8 +3626,9 @@ and drop behavior remain that future's reviewed documentation and runtime-test
 obligations. Wrapping an arbitrary future therefore does not make a lazy or
 lossy producer valid. A compiling inert/broken inner future is one adjacent
 negative control; a compile-fail declaration that labels this quiescent
-carrier `may_remain_ready` pins the sealed readiness check independently. The
-render integration must separately prove both
+carrier `may_remain_ready` pins the sealed readiness check independently; and
+a compile-pass `future_mut` replacement pins the raw handler-side mutation
+escape. The render integration must separately prove both
 selection-loss positions with its level-visible, register-then-recheck
 `InFlight` implementation. This extension does not unseal `ReactorSource`, add
 a callback/poll-function escape, allocate, or change the existing heap-pinned

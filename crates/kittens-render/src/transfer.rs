@@ -30,6 +30,8 @@
 //!   code still cannot invoke a starter directly: [`StartPermit`] is issued
 //!   only inside [`StripeTarget::start_flight`].
 
+use core::future::Future;
+use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use crate::geometry::Region;
@@ -273,8 +275,12 @@ impl StripeTarget {
 /// settlement, never resource-losing on the driven path. It implements
 /// `Unpin` exactly when `X: OwnedTransfer + Unpin` and `S: Unpin`; the
 /// associated transport and buffer types need no `Unpin` bound because
-/// they are not stored separately in flight. Owns the transfer *and* the
-/// spare buffer, whose owned value stays writable during the flight. The
+/// they are not stored separately in flight. Under those same bounds it is a
+/// [`Future`] whose poll delegates to [`Self::poll_complete`], enabling the
+/// admitted inline kernel carrier without adding another settlement path.
+/// Direct await remains an ordinary-Rust bypass of reactor admission. Owns
+/// the transfer *and* the spare buffer, whose owned value stays writable during
+/// the flight. The
 /// generic types do not prove that sent and spare buffers have disjoint
 /// backing storage: safe shared/interior-mutable aliases remain a documented
 /// integration escape (SPEC 6.2). Ordinary `InFlight` drop returns no
@@ -371,6 +377,14 @@ impl<X: OwnedTransfer, S> InFlight<X, S> {
 // boundary (interrupt-registered statics), never in the value the reactor
 // stores.
 impl<X: OwnedTransfer + Unpin, S: Unpin> Unpin for InFlight<X, S> {}
+
+impl<X: OwnedTransfer + Unpin, S: Unpin> Future for InFlight<X, S> {
+    type Output = Settled<X::Transport, X::Buffer, S>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().poll_complete(cx)
+    }
+}
 
 #[cfg(test)]
 mod tests {

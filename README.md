@@ -86,11 +86,18 @@ async fn run(sources: &mut Sources) -> Result<u8, Infallible> {
 # let _ = run;
 ```
 
-With default features, Kittens also supplies Tokio adapters for mpsc channels,
-optional mpsc channels, cancellation tokens, absolute optional deadlines, and
-retained one-shot futures. The crate itself is always `#![no_std]`; host-only
-Tokio code is target-gated so the kernel remains bare-metal-linkable even when
-Cargo unifies the `tokio` feature elsewhere in the graph.
+The portable kernel also supplies `OptionalInlineOneShot<F>` for a locally
+armed, allocation-free retained future when `F: Unpin`. Its sealed carrier
+preserves inline future state across lost arbitration; the inner future still
+owns its producer-latching, wake, cancellation, and drop truth. Its mutable
+control borrow is an explicit ordinary-Rust escape: callers can replace the
+installed future, so canonical integrations use it only for a reviewed drain
+request. With default features, Kittens additionally supplies Tokio adapters
+for mpsc channels, optional mpsc channels, cancellation tokens, absolute
+optional deadlines, and heap-pinned retained one-shot futures. The crate itself
+is always `#![no_std]`; host-only Tokio code is target-gated so the kernel
+remains bare-metal-linkable even when Cargo unifies the `tokio` feature
+elsewhere in the graph.
 
 ## Installation
 
@@ -118,6 +125,8 @@ cargo doc -p kittens --all-features --no-deps
 ```
 
 The bare-metal gate additionally builds the `kittens-no-std-fixture` and
-`kittens-feature-unifier` packages together for `thumbv7em-none-eabi`.
+`kittens-feature-unifier` packages together for `thumbv7em-none-eabi`. The
+portable render consumer links the kernel carrier for both that target and
+`wasm32-unknown-unknown`.
 
 Licensed under either Apache-2.0 or MIT, at your option.

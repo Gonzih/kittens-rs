@@ -269,6 +269,8 @@ name = "kittens-render"
 version = "0.1.1"
 dependencies = [
  "embedded-graphics",
+ "kittens",
+ "tokio",
  "trybuild",
 ]
 
@@ -276,6 +278,7 @@ dependencies = [
 name = "kittens-render-no-std-fixture"
 version = "0.0.0"
 dependencies = [
+ "kittens",
  "kittens-render",
 ]
 

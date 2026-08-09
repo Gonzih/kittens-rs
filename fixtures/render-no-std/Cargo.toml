@@ -6,6 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+kittens = { path = "../../crates/kittens", default-features = false, features = ["macros"] }
 kittens-render = { path = "../../crates/kittens-render", default-features = false }
 
 [[bin]]

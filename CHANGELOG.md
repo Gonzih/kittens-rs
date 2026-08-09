@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Admit the portable, allocation-free `OptionalInlineOneShot` source for
+  `Future + Unpin` and drive render `InFlight` completion through a real
+  generated reactor. Deterministic tests cover both selection-loss positions,
+  same-carrier stripe rearm, graceful drain/settlement, and post-exit disarm;
+  the external consumer executes the lifecycle on host and links it for Thumb
+  and wasm. The carrier proves retained storage, not arbitrary-future honesty,
+  owning-sweep delivery, mutable-handler replacement safety, target execution,
+  or silicon behavior; the three formal K0 gates remain open.
 - Make `kittens-code` the public website's flagship demo with its complete
   four-crate map, JSONL-to-effect turn flow, transcript/context/RLM/budget
   laws, DISPLAY/ORCHESTRATION/COGNITION layering, deterministic offline quick

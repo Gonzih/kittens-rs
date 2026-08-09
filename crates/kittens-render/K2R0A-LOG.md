@@ -37,13 +37,14 @@ All nine adopted: (1) register-then-recheck mandated; my model had the exact
 lost-wake race and now carries an adversarial oracle plus a deliberately
 broken negative control proving the oracle bites; (2) `cancel` wakes the
 pending poller; (3) the spare buffer is carried in `InFlight` and returned
-in `Settled`; (4) kernel-admitted source + real `reactor!` fixture remain
-open (below); (5) recovery is the sole outcome authority, `poll_done` is
-`Poll<()>`; (6) `is_draining` clears at settlement; (7) `Failed` documented
+in `Settled`; (4) kernel-admitted source + real `reactor!` fixture were left
+open at that point (see the current status below); (5) recovery is the sole
+outcome authority, `poll_done` is `Poll<()>`; (6) `is_draining` clears at
+settlement; (7) `Failed` documented
 as abstract-boundary-only — the esp-hal adapter never produces it; (8)
 waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 
-## Gate status before spec amendment / freeze
+## Current gate status before freeze
 
 1. **Xtensa compile probe — CLOSED WITH SCOPE (2026-08-09)**: the
    post-revision-8 `fixtures/render-xtensa-probe` artifact linked for
@@ -55,9 +56,12 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 2. **Board HIL**: silicon interrupt delivery (pending → one wake → ready;
    completion-before-first-poll level visibility; cancel-and-drain returns
    transport + sent buffer + spare).
-3. **Kernel-admitted completion source + `reactor!` fixture**: raw-`Context`
-   oracles do not prove delivery into Kittens; the kernel admission path for
-   this profile's sources is the remaining kernel conversation.
+3. **Kernel-admitted completion source + `reactor!` fixture — CLOSED WITH
+   HOST + PORTABLE-LINK SCOPE (2026-08-09)**: one sealed
+   `OptionalInlineOneShot<InFlight<...>>` now carries real settlements through
+   both selection-loss positions, same-carrier rearm, graceful drain, and
+   post-exit drop/disarm. The external generated-reactor consumer links on
+   Thumb and wasm. This supplies no Xtensa-runtime or silicon observation.
 4. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
@@ -385,12 +389,12 @@ seam, and capability sealing remain unchanged gates.
 
 ## Xtensa compile/link probe (2026-08-09)
 
-**Fact — post-revision-8 build evidence (verbatim):**
+**Fact — revision-9 worktree build evidence (verbatim):**
 
 Run from `fixtures/render-xtensa-probe` in a network-enabled terminal,
 2026-08-09:
 
-> '. /Users/feral/export-esp.sh && cargo +esp build --release --target xtensa-esp32s3-none-elf' → 'Finished release profile [optimized] target(s) in 1.48s' (incremental over the pinned deps), exit 0. Artifact: target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe, 204292 bytes, 'ELF 32-bit LSB executable, Tensilica Xtensa, version 1 (SYSV), statically linked, not stripped'.
+> `. "$HOME/export-esp.sh" && cargo +esp --locked build --release --target xtensa-esp32s3-none-elf` → `Finished release [optimized] in 1.28s`, exit 0. Artifact: `target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe`, 204,292 bytes, SHA-256 `4fff6dcd8284fd35891731caa6fea574f0a70a6601e348048d1db54b8bca4f49`, `ELF 32-bit LSB executable, Tensilica Xtensa, version 1 (SYSV), statically linked, not stripped`.
 
 **Fact:** `fixtures/render-xtensa-probe` is a standalone crate with an empty
 `[workspace]`. It pins `esp-hal` rev
@@ -423,8 +427,47 @@ evidence of behavior on silicon.
 **Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
 visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
 
-**Gap: the kernel-admitted completion source and real `kittens::reactor!`
-fixture remain a separate open gate (no data exists).**
+## Kernel-admitted completion carrier (2026-08-09)
+
+**Fact:** root SPEC section 37.6.1 admits one sealed, allocation-free,
+locally armed `OptionalInlineOneShot<F>` where `F: Future + Unpin`.
+`InFlight<X, S>` implements `Future` under its existing conditional-`Unpin`
+bounds and delegates to `poll_complete`; the render crate gains no normal
+kernel dependency.
+
+**Fact:** `tests/k2r0_reactor_completion.rs` runs a real generated reactor.
+One trace polls completion pending before a later ready source wins and then
+rearms the same carrier for stripe two; another lets an earlier source win
+before completion's first poll. Both yield real `Settled` values, recover the
+transport/sent/spare identities, and deliver the witness to the owning
+`Sweep::settle`. Separate traces drive `future_mut`/`begin_drain` through a
+cancelled settlement and prove a still-armed carrier drop invokes the modeled
+synchronous transfer disarm.
+
+**Fact:** the downstream `kittens-render-no-std-fixture` now uses an actual
+`kittens::reactor!` over the same carrier. Its two-stripe rearm and graceful
+cancel/abort path executes on the host and links without allocation for both
+`thumbv7em-none-eabi` and `wasm32-unknown-unknown`.
+
+**Fact — verification:** `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`, both workspace test forms (with and without
+`--all-targets`), rustdoc with warnings denied, the canonical host lifecycle,
+and all UI/UI-pass suites passed. The feature-off render normal-dependency tree
+was exactly one package line. The required kernel/feature-unification Thumb
+gate and both render library configurations linked. The generated-reactor
+consumer produced an 11,880-byte statically linked Thumb ELF (SHA-256
+`db274a529092434fa69d20d0fb734617c831e8051840b0c68b990a0e49739e41`) and a
+6,195-byte zero-import WebAssembly module (SHA-256
+`4481d7d9067759d077076c2ca111d075e0b3c4df73ff4c38152817d630ff3f22`).
+
+**Observation:** this closes K2R-0A item 3 with host + portable-link scope. It
+does not certify an arbitrary inner future, force owning-sweep delivery, or
+turn raw `.await`, manual polling, `future_mut` replacement, or whole-source
+drop into rejected programs. The Xtensa fixture still manually polls its
+concrete flight, so target-side reactor execution is not claimed.
+
+**Gap: SPI2 silicon wake delivery and target-side executor behavior remain
+board-HIL gated (no data exists).**
 
 **Gap: the blocking `write_region` exact-stack integration remains open; this
 probe compiles the raw SH8601 pixel phase, not a complete display-driver
