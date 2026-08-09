@@ -1,6 +1,6 @@
 [package]
 name = "kittens-render"
-description = "Embedded rendering/interaction profile for the Kittens reactor kernel (K2R-0A feasibility experiment stage)"
+description = "Embedded rendering/interaction profile for the Kittens reactor kernel (K2R-0 host slice; unpublished)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

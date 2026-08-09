@@ -31,6 +31,13 @@ pub enum WrittenDisposition {
     DiscardedByInvalidation,
 }
 
+// The id counter is u32 because thumbv7em-class targets have no 64-bit
+// atomics (the bare-metal CI gate rejected AtomicU64). Exhaustion is
+// handled EXPLICITLY rather than by silent wrap-aliasing (round-2
+// finding): the 2^32nd construction aborts, which on any real deployment
+// is unreachable and on a pathological one is the honest outcome. Ids are
+// widened to u64 in witnesses; epochs are u64 and monotonic per demand,
+// with the same documented exhaustion stance (2^64 sweeps).
 static DEMAND_IDS: AtomicU32 = AtomicU32::new(0);
 
 /// The demand policy state machine. Owns the fixed, validated panel plan;
@@ -54,7 +61,7 @@ static DEMAND_IDS: AtomicU32 = AtomicU32::new(0);
 /// | any | `invalidate` | dirty + full-repaint set; an active sweep is marked non-clearing |
 #[derive(Debug)]
 pub struct FrameDemand {
-    id: u32,
+    id: u64,
     plan: SweepPlan,
     dirty: bool,
     sweeping: Option<FrameEpoch>,
@@ -69,9 +76,19 @@ pub struct FrameDemand {
 impl FrameDemand {
     /// Explicit throttle policy (tick units) and the fixed panel plan; no
     /// `Default`.
+    /// # Panics
+    ///
+    /// Panics if `2^32 - 1` `FrameDemand` values have already been
+    /// constructed in this program: provenance ids never alias; exhaustion
+    /// is a checked abort, not a silent wrap.
     pub fn new(min_interval_ticks: u64, plan: SweepPlan) -> Self {
+        let id = DEMAND_IDS.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            id != u32::MAX,
+            "FrameDemand provenance-id space exhausted (2^32 constructions)"
+        );
         Self {
-            id: DEMAND_IDS.fetch_add(1, Ordering::Relaxed),
+            id: u64::from(id),
             plan,
             dirty: false,
             sweeping: None,
@@ -159,7 +176,10 @@ impl FrameDemand {
     }
 
     /// Settles the active sweep as written (full coverage witnessed by
-    /// [`SweepWritten`]).
+    /// [`SweepWritten`]). `now` regressions are clamped: the throttle
+    /// position never moves backward. `Tick` values are trusted platform
+    /// input — the time source is a documented trust boundary, not a
+    /// validated one (round-2 finding on forgeable time).
     ///
     /// # Errors
     ///
@@ -186,7 +206,10 @@ impl FrameDemand {
             self.full_repaint = true;
             return Ok(WrittenDisposition::DiscardedByInvalidation);
         }
-        self.last_written = Some(now);
+        self.last_written = Some(match self.last_written {
+            Some(previous) if previous > now => previous, // clamp regression
+            _ => now,
+        });
         self.scheduled = None;
         self.full_repaint = false;
         Ok(WrittenDisposition::Effective)
@@ -215,6 +238,14 @@ impl FrameDemand {
     /// (early return, panic path, lost token): clears the active epoch,
     /// retains demand, forces a full repaint, does not advance the
     /// throttle. Idempotent when idle (finding 8).
+    ///
+    /// **Caller obligation (round-2 finding on premature abandonment):**
+    /// this machine can terminally reject the abandoned epoch's witnesses
+    /// (`ForeignSweep`), but it cannot stop a still-live `Sweep` value's
+    /// in-flight transfers from physically writing the panel. Drain or
+    /// settle every transfer of the old sweep before beginning the next
+    /// one; abandoning while transfers are in flight risks visually
+    /// interleaved epochs until the forced full repaint lands.
     pub fn abandon_active(&mut self) {
         if self.sweeping.take().is_some() {
             self.active_invalidated = false;

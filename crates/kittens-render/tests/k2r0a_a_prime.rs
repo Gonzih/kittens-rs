@@ -9,28 +9,26 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
-use kittens_render::geometry::{FrameEpoch, Region};
+use kittens_render::geometry::{PanelGeometry, Region};
+use kittens_render::sweep::StripeTarget;
 use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
 
-fn epoch(n: u64) -> FrameEpoch {
-    // FrameEpoch has no public constructor by design; tests obtain real
-    // epochs through FrameDemand in the sweep suite. Here the transfer
-    // boundary is tested in isolation with a demand-minted epoch.
-    let plan = kittens_render::sweep::SweepPlan::new(REGION_FULL, 4).expect("plan");
+/// Targets are unforgeable; the transfer suite mints them through a
+/// throwaway demand/sweep, which is exactly the only legal path.
+fn target() -> StripeTarget {
+    let geometry = PanelGeometry::custom_unvalidated_panel(REGION_FULL);
+    let plan = kittens_render::sweep::SweepPlan::for_panel(geometry, 4).expect("plan");
     let mut demand = kittens_render::demand::FrameDemand::new(0, plan);
-    let mut minted = None;
-    for _ in 0..=n {
-        demand.request();
-        let sweep = demand
-            .begin_sweep(kittens_render::demand::Tick(0), ())
-            .expect("mint");
-        minted = Some(sweep.epoch());
-        let (aborted, ()) = sweep.abort();
-        demand
-            .finish_failed(aborted, kittens_render::demand::Tick(0))
-            .expect("active");
-    }
-    minted.expect("minted at least one epoch")
+    demand.request();
+    let sweep = demand
+        .begin_sweep(kittens_render::demand::Tick(0), ())
+        .expect("mint");
+    let target = sweep.next_target().expect("first stripe");
+    let (aborted, ()) = sweep.abort();
+    demand
+        .finish_failed(aborted, kittens_render::demand::Tick(0))
+        .expect("active");
+    target
 }
 
 const REGION_FULL: Region = Region {
@@ -241,19 +239,18 @@ impl Drop for ModelTransfer {
     }
 }
 
-fn flight_on(slot: &Arc<SharedSlot>, e: u64) -> InFlight<ModelTransfer, ModelSpare> {
+fn flight_on(slot: &Arc<SharedSlot>) -> InFlight<ModelTransfer, ModelSpare> {
     InFlight::new(
         start_on(slot, ModelTransport("qspi"), ModelBuffer("buf-a")),
         ModelSpare("spare-0"),
-        epoch(e),
-        REGION_FULL,
+        target(),
     )
 }
 
 #[test]
 fn polled_then_lost_arbitration_gets_exactly_one_wake() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -268,14 +265,19 @@ fn polled_then_lost_arbitration_gets_exactly_one_wake() {
     );
 
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => {
-            assert_eq!(settled.outcome, TransferOutcome::Completed);
-            assert_eq!(settled.transport.0, "qspi");
-            assert_eq!(settled.spare.0, "spare-0");
+        Poll::Ready(mut settled) => {
+            assert_eq!(settled.outcome(), TransferOutcome::Completed);
+            let witness = settled.stripe_written();
+            assert!(witness.is_some(), "completed mints a witness");
+            let _ = witness;
             assert!(
-                settled.stripe_written().is_some(),
-                "completed mints a witness"
+                settled.stripe_written().is_none(),
+                "the mint is single-use: a second call returns None"
             );
+            let (transport, buffer, spare) = settled.into_resources();
+            assert_eq!(transport.0, "qspi");
+            assert_eq!(buffer.0, "buf-a");
+            assert_eq!(spare.0, "spare-0");
         }
         Poll::Pending => panic!("completed transfer must recover"),
     }
@@ -286,7 +288,7 @@ fn polled_then_lost_arbitration_gets_exactly_one_wake() {
 #[test]
 fn unpolled_below_winner_recovers_on_first_poll() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     slot.complete();
 
     let (counter, waker) = counting_waker();
@@ -298,7 +300,7 @@ fn unpolled_below_winner_recovers_on_first_poll() {
 #[test]
 fn completion_during_registration_is_not_lost() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     slot.state.lock().expect("slot lock").complete_on_register = true;
 
     let (counter, waker) = counting_waker();
@@ -316,7 +318,7 @@ fn completion_during_registration_is_not_lost() {
 #[test]
 fn cancel_then_late_completion_stays_cancelled() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -329,9 +331,9 @@ fn cancel_then_late_completion_stays_cancelled() {
     slot.complete();
 
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => {
+        Poll::Ready(mut settled) => {
             assert_eq!(
-                settled.outcome,
+                settled.outcome(),
                 TransferOutcome::Cancelled,
                 "late completion cannot rewrite a cancelled settlement"
             );
@@ -347,14 +349,14 @@ fn cancel_then_late_completion_stays_cancelled() {
 #[test]
 fn drain_racing_prior_completion_reports_completed() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     slot.complete();
     flight.begin_drain();
 
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => assert_eq!(settled.outcome, TransferOutcome::Completed),
+        Poll::Ready(settled) => assert_eq!(settled.outcome(), TransferOutcome::Completed),
         Poll::Pending => panic!("settled transfer must recover"),
     }
 }
@@ -362,17 +364,18 @@ fn drain_racing_prior_completion_reports_completed() {
 #[test]
 fn failure_settles_returns_resources_and_mints_no_witness() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
     assert!(flight.poll_complete(&mut cx).is_pending());
 
     slot.fail();
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => {
-            assert_eq!(settled.outcome, TransferOutcome::Failed);
-            assert_eq!(settled.buffer.0, "buf-a", "buffer recovered");
+        Poll::Ready(mut settled) => {
+            assert_eq!(settled.outcome(), TransferOutcome::Failed);
             assert!(settled.stripe_written().is_none());
+            let (_transport, buffer, _spare) = settled.into_resources();
+            assert_eq!(buffer.0, "buf-a", "buffer recovered");
         }
         Poll::Pending => panic!("failed transfer must settle"),
     }
@@ -381,7 +384,7 @@ fn failure_settles_returns_resources_and_mints_no_witness() {
 #[test]
 fn waker_replacement_wakes_only_the_newest() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (old_counter, old_waker) = counting_waker();
     let (new_counter, new_waker) = counting_waker();
 
@@ -411,7 +414,7 @@ fn waker_replacement_wakes_only_the_newest() {
 #[test]
 fn late_completion_after_recovery_is_inert_via_disarm() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
@@ -438,7 +441,7 @@ fn dropped_pending_transfer_disarms_the_slot() {
     let slot = Arc::new(SharedSlot::default());
     let (counter, waker) = counting_waker();
     {
-        let mut flight = flight_on(&slot, 0);
+        let mut flight = flight_on(&slot);
         let mut cx = Context::from_waker(&waker);
         assert!(flight.poll_complete(&mut cx).is_pending());
         // flight dropped here with the transfer pending.
@@ -456,7 +459,7 @@ fn sequential_transfers_reuse_the_same_slot() {
     let (_c, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
-    let mut first = flight_on(&slot, 0);
+    let mut first = flight_on(&slot);
     slot.complete();
     let settled = match first.poll_complete(&mut cx) {
         Poll::Ready(s) => s,
@@ -465,15 +468,17 @@ fn sequential_transfers_reuse_the_same_slot() {
     assert!(slot.is_disarmed());
 
     // Second transfer on the SAME slot with the recovered transport.
-    let second_transfer = start_on(&slot, settled.transport, ModelBuffer("buf-b"));
-    let mut second = InFlight::new(second_transfer, settled.spare, epoch(1), REGION_FULL);
+    let (transport, _buffer, spare) = settled.into_resources();
+    let second_transfer = start_on(&slot, transport, ModelBuffer("buf-b"));
+    let mut second = InFlight::new(second_transfer, spare, target());
     assert!(second.poll_complete(&mut cx).is_pending());
     slot.complete();
     match second.poll_complete(&mut cx) {
         Poll::Ready(s) => {
-            assert_eq!(s.outcome, TransferOutcome::Completed);
-            assert_eq!(s.transport.0, "qspi", "same transport identity");
-            assert_eq!(s.spare.0, "spare-0", "same spare identity");
+            assert_eq!(s.outcome(), TransferOutcome::Completed);
+            let (transport, _b, spare) = s.into_resources();
+            assert_eq!(transport.0, "qspi", "same transport identity");
+            assert_eq!(spare.0, "spare-0", "same spare identity");
         }
         Poll::Pending => panic!("second settles"),
     }
@@ -482,7 +487,7 @@ fn sequential_transfers_reuse_the_same_slot() {
 #[test]
 fn spare_is_writable_during_flight_and_drain_flag_clears() {
     let slot = Arc::new(SharedSlot::default());
-    let mut flight = flight_on(&slot, 0);
+    let mut flight = flight_on(&slot);
     let (_c, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 

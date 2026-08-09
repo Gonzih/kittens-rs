@@ -26,8 +26,8 @@
 
 use core::task::{Context, Poll};
 
-use crate::geometry::{FrameEpoch, Region};
-use crate::sweep::StripeWritten;
+use crate::geometry::Region;
+use crate::sweep::{StripeTarget, StripeWritten};
 
 /// An owned, in-flight region transfer at the HAL boundary.
 pub trait OwnedTransfer: Sized {
@@ -83,39 +83,57 @@ pub struct Recovered<T, B> {
     pub outcome: TransferOutcome,
 }
 
-/// Settlement of the full in-flight state: the transfer's resources plus
-/// the independently held spare buffer, the epoch, and the region.
+/// Settlement of the full in-flight state. Fields are **private** (round-2
+/// finding 4): safe code can neither construct a settlement nor rewrite
+/// its outcome, so the coverage proof chain starts only at a real,
+/// settled transfer.
 #[derive(Debug)]
 pub struct Settled<T, B, S> {
-    /// The transport, ready for the next transfer.
-    pub transport: T,
-    /// The sent buffer.
-    pub buffer: B,
-    /// The spare buffer that stayed writable during the flight.
-    pub spare: S,
-    /// How the transfer settled.
-    pub outcome: TransferOutcome,
-    /// The epoch this stripe belonged to.
-    pub epoch: FrameEpoch,
-    /// The region this transfer targeted.
-    pub region: Region,
+    transport: T,
+    buffer: B,
+    spare: S,
+    outcome: TransferOutcome,
+    /// Present exactly until the witness is minted: single-use.
+    target: Option<StripeTarget>,
 }
 
 impl<T, B, S> Settled<T, B, S> {
-    /// Mints the coverage witness — exists **only** for a `Completed`
-    /// settlement, which is what makes marking a cancelled, failed, or
-    /// never-started stripe unrepresentable (exit-review finding 4).
-    /// Duplicate witnesses from the same settlement are harmless by
-    /// construction: the sweep's in-order region check makes a replay of an
-    /// already-marked stripe unusable, and epochs never repeat.
-    pub fn stripe_written(&self) -> Option<StripeWritten> {
+    /// How the transfer settled.
+    pub const fn outcome(&self) -> TransferOutcome {
+        self.outcome
+    }
+
+    /// The region this settlement targeted.
+    pub fn region(&self) -> Region {
+        self.target.as_ref().map_or(
+            Region {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            },
+            StripeTarget::region,
+        )
+    }
+
+    /// Mints the coverage witness: **at most once**, and **only** for a
+    /// `Completed` settlement — the mint consumes the settlement's target,
+    /// so a second call returns `None` and a cancelled/failed settlement
+    /// never mints (round-2 finding 4's single-use requirement).
+    pub fn stripe_written(&mut self) -> Option<StripeWritten> {
         match self.outcome {
-            TransferOutcome::Completed => Some(StripeWritten {
-                epoch: self.epoch,
-                region: self.region,
+            TransferOutcome::Completed => self.target.take().map(|target| StripeWritten {
+                demand_id: target.demand_id,
+                epoch: target.epoch,
+                region: target.region,
             }),
             TransferOutcome::Cancelled | TransferOutcome::Failed => None,
         }
+    }
+
+    /// Consumes the settlement, returning every resource.
+    pub fn into_resources(self) -> (T, B, S) {
+        (self.transport, self.buffer, self.spare)
     }
 }
 
@@ -134,21 +152,21 @@ pub struct InFlight<X: OwnedTransfer, S> {
     transfer: Option<X>,
     spare: Option<S>,
     draining: bool,
-    epoch: FrameEpoch,
-    region: Region,
+    target: Option<StripeTarget>,
 }
 
 impl<X: OwnedTransfer, S> InFlight<X, S> {
     /// Wraps a started transfer together with the spare buffer that remains
-    /// writable during the flight, and the epoch/region identity the
-    /// eventual settlement witnesses.
-    pub const fn new(transfer: X, spare: S, epoch: FrameEpoch, region: Region) -> Self {
+    /// writable during the flight, bound to the unforgeable stripe target
+    /// minted by [`crate::sweep::Sweep::next_target`] — the transfer and
+    /// its claimed identity can no longer be paired independently
+    /// (round-2 finding 4).
+    pub const fn new(transfer: X, spare: S, target: StripeTarget) -> Self {
         Self {
             transfer: Some(transfer),
             spare: Some(spare),
             draining: false,
-            epoch,
-            region,
+            target: Some(target),
         }
     }
 
@@ -194,14 +212,14 @@ impl<X: OwnedTransfer, S> InFlight<X, S> {
             Poll::Ready(()) => {
                 let transfer = self.transfer.take().expect("transfer present");
                 let spare = self.spare.take().expect("spare present until settlement");
+                let target = self.target.take().expect("target present until settlement");
                 let recovered = transfer.recover();
                 Poll::Ready(Settled {
                     transport: recovered.transport,
                     buffer: recovered.buffer,
                     spare,
                     outcome: recovered.outcome,
-                    epoch: self.epoch,
-                    region: self.region,
+                    target: Some(target),
                 })
             }
             Poll::Pending => Poll::Pending,

@@ -1,6 +1,6 @@
 # esp32s3-spi2 probe (Xtensa-gated)
 
-The HAL-fidelity verdict and compile-ready adapter blueprint live in
+The HAL-fidelity verdict and its historical adapter blueprint live in
 [VERDICT.md](VERDICT.md) (external engineering contribution, Codex
 gpt-5.6-sol ultra, 2026-08-08): a profile-owned SPI2 TransferDone ISR +
 critical-section waker slot implements the OwnedTransfer boundary on
@@ -28,3 +28,8 @@ Additionally, per finding 2, the blueprint's `cancel()` already stores the
 settlement at its completion-observation linearization point — that part is
 correct as written and is now also a trait-level contract with an
 adversarial oracle (`cancel_then_late_completion_stays_cancelled`).
+
+The corrected blueprint matching the landed trait signatures is
+[adapter-blueprint.rs](adapter-blueprint.rs). Neither file compiles in this
+workspace — both await the Xtensa toolchain gate; "compile-ready" means
+shape-complete against the pinned esp-hal API, not built.

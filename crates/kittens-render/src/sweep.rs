@@ -15,14 +15,41 @@
 //!   [`SweepWritten`] — every planned stripe was *written*; nothing here
 //!   claims physical presentation.
 
-use crate::geometry::{FrameEpoch, Region};
+use crate::geometry::{FrameEpoch, PanelGeometry, Region};
 
-/// Witness that one stripe's transfer settled `Completed`. Minted only by
-/// [`crate::transfer::Settled::stripe_written`]; non-`Clone`, no public
-/// constructor. A cancelled, failed, or never-started stripe has no witness
-/// and therefore cannot be marked.
+/// An unforgeable stripe target: the identity (demand, epoch, region) a
+/// transfer must carry to witness coverage. Minted only by
+/// [`Sweep::next_target`]; non-`Clone`, private fields, consumed by
+/// [`crate::transfer::InFlight::new`]. This is what makes "relabel one
+/// completion for every planned region" unwritable (round-2 finding 4).
+#[derive(Debug)]
+pub struct StripeTarget {
+    pub(crate) demand_id: u64,
+    pub(crate) epoch: FrameEpoch,
+    pub(crate) region: Region,
+}
+
+impl StripeTarget {
+    /// The region this target covers.
+    pub const fn region(&self) -> Region {
+        self.region
+    }
+
+    /// The epoch this target belongs to.
+    pub const fn epoch(&self) -> FrameEpoch {
+        self.epoch
+    }
+}
+
+/// Witness that one stripe's transfer settled `Completed`. Minted at most
+/// once per settlement by [`crate::transfer::Settled::stripe_written`]
+/// (which consumes the settlement's target); non-`Clone`, private fields.
+/// A cancelled, failed, or never-started stripe has no witness and
+/// therefore cannot be marked.
+#[must_use = "an unmarked witness is lost coverage"]
 #[derive(Debug)]
 pub struct StripeWritten {
+    pub(crate) demand_id: u64,
     pub(crate) epoch: FrameEpoch,
     pub(crate) region: Region,
 }
@@ -60,14 +87,23 @@ pub enum InvalidPlan {
 }
 
 impl SweepPlan {
-    /// Validates a full-panel plan. The final stripe may be shorter than
-    /// `stripe_height`; coverage is exact by construction.
+    /// Validates a full-panel plan over an **admitted geometry** (round-2
+    /// finding 5): the panel comes from [`PanelGeometry`], whose custom
+    /// constructor is the named escape. The final stripe may be shorter
+    /// than `stripe_height`; coverage is exact by construction.
     ///
     /// # Errors
     ///
     /// [`InvalidPlan`] for an empty panel, a zero stripe height, or panel
     /// extents that overflow `u16` coordinates.
-    pub const fn new(panel: Region, stripe_height: u16) -> Result<Self, InvalidPlan> {
+    pub const fn for_panel(
+        geometry: PanelGeometry,
+        stripe_height: u16,
+    ) -> Result<Self, InvalidPlan> {
+        Self::new(geometry.panel(), stripe_height)
+    }
+
+    pub(crate) const fn new(panel: Region, stripe_height: u16) -> Result<Self, InvalidPlan> {
         if panel.width == 0 || panel.height == 0 {
             return Err(InvalidPlan::EmptyPanel);
         }
@@ -114,18 +150,20 @@ impl SweepPlan {
 /// The only success value [`crate::demand::FrameDemand::finish_written`]
 /// accepts. Carries its demand provenance; a foreign demand rejects it
 /// without mutating (finding 6).
+#[must_use = "an unsettled sweep witness wedges the demand machine"]
 #[derive(Debug)]
 pub struct SweepWritten {
-    pub(crate) demand_id: u32,
+    pub(crate) demand_id: u64,
     pub(crate) epoch: FrameEpoch,
 }
 
 /// Witness of an aborted sweep — transfer failure, cancellation, or
 /// shutdown. The only value [`crate::demand::FrameDemand::finish_failed`]
 /// accepts.
+#[must_use = "an unsettled abort witness wedges the demand machine"]
 #[derive(Debug)]
 pub struct AbortedSweep {
-    pub(crate) demand_id: u32,
+    pub(crate) demand_id: u64,
     pub(crate) epoch: FrameEpoch,
 }
 
@@ -148,7 +186,7 @@ pub struct Sweep<S> {
     plan: SweepPlan,
     next: u16,
     full_repaint: bool,
-    pub(crate) demand_id: u32,
+    pub(crate) demand_id: u64,
     pub(crate) epoch: FrameEpoch,
 }
 
@@ -167,7 +205,7 @@ impl<S> Sweep<S> {
         snapshot: S,
         plan: SweepPlan,
         full_repaint: bool,
-        demand_id: u32,
+        demand_id: u64,
         epoch: FrameEpoch,
     ) -> Self {
         Self {
@@ -201,6 +239,20 @@ impl<S> Sweep<S> {
         self.plan.region_at(self.next)
     }
 
+    /// Mints the unforgeable target for the next planned stripe. A
+    /// duplicate mint for the same position is harmless: the in-order
+    /// check makes at most one resulting witness usable.
+    pub const fn next_target(&self) -> Option<StripeTarget> {
+        match self.plan.region_at(self.next) {
+            Some(region) => Some(StripeTarget {
+                demand_id: self.demand_id,
+                epoch: self.epoch,
+                region,
+            }),
+            None => None,
+        }
+    }
+
     /// Records one written stripe by consuming its transfer witness. The
     /// witness must carry this sweep's epoch and exactly the next planned
     /// region.
@@ -212,7 +264,11 @@ impl<S> Sweep<S> {
     #[allow(clippy::needless_pass_by_value)] // witness consumption is the contract
     pub fn mark_written(&mut self, witness: StripeWritten) -> Result<(), WrongStripe> {
         match self.next_region() {
-            Some(expected) if witness.epoch == self.epoch && witness.region == expected => {
+            Some(expected)
+                if witness.demand_id == self.demand_id
+                    && witness.epoch == self.epoch
+                    && witness.region == expected =>
+            {
                 self.next += 1;
                 Ok(())
             }

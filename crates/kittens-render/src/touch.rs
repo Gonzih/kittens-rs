@@ -171,6 +171,7 @@ impl TouchGenerations {
     /// swap must observe a cleared latch and request a wake. The caller
     /// wakes exactly when this returns `true`; `false` means a service or
     /// retry is already latched, so another wake would be redundant.
+    #[must_use = "a true return is the only wake request for this arrival; ignoring it strands latched work"]
     pub fn produce(&self) -> bool {
         self.produce_with_after_increment(|| {})
     }
@@ -244,6 +245,7 @@ pub trait TouchReader {
 }
 
 /// Outcome of one bounded service activation.
+#[must_use = "BudgetExhausted and ReadFailed require the caller to re-arm; ignoring the outcome strands latched work"]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Activation {
     /// The final handoff observed no pending work and INT deasserted; the

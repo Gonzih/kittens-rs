@@ -8,8 +8,9 @@
   witness-driven transfer→sweep→demand composition (coverage cannot be
   claimed, only constructed from Completed settlements); provenance-branded
   demand settlement; generation-latched touch protocol; K2R-0A mechanism
-  verdict (SPI2 TransferDone ISR completion in an Unpin carrier) with the
-  compile-ready blueprint retained under probes/.
+  verdict (SPI2 TransferDone ISR completion in an Unpin carrier); the
+  historical and corrected blueprints are retained under probes/ and
+  compile only behind the Xtensa toolchain gate.
 
 ## 0.1.1 (kittens-tui) — 2026-08-08
 

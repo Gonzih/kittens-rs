@@ -1,9 +1,10 @@
 //! Embedded rendering/interaction profile for the Kittens reactor kernel.
 //!
-//! **Stage: K2R-0A feasibility experiment** (`SPEC.md` section 7). Nothing in
-//! this crate is a frozen public API: the spec's section 6 is a provisional
-//! candidate surface, and this crate currently contains the candidate probes
-//! that decide it. `K2R0A-LOG.md` is the experiment record.
+//! **Stage: K2R-0 host slice** (`SPEC.md` revision 3: section 6 is the
+//! normative host surface; the K2R-0A experiment that selected it is
+//! recorded in `K2R0A-LOG.md`, and `TRACE-MANIFEST.md` maps every required
+//! oracle to its status). Not yet frozen: sealing, the kernel-admitted
+//! source carrier, the Xtensa probe, and board HIL are named open gates.
 //!
 //! The crate core is `#![no_std]`, no-alloc, `#![forbid(unsafe_code)]`. Host
 //! tests model the HAL boundary; the exact-HAL target compile probe is a
