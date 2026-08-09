@@ -5,6 +5,11 @@
 - Add `Engine::resume` replay construction for kittens-code KC0, restoring
   logged configuration and seeding turn, record, effect, and request counters
   above every persisted value without re-emitting replayed work.
+- Add the feature-gated Tokio `LiveClient` for Anthropic Messages SSE,
+  including typed window lowering, streamed text/tool-use collection,
+  provider usage, bounded jittered retries with `Retry-After`, and a
+  consecutive-failure circuit breaker. The default driver build remains
+  free of the optional HTTP/TLS dependency tree.
 
 ## 0.1.1 (kittens-tui) — 2026-08-08
 

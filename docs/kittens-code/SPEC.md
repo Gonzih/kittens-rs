@@ -475,8 +475,37 @@ CoreInputs that need them, never ambient.
 ## 12. Model client (driver-tokio, KC0)
 
 - M1. One wire dialect: Anthropic-style messages, streaming SSE (D6).
+  The KC0 Tokio driver posts to `<endpoint-base>/v1/messages` with
+  `x-api-key`, `anthropic-version: 2023-06-01`, JSON content type, and
+  `stream: true`; the bootstrap profile supplies the exact model id and
+  maximum output-token count, so neither is frozen into the library. The
+  top-level `system` value concatenates the layout's non-empty `system`,
+  `rules_reminder`, and reminder blocks. `user_info`, `summary`, and
+  `last_user_query` form the leading user turn. Verbatim-tail messages use
+  the core's canonical `[user] ` / `[assistant] ` prefixes (an untagged
+  `TailItem::Message` is assistant text); tool call/result pairs lower to
+  Anthropic `tool_use` / `tool_result` content blocks using a deterministic
+  id derived from `EffectId`, with adjacent equal roles coalesced.
+  `message_start` supplies input-token usage; text deltas and partial tool
+  JSON are accumulated by content-block index until `message_stop`.
+  Unknown SSE event and delta types are ignored (additive wire evolution),
+  while malformed JSON, a dropped stream, or a missing `message_stop` is a
+  transport failure. KC0 has no tool-schema registry: the request therefore
+  omits `tools`, but the response parser still preserves any `tool_use`
+  blocks an Anthropic-dialect endpoint emits. Outbound tool declaration is
+  deferred until a registry has a controlling contract and gate.
 - M2. Retry ladder + jitter + Retry-After + semantic retries + failure-count
-  circuit breaker; cancel-aware sleeps. Gate G7 scenario.
+  circuit breaker; cancel-aware sleeps. Gate G7 scenario. The driver uses a
+  configurable bounded exponential policy over `(attempt, failure class,
+  elapsed, Retry-After, jitter)`: transport failures, HTTP 429, HTTP 5xx,
+  provider overload events, and stream drops retry; authentication,
+  context-length/request-too-large failures, and other HTTP 4xx responses
+  do not. `Retry-After` is a lower bound on the selected delay. Dropping the
+  model future cancels the Tokio sleep and in-flight request. The breaker
+  counts terminally failed model calls (not individual retry attempts),
+  resets after success, opens at the configured consecutive-failure count,
+  fails fast with the last terminal error class during a bounded cooldown,
+  and permits a new call after cooldown.
 - M3. Two model tiers (root, sub) as symbolic profile ids in SessionConfig,
   resolved to endpoints by bootstrap config (P5 split).
 

@@ -11,6 +11,9 @@ use kittens_code_core::window::{TailItem, WindowLayout};
 use kittens_code_protocol::error::ErrorCode;
 use serde::Deserialize;
 
+#[cfg(feature = "live")]
+pub use crate::live::{LiveClient, LiveConfig, RetryConfig};
+
 /// A model-call failure the engine can classify.
 pub type ModelError = (ErrorCode, String);
 

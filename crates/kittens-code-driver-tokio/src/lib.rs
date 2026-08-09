@@ -15,6 +15,8 @@
 //! CoreInput/CoreAction contract deterministically for eval E1.
 
 pub mod appender;
+#[cfg(feature = "live")]
+mod live;
 pub mod model;
 pub mod runner;
 pub mod tools;
