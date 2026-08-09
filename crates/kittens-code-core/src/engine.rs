@@ -594,8 +594,8 @@ impl Engine {
             if call.name == "recall" {
                 self.start_recall(id, &call.args_json, true, t);
             } else {
-                let spec = EffectSpec::Tool(call);
-                t.actions.push(CoreAction::StartEffect { id, epoch, spec });
+                let _ = epoch;
+                self.start_effect(id, EffectSpec::Tool(call), t);
             }
         } else {
             let id = slot.id;
@@ -624,7 +624,9 @@ impl Engine {
         t: &mut Transition,
     ) {
         // Exactly-once ledger + epoch discipline (L-T1/L-T2): late,
-        // duplicate, or stale-epoch completions are dropped with a trace.
+        // duplicate, or stale-epoch completions are dropped with a trace and
+        // do NOT close a stream (the stream this id started, if any, was
+        // already terminalized when its real completion arrived).
         if epoch != self.epoch || self.finished.contains(&id) {
             self.commit(
                 RecordKind::EffectOutcome,
@@ -636,6 +638,9 @@ impl Engine {
             );
             return;
         }
+        // The effect reached its real terminal: close its lifecycle stream
+        // (paired with the StreamStarted from start_effect, SPEC S3 / #3).
+        self.commit_stream_terminal(id, t);
         if self
             .recalls
             .iter()
@@ -768,11 +773,7 @@ impl Engine {
                     if call.name == "recall" {
                         self.start_recall(call_id, &call.args_json, false, t);
                     } else {
-                        t.actions.push(CoreAction::StartEffect {
-                            id: call_id,
-                            epoch: self.epoch,
-                            spec: EffectSpec::Tool(call),
-                        });
+                        self.start_effect(call_id, EffectSpec::Tool(call), t);
                     }
                 }
                 ApprovalPolicy::Deny => {
@@ -1001,14 +1002,14 @@ impl Engine {
                         id: child,
                         wait: RecallWait::Pages,
                     });
-                    t.actions.push(CoreAction::StartEffect {
-                        id: child,
-                        epoch: self.epoch,
-                        spec: EffectSpec::StoreReadPage {
+                    self.start_effect(
+                        child,
+                        EffectSpec::StoreReadPage {
                             sel: request.sel,
                             cursor: request.cursor,
                         },
-                    });
+                        t,
+                    );
                     self.recalls.push(query);
                     return;
                 }
@@ -1025,13 +1026,13 @@ impl Engine {
                             id: child,
                             wait: RecallWait::Ask,
                         });
-                        t.actions.push(CoreAction::StartEffect {
-                            id: child,
-                            epoch: self.epoch,
-                            spec: EffectSpec::SubModel {
+                        self.start_effect(
+                            child,
+                            EffectSpec::SubModel {
                                 requests: alloc::vec![request],
                             },
-                        });
+                            t,
+                        );
                     }
                     self.recalls.push(query);
                     return;
@@ -1112,11 +1113,7 @@ impl Engine {
         let id = self.fresh_effect();
         self.phase = Phase::AwaitingModel(id);
         let window = self.assemble_window();
-        t.actions.push(CoreAction::StartEffect {
-            id,
-            epoch: self.epoch,
-            spec: EffectSpec::ModelCall(window),
-        });
+        self.start_effect(id, EffectSpec::ModelCall(window), t);
     }
 
     fn end_turn(&mut self, reason: TurnEnd, t: &mut Transition) {
@@ -1135,6 +1132,10 @@ impl Engine {
     fn cancel_all(&mut self, t: &mut Transition) {
         if let Phase::AwaitingModel(id) = self.phase {
             t.actions.push(CoreAction::CancelEffect { id });
+            // Close the cancelled effect's lifecycle stream so a crash right
+            // after interrupt leaves no orphan StreamStarted that repair would
+            // falsely resurrect (review input 19 #4).
+            self.commit_stream_terminal(id, t);
             self.finished.push(id);
         }
         let recall_ids: Vec<EffectId> = self.recalls.iter().map(|query| query.id).collect();
@@ -1157,6 +1158,7 @@ impl Engine {
             if !self.finished.contains(&id) {
                 self.finished.push(id);
                 t.actions.push(CoreAction::CancelEffect { id });
+                self.commit_stream_terminal(id, t);
             }
         }
         for id in &recall_ids {
@@ -1164,11 +1166,18 @@ impl Engine {
                 self.finished.push(*id);
             }
         }
-        for slot in &self.calls {
-            if !slot.done && slot.awaiting_approval.is_none() && !recall_ids.contains(&slot.id) {
-                t.actions.push(CoreAction::CancelEffect { id: slot.id });
-                self.finished.push(slot.id);
-            }
+        let cancel_slots: Vec<EffectId> = self
+            .calls
+            .iter()
+            .filter(|slot| {
+                !slot.done && slot.awaiting_approval.is_none() && !recall_ids.contains(&slot.id)
+            })
+            .map(|slot| slot.id)
+            .collect();
+        for id in cancel_slots {
+            t.actions.push(CoreAction::CancelEffect { id });
+            self.commit_stream_terminal(id, t);
+            self.finished.push(id);
         }
         self.recalls.clear();
         self.calls.clear();
@@ -1233,6 +1242,40 @@ impl Engine {
         let id = EffectId(self.next_effect);
         self.next_effect += 1;
         id
+    }
+
+    /// Dispatches an effect through the single choke point: it commits a
+    /// `StreamStarted` lifecycle record keyed by the effect id BEFORE the
+    /// `StartEffect` action, so a crash between here and the effect's
+    /// terminal leaves an orphan `StreamStarted` that the appender's startup
+    /// scanner repairs into an `aborted_by_crash` terminal (SPEC S3; review
+    /// input 19 #3). Every model/tool/RLM effect starts here.
+    fn start_effect(&mut self, id: EffectId, spec: EffectSpec, t: &mut Transition) {
+        self.commit(
+            RecordKind::StreamStarted,
+            Some(id),
+            RecordPayload::StreamStarted(Vec::new()),
+            t,
+        );
+        t.actions.push(CoreAction::StartEffect {
+            id,
+            epoch: self.epoch,
+            spec,
+        });
+    }
+
+    /// Commits the `StreamTerminal` lifecycle record that closes an effect's
+    /// transaction (paired with the `StreamStarted` from [`Self::start_effect`]).
+    /// Call exactly once per effect that reached a terminal, alongside its
+    /// `EffectOutcome`. The persisted `Started -> Terminal` pair is what makes
+    /// the exactly-once effect lifecycle discoverable on replay (SPEC S3).
+    fn commit_stream_terminal(&mut self, id: EffectId, t: &mut Transition) {
+        self.commit(
+            RecordKind::StreamTerminal,
+            Some(id),
+            RecordPayload::StreamTerminal(Vec::new()),
+            t,
+        );
     }
 
     fn publish(&mut self, event: Event, t: &mut Transition) {

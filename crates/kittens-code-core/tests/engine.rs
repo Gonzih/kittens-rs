@@ -377,3 +377,70 @@ fn persist_failure_is_fatal_and_cancels() {
     let actions = user_input(&mut e, "again");
     assert!(started_effects(&actions).is_empty());
 }
+
+fn committed_kinds(actions: &[CoreAction]) -> Vec<kittens_code_core::record::RecordKind> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            CoreAction::Commit(records) => Some(records),
+            _ => None,
+        })
+        .flatten()
+        .map(|r| r.kind)
+        .collect()
+}
+
+#[test]
+fn effects_emit_stream_started_and_terminal_lifecycle_records() {
+    use kittens_code_core::record::RecordKind;
+    let mut e = engine();
+    // Starting a turn dispatches a model effect -> a StreamStarted record.
+    let actions = user_input(&mut e, "hi");
+    let kinds = committed_kinds(&actions);
+    assert!(
+        kinds.contains(&RecordKind::StreamStarted),
+        "model effect dispatch commits StreamStarted (crash-repair anchor)"
+    );
+    let (model_id, epoch, _) = started_effects(&actions)[0].clone();
+
+    // The model terminal closes the stream -> a StreamTerminal record.
+    let actions = e
+        .handle(CoreInput::EffectFinished {
+            id: model_id,
+            epoch,
+            terminal: EffectTerminal::Model(ModelOutcome {
+                text: String::from("done"),
+                tool_calls: vec![],
+                usage: None,
+            }),
+        })
+        .actions;
+    assert!(
+        committed_kinds(&actions).contains(&RecordKind::StreamTerminal),
+        "the effect terminal commits StreamTerminal"
+    );
+}
+
+#[test]
+fn interrupt_terminalizes_the_cancelled_effect_stream() {
+    use kittens_code_core::record::RecordKind;
+    let mut e = engine();
+    let _ = user_input(&mut e, "hi"); // model effect now in flight
+    let actions = e
+        .handle(CoreInput::ClientOp(Submission {
+            id: SubmissionId(2),
+            op: Op::Interrupt,
+        }))
+        .actions;
+    // Interrupt cancels the in-flight model effect AND closes its stream, so
+    // crash repair will not falsely resurrect it (review #4).
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, CoreAction::CancelEffect { .. }))
+    );
+    assert!(
+        committed_kinds(&actions).contains(&RecordKind::StreamTerminal),
+        "interrupt terminalizes the cancelled effect's stream"
+    );
+}
