@@ -98,7 +98,7 @@ fn throttle_blocks_schedules_and_begin_sweep_acknowledges() {
         None,
         "begin_sweep is the sole acknowledgment; schedule cleared"
     );
-    drop(token);
+    let _ = token;
 }
 
 #[test]
