@@ -1,5 +1,5 @@
-//! The touch service protocol: generation-latched, snapshot-read, bounded
-//! per activation, honestly coalescing.
+//! The touch service protocol: generation-counted, pending-latched,
+//! snapshot-read, bounded per activation, honestly coalescing.
 //!
 //! Semantics (SPEC 5.4, review findings 11/12): **latest-state with
 //! coalescing** — every surfaced report is one complete, untorn snapshot;
@@ -10,18 +10,19 @@
 //!
 //! Division of labor:
 //!
-//! - [`TouchGenerations`]: the shared produced/serviced pair. The ISR side
-//!   does exactly one thing — bump the produced generation (and wakes
-//!   through its platform slot; the wake mechanism itself is the
-//!   platform's, per the K2R-0A completion verdict). Wrap safety comes from
-//!   comparing generations by equality, never by ordering.
-//! - [`TouchService`]: the pure, deterministic service machine — bounded
+//! - [`TouchGenerations`]: the shared produced/serviced pair plus an
+//!   authoritative pending/retry latch. The ISR side increments first,
+//!   then latches and wakes only on the latch's idle-to-pending transition.
+//!   The service side claims the latch before each read, so arrivals during
+//!   the read remain visible even if the generation counter wraps.
+//! - [`TouchService`]: the deterministic service machine — bounded
 //!   snapshot reads per activation, re-service on generation change or
 //!   asserted INT, pending state restored on read failure. Being pure, its
-//!   interleavings are tested exhaustively without threads.
+//!   adversarial interleavings are tested deterministically without threads.
 //! - [`TouchDelta`]: pure edge reconstruction between surfaced reports.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::num::NonZeroU8;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// One tracked contact. The FT3168 reports at most two.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -58,7 +59,7 @@ impl TouchReport {
 pub enum ContactEdge {
     /// The contact appears in `next` but not `prev`.
     Down(TouchPoint),
-    /// The contact appears in both; position may have changed.
+    /// The contact appears in both and the complete point changed.
     Moved {
         /// Position in the previous surfaced report.
         from: TouchPoint,
@@ -84,14 +85,17 @@ impl TouchDelta {
         // Ups and moves: walk previous contacts.
         for point in prev.points.iter().flatten() {
             let edge = match next.point_by_id(point.id) {
-                Some(now) => ContactEdge::Moved {
+                Some(now) if now != *point => Some(ContactEdge::Moved {
                     from: *point,
                     to: now,
-                },
-                None => ContactEdge::Up(*point),
+                }),
+                Some(_) => None,
+                None => Some(ContactEdge::Up(*point)),
             };
-            edges[slot] = Some(edge);
-            slot += 1;
+            if let Some(edge) = edge {
+                edges[slot] = Some(edge);
+                slot += 1;
+            }
         }
         // Downs: next contacts absent from previous.
         for point in next.points.iter().flatten() {
@@ -104,15 +108,25 @@ impl TouchDelta {
     }
 }
 
-/// The shared produced/serviced generation pair.
+/// Shared touch-arrival state for one producer domain and one service
+/// consumer.
 ///
-/// The ISR side calls [`TouchGenerations::produce`]; the service side reads
-/// and marks. Both sides use wrapping increments and compare only by
-/// equality, so a `u32` wrap is harmless (finding 12's wrap concern).
+/// `produced`/`serviced` detect an arrival concurrent with a snapshot, but
+/// the separate `pending` latch is authoritative for scheduling and retry.
+/// Counter equality therefore never means idle by itself: after any
+/// positive multiple of `2^32` unserviced produces the counters may alias,
+/// while the latch remains set.
+///
+/// The platform registers/arms its wake destination before enabling the
+/// interrupt that calls [`TouchGenerations::produce`]. This ordering is
+/// required because the latch's false-to-true transition may be the only
+/// wake for a coalesced run of produces. Exactly one service consumer may
+/// call [`TouchService::service`] at a time.
 #[derive(Debug, Default)]
 pub struct TouchGenerations {
     produced: AtomicU32,
     serviced: AtomicU32,
+    pending: AtomicBool,
 }
 
 impl TouchGenerations {
@@ -129,31 +143,84 @@ impl TouchGenerations {
         Self {
             produced: AtomicU32::new(generation),
             serviced: AtomicU32::new(generation),
+            pending: AtomicBool::new(false),
         }
     }
 
-    /// ISR side: records one interrupt activation. Returns `true` when the
-    /// pair transitioned from idle to pending — the caller wakes its
-    /// platform slot exactly then (wake dedup, not wake suppression:
-    /// additional produces while already pending are captured by the
-    /// generation, not by extra wakes).
+    /// Creates a pending state whose counters have aliased at `generation`.
+    ///
+    /// This is the state reached after a positive multiple of `2^32`
+    /// produces without a successful snapshot. It exists for deterministic
+    /// wrap-boundary oracles; production code uses
+    /// [`TouchGenerations::new`].
+    #[doc(hidden)]
+    pub const fn new_pending_at(generation: u32) -> Self {
+        Self {
+            produced: AtomicU32::new(generation),
+            serviced: AtomicU32::new(generation),
+            pending: AtomicBool::new(true),
+        }
+    }
+
+    /// ISR side: records one touch arrival and reports whether to wake the
+    /// registered platform slot.
+    ///
+    /// The wrapping generation increment is sequenced before
+    /// `pending.swap(true)`. **Why:** a consumer racing the handoff must
+    /// either observe the new generation before it clears/rechecks, or the
+    /// swap must observe a cleared latch and request a wake. The caller
+    /// wakes exactly when this returns `true`; `false` means a service or
+    /// retry is already latched, so another wake would be redundant.
     pub fn produce(&self) -> bool {
-        let was_pending = self.is_pending();
-        self.produced.fetch_add(1, Ordering::AcqRel);
-        !was_pending
+        self.produce_with_after_increment(|| {})
     }
 
-    /// Whether an unserviced generation exists.
+    /// Whether service or retry is authoritatively latched.
+    ///
+    /// This reads the persistent latch, never generation equality. The latch
+    /// remains authoritative across INT-only work, read failure, budget
+    /// exhaustion, and generation wrap. The sole consumer temporarily
+    /// clears it only while owning a snapshot attempt, and restores it before
+    /// returning from a failed attempt.
     pub fn is_pending(&self) -> bool {
-        self.produced.load(Ordering::Acquire) != self.serviced.load(Ordering::Acquire)
+        self.pending.load(Ordering::Acquire)
     }
 
-    fn produced_now(&self) -> u32 {
+    // The callback is a deterministic oracle seam at the protocol's only
+    // two-atomic producer boundary. The public path supplies an empty
+    // callback, so production and the interleaving oracle execute the same
+    // operations in the same order.
+    fn produce_with_after_increment(&self, after_increment: impl FnOnce()) -> bool {
+        self.produced.fetch_add(1, Ordering::Relaxed);
+        after_increment();
+        !self.pending.swap(true, Ordering::AcqRel)
+    }
+
+    fn latch_retry(&self) {
+        self.pending.store(true, Ordering::Release);
+    }
+
+    fn claim_snapshot(&self) -> u32 {
+        // Clear BEFORE sampling the generation and beginning the read.
+        // WHY: every producer during the read must independently set the
+        // latch; a wrapping counter is then corroboration, never the only
+        // evidence of concurrent work. The acquire half observes the
+        // generation published before a producer's release swap.
+        self.pending.swap(false, Ordering::AcqRel);
         self.produced.load(Ordering::Acquire)
     }
 
-    fn mark_serviced(&self, generation: u32) {
+    fn complete_snapshot(&self, generation: u32, int_asserted: bool) {
         self.serviced.store(generation, Ordering::Release);
+        let generation_changed =
+            self.produced.load(Ordering::Acquire) != self.serviced.load(Ordering::Acquire);
+        let arrival_latched = self.pending.load(Ordering::Acquire);
+        if generation_changed || arrival_latched || int_asserted {
+            // Re-latch BEFORE another loop turn can report budget
+            // exhaustion. WHY: BudgetExhausted and ReadFailed rely on this
+            // latch, rather than a future interrupt edge, for retry.
+            self.latch_retry();
+        }
     }
 }
 
@@ -179,38 +246,44 @@ pub trait TouchReader {
 /// Outcome of one bounded service activation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Activation {
-    /// All pending generations serviced; INT deasserted; the source may go
-    /// quiescent until the next produce.
+    /// The final handoff observed no pending work and INT deasserted; the
+    /// source may go quiescent. A producer racing after that observation
+    /// latches work and requests a wake.
     Idle {
         /// Snapshots surfaced during this activation.
         surfaced: u8,
     },
     /// The per-activation budget was exhausted while work remained (stuck
-    /// INT line, or a producer outrunning the budget). The caller MUST
-    /// re-arm/re-schedule; the reactor is not monopolized.
+    /// INT line, or a producer outrunning the budget). Pending/retry remains
+    /// latched. The caller MUST re-arm/re-schedule this source; later
+    /// producers may deduplicate their wake against that latch.
     BudgetExhausted {
         /// Snapshots surfaced during this activation.
         surfaced: u8,
     },
-    /// A snapshot read failed. Pending state is restored: the failed
-    /// generation will be serviced by the next activation.
+    /// A snapshot read failed. Pending/retry remains latched, including for
+    /// an activation started by INT alone. The caller MUST re-arm/re-schedule
+    /// this source; the next activation retries even if INT deasserts.
     ReadFailed {
         /// Snapshots surfaced before the failure.
         surfaced: u8,
     },
 }
 
-/// The pure, bounded touch service machine.
+/// The deterministic, bounded touch service machine.
 #[derive(Debug)]
 pub struct TouchService {
-    budget_per_activation: u8,
+    budget_per_activation: NonZeroU8,
     last_surfaced: TouchReport,
 }
 
 impl TouchService {
-    /// Explicit per-activation snapshot budget; no `Default`. One or two is
-    /// typical: the budget bounds reactor monopolization, not input rate.
-    pub const fn new(budget_per_activation: u8) -> Self {
+    /// Creates a service with an explicit, nonzero snapshot budget.
+    ///
+    /// One or two is typical: the budget bounds reactor monopolization, not
+    /// input rate. [`NonZeroU8`] makes a permanent zero-progress service
+    /// unrepresentable; there is deliberately no `Default`.
+    pub const fn new(budget_per_activation: NonZeroU8) -> Self {
         Self {
             budget_per_activation,
             last_surfaced: TouchReport {
@@ -228,11 +301,18 @@ impl TouchService {
     /// snapshot (with its edges relative to the previously surfaced report)
     /// through `surface`.
     ///
-    /// Protocol per SPEC 5.4: service while a generation is pending or INT
-    /// is asserted, at most `budget_per_activation` snapshot reads; a
-    /// generation produced *during* a read is observed by the post-read
-    /// generation check and serviced within budget; a failed read restores
-    /// pending state and ends the activation.
+    /// Protocol per SPEC 5.4: service while pending/retry is latched or INT
+    /// is asserted, at most the configured number of snapshot reads. Before
+    /// each read the consumer clears the latch, then samples the generation;
+    /// after a successful read it rechecks the latch, generation, and INT
+    /// and re-latches if any says more work exists. **Why this order:** an
+    /// arrival during the read sets the cleared latch even across exact
+    /// counter wrap, while an arrival after the final check sets the latch
+    /// and requests its own wake. A failed read re-latches before returning.
+    ///
+    /// `BudgetExhausted` and `ReadFailed` leave the latch set. Their caller
+    /// must arrange another activation rather than waiting for another
+    /// [`TouchGenerations::produce`] call, whose wake may be deduplicated.
     pub fn service<R: TouchReader>(
         &mut self,
         generations: &TouchGenerations,
@@ -241,32 +321,77 @@ impl TouchService {
     ) -> Activation {
         let mut surfaced: u8 = 0;
         loop {
-            let pending = generations.is_pending() || reader.int_asserted();
-            if !pending {
+            if reader.int_asserted() {
+                generations.latch_retry();
+            }
+            if !generations.is_pending() {
                 return Activation::Idle { surfaced };
             }
-            if surfaced >= self.budget_per_activation {
+            if surfaced >= self.budget_per_activation.get() {
                 return Activation::BudgetExhausted { surfaced };
             }
 
-            let generation_at_start = generations.produced_now();
-            match reader.read_snapshot() {
-                Ok(report) => {
-                    let delta = TouchDelta::between(&self.last_surfaced, &report);
-                    self.last_surfaced = report;
-                    surface(report, delta);
-                    // The snapshot covers every produce up to the read
-                    // start; later produces stay pending by generation
-                    // inequality and drive another loop turn.
-                    generations.mark_serviced(generation_at_start);
-                    surfaced += 1;
-                }
-                Err(_) => {
-                    // Nothing marked: the pending generation survives for
-                    // the next activation.
-                    return Activation::ReadFailed { surfaced };
-                }
+            let generation_at_start = generations.claim_snapshot();
+            if let Ok(report) = reader.read_snapshot() {
+                let delta = TouchDelta::between(&self.last_surfaced, &report);
+                self.last_surfaced = report;
+                surface(report, delta);
+                surfaced += 1;
+                generations.complete_snapshot(generation_at_start, reader.int_asserted());
+            } else {
+                // The claim cleared the latch before the fallible read;
+                // restore it before returning so INT-only work and a
+                // now-deasserted line still get a retry.
+                generations.latch_retry();
+                return Activation::ReadFailed { surfaced };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct OneSnapshot {
+        reads: u8,
+    }
+
+    impl TouchReader for OneSnapshot {
+        type Error = core::convert::Infallible;
+
+        fn read_snapshot(&mut self) -> Result<TouchReport, Self::Error> {
+            self.reads += 1;
+            Ok(TouchReport::default())
+        }
+
+        fn int_asserted(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn increment_then_latch_closes_idle_check_lost_wake() {
+        let generations = TouchGenerations::new();
+        assert!(generations.produce(), "initial transition requests a wake");
+
+        let mut service = TouchService::new(NonZeroU8::MIN);
+        let mut reader = OneSnapshot { reads: 0 };
+        let mut activation = None;
+
+        // Pause the second producer after its generation increment but
+        // before its latch swap. The consumer can complete and exit idle;
+        // the producer must then see the cleared latch and request a wake.
+        let wake = generations.produce_with_after_increment(|| {
+            activation = Some(service.service(&generations, &mut reader, |_, _| {}));
+        });
+
+        assert_eq!(activation, Some(Activation::Idle { surfaced: 1 }));
+        assert_eq!(reader.reads, 1);
+        assert!(wake, "post-idle latch transition requests the wake");
+        assert!(
+            generations.is_pending(),
+            "the requested activation remains latched"
+        );
     }
 }

@@ -74,3 +74,16 @@ persistent retry latch across INT-only failure and wrap alias (F11), no
 done-slot model + drop traces (F1), superseded-blueprint note (F3);
 (batch 3) spec §6 amendment, trace manifest, README/profile checklist,
 changelog, seam/drop/no-std fixtures (F14, F15). Re-review follows.
+
+## Exit-review batches landed (2026-08-08)
+
+Batch 1 (author: session agent): witness-driven transfer/sweep/demand
+composition — findings 2, 4–9, F1 model, F3 note. Batch 2 (**author: the
+reviewing engineer, Codex gpt-5.6-sol ultra, workspace-write session**;
+reviewed and independently verified by the session agent): the touch
+pending-latch protocol — findings 10–13, including its own refinement of
+claiming the latch before the read so an exact-2^32 during-read alias
+cannot erase arrivals (tradeoff: at most one redundant wake). Batch 3
+(author: session agent): SPEC revision 3 amendment, trace manifest,
+profile README checklist, changelog, crate no_std CI gate. All gates
+green: 41 oracles, fmt, clippy zero, thumbv7em-none-eabi release build.

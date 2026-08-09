@@ -19,7 +19,7 @@ manifest. Statuses: ✓ (oracle in CI), **OPEN** (host work remaining),
 | demand-policy state table | ✓ | one oracle per table row in `k2r0_demand_sweep.rs`: coalescing/monotonic epochs, one-in-flight, request-during-sweep, throttle/eligibility, failed-retains, invalidation-discards, effective-clears, abandon-recovers |
 | stale/foreign/duplicate finish | ✓ | `foreign_and_stale_settlement_is_rejected_without_mutation` |
 | snapshot immutability through the sweep | ✓ | `snapshot_is_immutable_through_the_sweep_and_returned_at_the_end` |
-| touch interleavings (finding-12 set) | ✓ (round-1 set) / **OPEN** (round-2 additions landing in batch 2: TOCTOU wake-dedup race + negative control, INT-only failure retry, wrap alias, identical-snapshot no-edge) | `k2r0_touch.rs` |
+| touch interleavings (findings 10–13 set) | ✓ | `k2r0_touch.rs` (16 oracles): `increment_then_latch_closes_idle_check_lost_wake` + `negative_control_check_before_increment_loses_idle_wake`, `startup_int_read_failure_retries_after_int_deasserts`, `budget_exhaustion_keeps_retry_latched_after_int_deasserts`, `seeded_two_to_the_32_produces_cannot_alias_pending_to_idle`, `stuck_int_identical_snapshots_emit_no_false_movement_edges`, `service_budget_is_nonzero_by_construction`, plus the round-1 set |
 | Outcome-B receiver/task traces | not applicable | mechanism C selected (`K2R0A-LOG.md`); B was not needed |
 | external-consumer seam fixture | **GATED** | bilateral seam co-sign with the `kittens-code` workstream (SPEC section 10) |
 | target compile/link against the chosen HAL SHA | **GATED** | Xtensa toolchain approval (`probes/esp32s3-spi2/`) |
