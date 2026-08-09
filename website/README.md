@@ -2,7 +2,8 @@
 
 The editable GitHub Pages source lives in [`src/`](src). The controlling
 contract is [`SPEC.md`](SPEC.md), and [`RESEARCH.md`](RESEARCH.md) records the
-claim, visual, accessibility, and deployment evidence used for W0.
+claim, visual, accessibility, kittens-code, and deployment evidence used for
+W0.1.
 
 Build and verify from the repository root:
 

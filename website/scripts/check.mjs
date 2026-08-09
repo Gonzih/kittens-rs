@@ -170,6 +170,21 @@ check(occurrences(notFound, /<h1(?:\s|>)/gu) === 1, "404.html must contain exact
 
 const requiredCopy = [
   "Make async orchestration harder to get wrong.",
+  "Meet kittens-code",
+  "kittens-code-protocol",
+  "kittens-code-core",
+  "kittens-code-driver-tokio",
+  "kittens-code-cli",
+  "cargo install kittens-code-cli --version 0.0.1",
+  "source lives on <code>kc0</code>, not deployed <code>main</code>",
+  "driver topology and E1 evaluation rig remain deferred KC0 scope",
+  "Op → Submission",
+  "handle() → Transition",
+  "Commit → Persisted",
+  "DISPLAY",
+  "ORCHESTRATION",
+  "COGNITION",
+  "ask-each",
   "Inexpressible",
   "Static detection",
   "Deterministic schedules",
@@ -182,6 +197,27 @@ const requiredCopy = [
 
 for (const copy of requiredCopy) {
   check(html.includes(copy), `required evidence-boundary copy is missing: ${copy}`);
+}
+
+const requiredFlagshipLinks = [
+  "https://github.com/Gonzih/kittens-rs/tree/kc0",
+  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/SPEC.md",
+  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/RESEARCH.md",
+  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/FRONTMATTER.md",
+  "https://github.com/Gonzih/kittens-rs/blob/kc0/CHANGELOG.md#kittens-code-family-001--2026-08-09",
+  "https://github.com/Gonzih/kittens-rs/tree/kc0/docs/kittens-code/research-inputs",
+  "https://crates.io/crates/kittens-code-protocol",
+  "https://crates.io/crates/kittens-code-core",
+  "https://crates.io/crates/kittens-code-driver-tokio",
+  "https://crates.io/crates/kittens-code-cli",
+  "https://docs.rs/kittens-code-protocol/0.0.1/kittens_code_protocol/",
+  "https://docs.rs/kittens-code-core/0.0.1/kittens_code_core/",
+  "https://docs.rs/kittens-code-driver-tokio/0.0.1/kittens_code_driver_tokio/",
+  "https://docs.rs/kittens-code-cli/0.0.1/kittens_code_cli/",
+];
+
+for (const url of requiredFlagshipLinks) {
+  check(html.includes(`href="${url}"`), `required kittens-code link is missing: ${url}`);
 }
 
 for (const forbiddenClaim of [
@@ -253,7 +289,7 @@ let build;
 try {
   build = JSON.parse(buildText);
   check(build.schema_version === 1, "unexpected build.json schema version");
-  check(build.site_version === "W0", "unexpected site version in build.json");
+  check(build.site_version === "W0.1", "unexpected site version in build.json");
   check(/^[0-9a-f]{40}$/u.test(build.source_commit), "build.json needs a full source commit");
   check(
     build.source_repository === "https://github.com/Gonzih/kittens-rs",

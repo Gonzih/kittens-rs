@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Make `kittens-code` the public website's flagship demo with its complete
+  four-crate map, JSONL-to-effect turn flow, transcript/context/RLM/budget
+  laws, DISPLAY/ORCHESTRATION/COGNITION layering, deterministic offline quick
+  start, published/open evidence ledger, and deep links to the `kc0` source,
+  frozen contract, research, architecture note, release record, and inputs.
+  The adjacent status boundary states that source is not yet on `main` and
+  that full reactor wiring, E1 evaluation, MCU drivers, and stable APIs remain
+  open rather than allowing flagship placement to overstate the evidence.
 - Launch the public Kittens website on GitHub Pages: an evidence-led,
   accessible, dependency-free introduction to the coverage thesis, shipped
   kernel/TUI/render surfaces, lean reactor grammar, honest non-guarantees, and

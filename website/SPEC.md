@@ -1,4 +1,4 @@
-# Kittens public website specification (W0)
+# Kittens public website specification (W0.1)
 
 - Status: controlling contract for the first public Kittens website;
   authorized by the operator on 2026-08-09
@@ -16,6 +16,12 @@
   retain manual browser review as an open QA gate and MUST NOT claim that
   browser or full WCAG conformance review passed. This records the contract
   drift instead of silently weakening the evidence claim.
+- Revision 2 (2026-08-09): the operator designated `kittens-code` as the
+  project's flagship demo and required the public site to include its complete
+  product story. W0.1 therefore admits the published `0.0.1` family as shipped
+  evidence even though its source remains on the repository's `kc0` branch,
+  provided that branch boundary and the deferred full `reactor!` driver wiring
+  remain adjacent to every flagship-status claim.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative within
 this website boundary.
@@ -24,8 +30,8 @@ this website boundary.
 
 The Kittens website is a fast, accessible, evidence-led introduction to an
 agent-first Rust SDK that makes selected async topology and ordering facts
-visible to the compiler, while showing the project's cute cat-and-yarn
-identity and its honest escape surface.
+visible to the compiler, with `kittens-code` as its flagship coding-harness
+demo, the project's cute cat-and-yarn identity, and its honest escape surface.
 
 ## 2. Audience and outcome
 
@@ -41,6 +47,9 @@ The first viewport MUST answer:
 3. that it is experimental;
 4. where to inspect or try it.
 
+The first two viewports MUST identify `kittens-code` as the flagship demo and
+offer a direct path to its installable CLI, architecture, and evidence.
+
 A visitor who continues MUST be able to recover:
 
 - the three-layer coverage thesis: inexpressibility, static detection, and
@@ -50,7 +59,9 @@ A visitor who continues MUST be able to recover:
 - the negative controls and open gates;
 - the project's larger direction for harness builders, engine authors, and
   meta-harnesses;
-- the canonical `cargo add kittens` and lean `reactor!` entry points.
+- the canonical `cargo add kittens` and lean `reactor!` entry points;
+- the `kittens-code` install/demo path, four-crate topology, end-to-end turn
+  flow, context/RLM law, durability law, portability claim, and open gates.
 
 ## 3. Source and publication topology
 
@@ -105,24 +116,80 @@ The “six nines” question MAY appear only if immediately bounded by that
 per-class model. W0 SHOULD avoid a numeric headline because no field baseline
 exists for defect-class distribution.
 
-### 4.3 What exists today
+### 4.3 Flagship demo: kittens-code
 
-The website MUST represent only code present on the deployed `main` source
-commit as currently shipped. W0 includes:
+The site MUST present `kittens-code` as the main end-to-end demonstration of
+the application shape Kittens exists to support: a headless coding-agent
+harness with a typed wire, sans-IO state machine, effect-owning host driver,
+and JSONL composition-root CLI.
+
+The flagship surface MUST include all of the following:
+
+1. the four published `0.0.1` crates and their boundaries:
+   `kittens-code-protocol`, `kittens-code-core`,
+   `kittens-code-driver-tokio`, and `kittens-code-cli`;
+2. the flow from JSONL `Op` through `CoreInput → Transition → CoreAction`,
+   durable append/effect discharge, and authoritative `Event` publication;
+3. the append-only checksummed transcript, resume-as-replay, torn-tail repair,
+   and one-writer boundary;
+4. the live-window/complete-log split, budgeted RLM `recall` continuation, and
+   canonical verbs `grep`, `slice`, `head`, `tail`, `count`, `partition`,
+   `ask`, `ask-each`, and `final`;
+5. branded value caps, aggregate budget meters, exactly-once effect terminal
+   ledger, deterministic offline jail, optional `live` Anthropic-dialect
+   client, and path-constrained atomic filesystem tools;
+6. the proven `thumbv7em-none-eabi` and `wasm32-unknown-unknown` link boundary
+   for protocol/core, with IO remaining driver effects;
+7. the DISPLAY / ORCHESTRATION / COGNITION decomposition, with
+   `kittens-tui`/`kittens-render`, `kittens-code`, and the model kept visibly
+   separable;
+8. a copyable `cargo install kittens-code-cli --version 0.0.1` command and a
+   deterministic jail scenario plus JSONL input example that is valid for the
+   published CLI;
+9. direct links to every crate on crates.io and docs.rs, plus the `kc0` source
+   branch, frozen SPEC, research synthesis, FRONTMATTER architecture note,
+   release changelog, and research-input archive.
+
+The flagship copy MUST carry this status boundary beside the first
+`kittens-code` heading:
+
+- the four crates are real, published, unyanked experimental evidence
+  releases;
+- their repository source and controlling documents currently live on `kc0`,
+  not on deployed `main`;
+- the current Tokio runner demonstrates the core/driver/CLI spine, while the
+  full `kittens::reactor!` driver topology and the E1 evaluation rig remain
+  deferred KC0 scope;
+- no MCU driver, on-silicon agent, production stability, or universal agent
+  correctness is claimed.
+
+Calling `kittens-code` the flagship demo describes product priority and
+architectural coverage; it MUST NOT be used as evidence that every imported
+KC0 gate is closed or that the current runner already exercises the kernel
+macro.
+
+### 4.4 What exists today
+
+The website MUST distinguish code present on the deployed `main` source commit
+from separately published evidence whose source is on a named repository
+branch. W0.1 includes on `main`:
 
 - `kittens` and `kittens-macros`: the experimental K0 `no_std` reactor/source
   kernel and compiler;
 - `kittens-tui`: the terminal orchestration profile;
 - `kittens-render`: the embedded rendering/interaction evidence profile.
 
-Unmerged work, candidate drivers, and superseded root SPEC sections 11–36 MUST
-NOT be described as shipped. Broader coding-harness and frontmatter composition
-may appear only as explicitly labeled direction.
+The published `kittens-code` family is the sole W0.1 exception to the
+main-source rule under section 4.3. Other unmerged work, candidate drivers, and
+superseded root SPEC sections 11–36 MUST NOT be described as shipped. The
+Embassy/web/WASI drivers, swarm, L2 implementation, MCU composition, full
+reactor driver topology, and eval rigs remain explicitly labeled direction or
+open gates.
 
 Every crate card MUST link to its repository contract or README. Published
 crates MAY also link to crates.io and docs.rs.
 
-### 4.4 Evidence and honest boundary
+### 4.5 Evidence and honest boundary
 
 The website MUST distinguish “checked,” “runtime-tested,” “ordinary Rust,” and
 “not guaranteed.” At minimum it MUST communicate:
@@ -141,7 +208,7 @@ Evidence numbers MUST come from versioned repository reports on the deployed
 source commit. Measurements MUST carry enough context not to masquerade as
 general performance claims.
 
-### 4.5 Code and calls to action
+### 4.6 Code and calls to action
 
 The canonical code example MUST use the lean grammar from root SPEC section 38
 and `docs/agent-guide.md`, not the superseded maximal grammar. It MUST include
@@ -152,7 +219,11 @@ Primary calls to action MUST lead to the GitHub repository and installation.
 Secondary calls MAY lead to the agent guide, diagnostics, evidence report,
 crate docs, and specs. No call to action may imply production stability.
 
-### 4.6 Vision
+The flagship installation action MUST lead with `kittens-code-cli`; the kernel
+installation and lean `reactor!` example MUST remain available as the lower-
+level path.
+
+### 4.7 Vision
 
 The vision section MUST separate current evidence from direction. It SHOULD
 show three consumer horizons:
@@ -185,6 +256,9 @@ CSS shapes, borders, and yarn-line motifs MAY support the composition. New
 model-authored SVG illustration MUST NOT ship. A bespoke raster social card
 MAY be generated from the canonical visual brief; it MUST be inspected for
 text accuracy and brand consistency before use.
+
+For W0.1, the social card MUST identify `kittens-code` as the flagship demo
+without replacing the Kittens master brand or canonical kitten-and-yarn art.
 
 Decorative motion MUST be subtle, transform/opacity-only, and disabled under
 `prefers-reduced-motion: reduce`. Content MUST remain complete with CSS or
@@ -225,6 +299,7 @@ W0 targets WCAG 2.2 AA within the limits of automated and manual review.
 | no remote runtime dependencies or tracking | source allowlist + network/browser review | structural URL scan and clean-load request inspection | clicking an external link leaves the site boundary |
 | exact deployed source is recoverable | generated `build.json` + deployment commit | compare live `build.json` to merged source SHA | GitHub Pages availability remains external |
 | project claims match shipped evidence | documentation review against controlling contracts | source-linked research ledger and PR review | linked reports retain their own open gates |
+| `kittens-code` flagship scope stays complete and honest | content assertions + review against the frozen `kc0` contracts and published registry state | four-crate/link/flow/install/status marker scan | flagship priority does not close deferred reactor, eval, MCU, or stability gates |
 | `gh-pages` is reproducible output | deterministic standard-library build | two clean builds have identical file hashes except the injected source SHA | generated branch history is not canonical source history |
 
 ## 8. Required oracles and publication gate
@@ -252,6 +327,11 @@ Before the website implementation commit or publication:
 The implementation MUST add one user-visible website entry to
 [`CHANGELOG.md`](../CHANGELOG.md).
 
+The structural checker MUST fail if the flagship section loses any published
+crate name, the install command, the source-on-`kc0` boundary, the deferred
+full-reactor/E1 boundary, or links to the SPEC, research synthesis,
+FRONTMATTER, release changelog, and research inputs.
+
 ## 9. Explicit non-goals and negative controls
 
 W0 is not:
@@ -265,6 +345,8 @@ W0 is not:
 - a custom-domain or analytics rollout;
 - a replacement for repository specs, reports, compile-fail fixtures, or
   crate documentation.
+- an in-browser coding-agent runtime, hosted model endpoint, benchmark result,
+  or claim that `kittens-code` is production-ready.
 
 A beautiful site can make an incorrect claim more persuasive. For that reason,
 visual polish never outranks evidence provenance or adjacent non-guarantees.
@@ -285,3 +367,7 @@ visual polish never outranks evidence provenance or adjacent non-guarantees.
 - **Automated Pages publishing from `main`:** deferred until the operator
   chooses whether generated-branch history or GitHub Actions artifacts are the
   long-term publication record. W0 performs one explicit, auditable publish.
+- **Merge `kc0` into `main`:** outside the website change. The site links the
+  published source branch until a separately reviewed code merge lands; a
+  future site build MUST update the status boundary when that repository fact
+  changes.
