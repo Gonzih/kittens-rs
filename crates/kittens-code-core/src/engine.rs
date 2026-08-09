@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use kittens_code_protocol::config::SessionConfig;
-use kittens_code_protocol::error::{ErrorCode, ErrorEvent};
+use kittens_code_protocol::error::{ErrorCode, ErrorEvent, VerbErrorCause};
 use kittens_code_protocol::event::{Event, ToolOutcome, TurnEnd};
 use kittens_code_protocol::ids::{EffectId, SubmissionId, TurnEpoch};
 use kittens_code_protocol::op::{Op, Submission};
@@ -24,6 +24,9 @@ use crate::caps::{Capped, ToolResult as ToolResultCap};
 use crate::compact::CompactionState;
 use crate::prompts::{self, TemplateId};
 use crate::record::{Record, RecordKind, RecordPayload};
+use crate::rlm::exec::{AskRequest, AskResult, Bound, Executor, Page, StepOutcome};
+use crate::rlm::ir::{BoundValue, Sel};
+use crate::rlm::lower::lower_script;
 use crate::tokens::TokenAccounting;
 use crate::window::{TailItem, WindowLayout};
 
@@ -82,6 +85,10 @@ pub enum EffectTerminal {
         /// value is committed to the log — reversible offload, Q3).
         output: String,
     },
+    /// A transcript store-page read finished.
+    Pages(Page),
+    /// One or more sub-model requests finished.
+    Ask(Vec<AskResult>),
     /// The effect failed at the driver layer.
     Failed {
         /// The failure.
@@ -99,6 +106,22 @@ pub enum EffectSpec {
     ModelCall(WindowLayout),
     /// Execute a tool.
     Tool(ProposedToolCall),
+    /// Read one rendered page from the transcript store.
+    StoreReadPage {
+        /// The transcript selection to page through.
+        sel: Sel,
+        /// Driver-defined continuation cursor, or `None` for the first page.
+        cursor: Option<u64>,
+    },
+    /// Run one or more sub-model asks.
+    ///
+    /// KC0 starts singleton request vectors so each answer has its own
+    /// exactly-once child effect; the vector keeps the seam additive for
+    /// future batched drivers.
+    SubModel {
+        /// Requests to resolve into matching [`AskResult`] values.
+        requests: Vec<AskRequest>,
+    },
 }
 
 /// One input into the engine.
@@ -287,6 +310,32 @@ struct CallSlot {
     awaiting_approval: Option<SubmissionId>,
 }
 
+/// Canonical Q8 function-tool input.
+#[derive(serde::Deserialize)]
+struct RecallArgs {
+    script: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecallWait {
+    Pages,
+    Ask,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RecallPending {
+    id: EffectId,
+    wait: RecallWait,
+}
+
+/// One live Q4 continuation. The query id is its ordinary tool-call id;
+/// pending IO/sub-model work uses fresh child effect ids.
+struct RecallQuery {
+    id: EffectId,
+    executor: Executor,
+    pending: Vec<RecallPending>,
+}
+
 /// The engine.
 pub struct Engine {
     config: SessionConfig,
@@ -299,6 +348,7 @@ pub struct Engine {
     /// Exactly-once terminal ledger for the current epoch.
     finished: Vec<EffectId>,
     calls: Vec<CallSlot>,
+    recalls: Vec<RecallQuery>,
     tail: Vec<TailItem>,
     last_user_query: String,
     summary: String,
@@ -325,6 +375,7 @@ impl Engine {
             persisted: 0,
             finished: Vec::new(),
             calls: Vec::new(),
+            recalls: Vec::new(),
             tail: Vec::new(),
             last_user_query: String::new(),
             summary: String::new(),
@@ -472,9 +523,9 @@ impl Engine {
                 self.compaction.reset_breaker();
             }
             Op::Shutdown => {
-                self.phase = Phase::Draining;
                 self.publish(Event::ShuttingDown, t);
                 self.cancel_all(t);
+                self.phase = Phase::Draining;
             }
             // Unknown future ops (non_exhaustive wire enum): the accepted-op
             // record above already preserved it; acting on it would guess.
@@ -538,9 +589,14 @@ impl Engine {
         if verdict == ApprovalVerdict::Approve {
             let id = slot.id;
             let epoch = self.epoch;
-            let spec = EffectSpec::Tool(slot.call.clone());
+            let call = slot.call.clone();
             self.publish(Event::ToolStarted { call: id }, t);
-            t.actions.push(CoreAction::StartEffect { id, epoch, spec });
+            if call.name == "recall" {
+                self.start_recall(id, &call.args_json, true, t);
+            } else {
+                let spec = EffectSpec::Tool(call);
+                t.actions.push(CoreAction::StartEffect { id, epoch, spec });
+            }
         } else {
             let id = slot.id;
             slot.done = true;
@@ -580,10 +636,22 @@ impl Engine {
             );
             return;
         }
+        if self
+            .recalls
+            .iter()
+            .any(|query| query.pending.iter().any(|pending| pending.id == id))
+        {
+            self.on_recall_effect_terminal(id, terminal, t);
+            return;
+        }
         match terminal {
             EffectTerminal::Model(outcome) => self.on_model_terminal(id, outcome, t),
             EffectTerminal::Tool { outcome, output } => {
                 self.on_tool_terminal(id, outcome, &output, t);
+            }
+            EffectTerminal::Pages(_) | EffectTerminal::Ask(_) => {
+                self.finished.push(id);
+                self.commit_dropped_completion(id, epoch, "unowned recall child completion", t);
             }
             EffectTerminal::Failed { error, message } => {
                 self.finished.push(id);
@@ -697,11 +765,15 @@ impl Engine {
                         awaiting_approval: None,
                     });
                     self.publish(Event::ToolStarted { call: call_id }, t);
-                    t.actions.push(CoreAction::StartEffect {
-                        id: call_id,
-                        epoch: self.epoch,
-                        spec: EffectSpec::Tool(call),
-                    });
+                    if call.name == "recall" {
+                        self.start_recall(call_id, &call.args_json, false, t);
+                    } else {
+                        t.actions.push(CoreAction::StartEffect {
+                            id: call_id,
+                            epoch: self.epoch,
+                            spec: EffectSpec::Tool(call),
+                        });
+                    }
                 }
                 ApprovalPolicy::Deny => {
                     self.finished.push(call_id);
@@ -753,6 +825,17 @@ impl Engine {
         output: &str,
         t: &mut Transition,
     ) {
+        self.resolve_tool_terminal(id, outcome, output, true, t);
+    }
+
+    fn resolve_tool_terminal(
+        &mut self,
+        id: EffectId,
+        outcome: ToolOutcome,
+        output: &str,
+        resample: bool,
+        t: &mut Transition,
+    ) {
         let Some(index) = self.calls.iter().position(|s| s.id == id && !s.done) else {
             return;
         };
@@ -791,7 +874,226 @@ impl Engine {
         self.calls[index].done = true;
         self.tail.push(TailItem::ToolResult { call: id, text });
         self.publish(Event::ToolTerminal { call: id, outcome }, t);
-        self.maybe_resample(t);
+        if resample {
+            self.maybe_resample(t);
+        }
+    }
+
+    /// Starts the Q8 recall continuation in place of an ordinary driver
+    /// tool effect. Lowering failures and session continuation-cap failures
+    /// resolve through the ordinary tool terminal path.
+    fn start_recall(&mut self, id: EffectId, args_json: &str, resample: bool, t: &mut Transition) {
+        if self.recalls.len() >= usize::from(self.config.budgets.suspended_queries) {
+            let message = String::from("verb_error{verb:recall,cause:budget}");
+            self.resolve_tool_terminal(
+                id,
+                ToolOutcome::Failed {
+                    message: message.clone(),
+                },
+                &message,
+                resample,
+                t,
+            );
+            return;
+        }
+
+        let Ok(args) = serde_json::from_str::<RecallArgs>(args_json) else {
+            let message = String::from("verb_error{verb:recall,cause:parse}");
+            self.resolve_tool_terminal(
+                id,
+                ToolOutcome::Failed {
+                    message: message.clone(),
+                },
+                &message,
+                resample,
+                t,
+            );
+            return;
+        };
+        let query = lower_script(&args.script);
+        if let Some(error) = query.iter().find_map(|binding| match &binding.value {
+            BoundValue::Error(error) => Some(error),
+            BoundValue::Instr(_) => None,
+        }) {
+            let message = format!(
+                "verb_error{{verb:{},cause:{}}}",
+                error.verb,
+                verb_error_name(error.cause)
+            );
+            self.resolve_tool_terminal(
+                id,
+                ToolOutcome::Failed {
+                    message: message.clone(),
+                },
+                &message,
+                resample,
+                t,
+            );
+            return;
+        }
+
+        let mut continuation = RecallQuery {
+            id,
+            executor: Executor::new(query, self.config.budgets),
+            pending: Vec::new(),
+        };
+        let outcome = continuation.executor.step();
+        self.advance_recall(continuation, outcome, resample, t);
+    }
+
+    fn on_recall_effect_terminal(
+        &mut self,
+        child: EffectId,
+        terminal: EffectTerminal,
+        t: &mut Transition,
+    ) {
+        let Some(query_index) = self
+            .recalls
+            .iter()
+            .position(|query| query.pending.iter().any(|pending| pending.id == child))
+        else {
+            return;
+        };
+        let mut query = self.recalls.remove(query_index);
+        let pending_index = query
+            .pending
+            .iter()
+            .position(|pending| pending.id == child)
+            .expect("pending child was located above");
+        let pending = query.pending.remove(pending_index);
+        self.finished.push(child);
+
+        let outcome = match (pending.wait, terminal) {
+            (RecallWait::Pages, EffectTerminal::Pages(page)) => query.executor.provide_pages(page),
+            (RecallWait::Ask, EffectTerminal::Ask(results)) => query.executor.provide_ask(results),
+            (_, EffectTerminal::Failed { message, .. }) => {
+                self.cancel_recall_children(&query, t);
+                self.resolve_tool_terminal(
+                    query.id,
+                    ToolOutcome::Failed {
+                        message: message.clone(),
+                    },
+                    &message,
+                    true,
+                    t,
+                );
+                return;
+            }
+            _ => StepOutcome::Failed {
+                cause: VerbErrorCause::Parse,
+            },
+        };
+        self.advance_recall(query, outcome, true, t);
+    }
+
+    fn advance_recall(
+        &mut self,
+        mut query: RecallQuery,
+        mut outcome: StepOutcome,
+        resample: bool,
+        t: &mut Transition,
+    ) {
+        loop {
+            match outcome {
+                StepOutcome::NeedPages(request) => {
+                    let child = self.fresh_effect();
+                    query.pending.push(RecallPending {
+                        id: child,
+                        wait: RecallWait::Pages,
+                    });
+                    t.actions.push(CoreAction::StartEffect {
+                        id: child,
+                        epoch: self.epoch,
+                        spec: EffectSpec::StoreReadPage {
+                            sel: request.sel,
+                            cursor: request.cursor,
+                        },
+                    });
+                    self.recalls.push(query);
+                    return;
+                }
+                StepOutcome::NeedAsk(requests) => {
+                    if requests.is_empty() {
+                        outcome = StepOutcome::Failed {
+                            cause: VerbErrorCause::Parse,
+                        };
+                        continue;
+                    }
+                    for request in requests {
+                        let child = self.fresh_effect();
+                        query.pending.push(RecallPending {
+                            id: child,
+                            wait: RecallWait::Ask,
+                        });
+                        t.actions.push(CoreAction::StartEffect {
+                            id: child,
+                            epoch: self.epoch,
+                            spec: EffectSpec::SubModel {
+                                requests: alloc::vec![request],
+                            },
+                        });
+                    }
+                    self.recalls.push(query);
+                    return;
+                }
+                StepOutcome::AwaitingMore => {
+                    if query.pending.is_empty() {
+                        outcome = StepOutcome::Failed {
+                            cause: VerbErrorCause::Parse,
+                        };
+                        continue;
+                    }
+                    self.recalls.push(query);
+                    return;
+                }
+                StepOutcome::Line { slot, bound } => {
+                    self.publish(
+                        Event::QueryTrace {
+                            query: query.id,
+                            line: u16::try_from(slot).unwrap_or(u16::MAX),
+                            note: format!("bound {}", bound_name(&bound)),
+                        },
+                        t,
+                    );
+                    outcome = query.executor.step();
+                }
+                StepOutcome::Done { answer } => {
+                    self.cancel_recall_children(&query, t);
+                    self.resolve_tool_terminal(
+                        query.id,
+                        ToolOutcome::Succeeded,
+                        &answer,
+                        resample,
+                        t,
+                    );
+                    return;
+                }
+                StepOutcome::Failed { cause } => {
+                    self.cancel_recall_children(&query, t);
+                    let message =
+                        format!("verb_error{{verb:recall,cause:{}}}", verb_error_name(cause));
+                    self.resolve_tool_terminal(
+                        query.id,
+                        ToolOutcome::Failed {
+                            message: message.clone(),
+                        },
+                        &message,
+                        resample,
+                        t,
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    fn cancel_recall_children(&mut self, query: &RecallQuery, t: &mut Transition) {
+        for pending in &query.pending {
+            if !self.finished.contains(&pending.id) {
+                self.finished.push(pending.id);
+                t.actions.push(CoreAction::CancelEffect { id: pending.id });
+            }
+        }
     }
 
     fn maybe_resample(&mut self, t: &mut Transition) {
@@ -827,18 +1129,70 @@ impl Engine {
         );
         self.phase = Phase::Idle;
         self.calls.clear();
+        self.recalls.clear();
     }
 
     fn cancel_all(&mut self, t: &mut Transition) {
         if let Phase::AwaitingModel(id) = self.phase {
             t.actions.push(CoreAction::CancelEffect { id });
+            self.finished.push(id);
         }
-        for slot in &self.calls {
-            if !slot.done && slot.awaiting_approval.is_none() {
-                t.actions.push(CoreAction::CancelEffect { id: slot.id });
+        let recall_ids: Vec<EffectId> = self.recalls.iter().map(|query| query.id).collect();
+        for id in &recall_ids {
+            self.commit(
+                RecordKind::EffectOutcome,
+                Some(*id),
+                RecordPayload::EffectOutcome(
+                    String::from("query continuation discarded").into_bytes(),
+                ),
+                t,
+            );
+        }
+        let child_ids: Vec<EffectId> = self
+            .recalls
+            .iter()
+            .flat_map(|query| query.pending.iter().map(|pending| pending.id))
+            .collect();
+        for id in child_ids {
+            if !self.finished.contains(&id) {
+                self.finished.push(id);
+                t.actions.push(CoreAction::CancelEffect { id });
             }
         }
+        for id in &recall_ids {
+            if !self.finished.contains(id) {
+                self.finished.push(*id);
+            }
+        }
+        for slot in &self.calls {
+            if !slot.done && slot.awaiting_approval.is_none() && !recall_ids.contains(&slot.id) {
+                t.actions.push(CoreAction::CancelEffect { id: slot.id });
+                self.finished.push(slot.id);
+            }
+        }
+        self.recalls.clear();
         self.calls.clear();
+    }
+
+    fn commit_dropped_completion(
+        &mut self,
+        id: EffectId,
+        epoch: TurnEpoch,
+        reason: &str,
+        t: &mut Transition,
+    ) {
+        self.commit(
+            RecordKind::EffectOutcome,
+            Some(id),
+            RecordPayload::EffectOutcome(
+                format!(
+                    "dropped completion: {reason}; effect {} epoch {}",
+                    id.0, epoch.0
+                )
+                .into_bytes(),
+            ),
+            t,
+        );
     }
 
     /// Assembles the current window (SPEC C10 recipe). Infallible because
@@ -910,5 +1264,27 @@ impl Engine {
                 debug_assert!(false, "record kind/payload mismatch");
             }
         }
+    }
+}
+
+fn verb_error_name(cause: VerbErrorCause) -> &'static str {
+    match cause {
+        VerbErrorCause::BadRef => "bad_ref",
+        VerbErrorCause::BadRange => "bad_range",
+        VerbErrorCause::BadFlag => "bad_flag",
+        VerbErrorCause::Parse => "parse",
+        VerbErrorCause::Budget => "budget",
+        _ => "unknown",
+    }
+}
+
+fn bound_name(bound: &Bound) -> &'static str {
+    match bound {
+        Bound::Records(_) => "records",
+        Bound::Chunks(_) => "chunks",
+        Bound::Count(_) => "count",
+        Bound::Digest(_) => "digest",
+        Bound::DigestList(_) => "digest_list",
+        Bound::Error(_) => "verb_error",
     }
 }

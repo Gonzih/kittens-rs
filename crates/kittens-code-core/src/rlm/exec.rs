@@ -448,7 +448,22 @@ impl Executor {
             | Instr::Head { sel, .. }
             | Instr::Tail { sel, .. }
             | Instr::Count { sel, .. }
-            | Instr::Partition { sel, .. } => self.start_page_walk(sel.clone()),
+            | Instr::Partition { sel, .. } => match sel {
+                Sel::Ref(reference) => {
+                    let records = slot_index(reference.line())
+                        .and_then(|index| self.slots.get(index))
+                        .and_then(Option::as_ref)
+                        .and_then(|bound| match bound {
+                            Bound::Records(records) => Some(records.clone()),
+                            _ => None,
+                        });
+                    match records {
+                        Some(records) => self.finish_page_instruction(records),
+                        None => self.bind_error(VerbErrorCause::BadRef),
+                    }
+                }
+                Sel::Range(_) | Sel::Whole => self.start_page_walk(sel.clone()),
+            },
             Instr::Ask {
                 sel,
                 question,

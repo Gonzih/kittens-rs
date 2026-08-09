@@ -10,11 +10,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::{fs::File, io::BufRead, io::BufReader, path::Path};
 
 use kittens_code_core::engine::{
     CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ResumeError,
 };
 use kittens_code_core::record::Record;
+use kittens_code_core::rlm::exec::{AskResult, Page, PageRecord};
+use kittens_code_core::rlm::ir::{RangeUnit, Sel};
 use kittens_code_protocol::config::SessionConfig;
 use kittens_code_protocol::event::Event;
 use kittens_code_protocol::ids::{EffectId, TurnEpoch};
@@ -261,10 +264,121 @@ impl Runner {
                     });
                 });
             }
-            // Unknown future effect specs (l2 embed, store pages): the KC0
-            // driver does not enable those features, so reaching here is a
-            // configuration bug, not a runtime condition.
+            EffectSpec::StoreReadPage { sel, cursor } => {
+                let path = self.appender.path().to_path_buf();
+                tokio::spawn(async move {
+                    let terminal = match tokio::task::spawn_blocking(move || {
+                        read_store_page(&path, &sel, cursor)
+                    })
+                    .await
+                    {
+                        Ok(Ok(page)) => EffectTerminal::Pages(page),
+                        Ok(Err(error)) => EffectTerminal::Failed {
+                            error: kittens_code_protocol::error::ErrorCode::StoreIo,
+                            message: error.to_string(),
+                        },
+                        Err(error) => EffectTerminal::Failed {
+                            error: kittens_code_protocol::error::ErrorCode::StoreIo,
+                            message: error.to_string(),
+                        },
+                    };
+                    let _ = tx.send(Wake::Finished {
+                        id,
+                        epoch,
+                        terminal,
+                    });
+                });
+            }
+            EffectSpec::SubModel { requests } => {
+                let model = Arc::clone(&self.model);
+                tokio::spawn(async move {
+                    let mut results = Vec::with_capacity(requests.len());
+                    let mut failure = None;
+                    for request in requests {
+                        let index = request.index;
+                        match model.complete_submodel(request).await {
+                            Ok(outcome) => results.push(AskResult {
+                                index,
+                                answer: outcome.text,
+                            }),
+                            Err(error) => {
+                                failure = Some(error);
+                                break;
+                            }
+                        }
+                    }
+                    let terminal = failure.map_or_else(
+                        || EffectTerminal::Ask(results),
+                        |(error, message)| EffectTerminal::Failed { error, message },
+                    );
+                    let _ = tx.send(Wake::Finished {
+                        id,
+                        epoch,
+                        terminal,
+                    });
+                });
+            }
+            // Unknown future effect specs (l2 embed, timers): reaching here
+            // is a configuration bug, not a runtime condition.
             other => unimplemented!("driver missing EffectSpec handler: {other:?}"),
         }
+    }
+}
+
+/// KC0 transcript paging: the cursor is an offset in the records selected by
+/// `sel`, and each record is rendered as its canonical serialized JSON line.
+fn read_store_page(path: &Path, sel: &Sel, cursor: Option<u64>) -> std::io::Result<Page> {
+    const PAGE_RECORDS: usize = 64;
+
+    let start = usize::try_from(cursor.unwrap_or(0)).unwrap_or(usize::MAX);
+    let mut selected = 0usize;
+    let mut records = Vec::with_capacity(PAGE_RECORDS);
+    let mut byte_offset = 0u64;
+    let reader = BufReader::new(File::open(path)?);
+    for line in reader.lines() {
+        let line = line?;
+        let record: Record = serde_json::from_str(&line)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let line_start = byte_offset;
+        byte_offset = byte_offset.saturating_add(line.len() as u64 + 1);
+        if !record_selected(sel, &record, line_start) {
+            continue;
+        }
+        if selected < start {
+            selected += 1;
+            continue;
+        }
+        if records.len() == PAGE_RECORDS {
+            return Ok(Page {
+                records,
+                next_cursor: Some(u64::try_from(selected).unwrap_or(u64::MAX)),
+            });
+        }
+        records.push(PageRecord {
+            seq: record.seq,
+            text: line,
+        });
+        selected += 1;
+    }
+    Ok(Page {
+        records,
+        next_cursor: None,
+    })
+}
+
+fn record_selected(sel: &Sel, record: &Record, byte_offset: u64) -> bool {
+    match sel {
+        Sel::Whole => true,
+        Sel::Range(range) => {
+            let coordinate = match range.unit {
+                RangeUnit::Turn => record.epoch.0,
+                RangeUnit::Seq => record.seq,
+                RangeUnit::Byte => byte_offset,
+            };
+            range.start <= coordinate && coordinate < range.end
+        }
+        // A `%N` selection is already materialized inside the executor.
+        // Current lowering only sends raw store selections over this seam.
+        Sel::Ref(_) => false,
     }
 }

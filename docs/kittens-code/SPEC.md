@@ -394,6 +394,14 @@ its `TurnEpoch` (R4 — including `TimerFired`).
   or being cancelled emits CancelEffect for its pending ids and drops its
   continuation with a trace record; turn interrupt discards all query
   continuations of that epoch the same way.
+  **D2 effect identity/shape (freeze candidate):** the `recall` tool call's
+  `EffectId` is the query id. Each continuation suspension gets a fresh child
+  `EffectId` in the same `TurnEpoch`: `StoreReadPage { sel, cursor }` completes
+  as `Pages(Page)`, and `SubModel { requests: [AskRequest] }` completes as
+  `Ask([AskResult])`. KC0 emits one request per `SubModel` child effect so
+  `ask-each` can rejoin out of order, `AwaitingMore` waits on already-started
+  children, and every child has an independent exactly-once terminal. The
+  vector payloads remain additive batch seams for a future driver optimization.
 - Q5. Budget set (F8 + input 16 N1 — pending state actually bounded):
   per-verb output cap; verb-count cap per query (*synthesis-introduced*);
   recursion depth (default 1, economics rationale R§4.5); total subcalls
@@ -419,7 +427,13 @@ its `TurnEpoch` (R4 — including `TimerFired`).
   unimplemented; index contract carries model fingerprint, dims, metric,
   quantization, chunker version, source hash, watermark, rebuild policy,
   stale-hint marking.
-- Q8. `recall` tool packaging for the E1 tool-mediated arm.
+- Q8. `recall` tool packaging for the E1 tool-mediated arm. Its canonical
+  function-tool argument is the JSON object `{ "script": <verb-text string> }`.
+  Core lowers `script` before starting the continuation; malformed JSON or any
+  lowered error binding resolves the call as a failed tool result containing
+  `verb_error{verb,cause}`. A successfully lowered query runs under the session
+  Q5 budgets and its `final` answer resolves the ordinary tool-result slot, so
+  Q3 capping/offload and L-T1 resampling are reused without new wire types.
 - Q9. Inline verb errors bind to `%N` + query trace record; no top-level
   ErrorEvent (P8 codes reused).
 
@@ -724,6 +738,10 @@ Inline errors bind to `%N` + query trace record, no top-level ErrorEvent
   consistent across P8/Q5/Appendix A; full ID→layer→gate matrix; wording
   nits (per-session aggregate, always-replace rename, either-threshold
   flush, exact regex pin with inline-flag rejection).
+- 2026-08-08: v0.8 implementation clarification — Q4/Q8 freeze candidates
+  now fix `recall`'s JSON argument, query/child effect identity, singleton
+  sub-model child effects, and existing tool-result/cap/ledger reuse. This
+  closes review input 19 finding #6 without changing protocol wire shapes.
 - Next: close D2/D4 exact shapes; operator review; freeze KC0 sections.
   The Codex review cycle is concluded at input 17 — remaining items are
   drafting (D2/D4) and human judgment, not review findings. Implementation

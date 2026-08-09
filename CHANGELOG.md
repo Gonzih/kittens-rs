@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Connect the kittens-code RLM continuation executor to turn execution through
+  the `recall` tool, with store-page and sub-model effects, query tracing,
+  suspended-query admission, cancellation/late-terminal handling, and Tokio
+  driver support over the real JSONL transcript and existing model client.
 - Add `Engine::resume` replay construction for kittens-code KC0, restoring
   logged configuration and seeding turn, record, effect, and request counters
   above every persisted value without re-emitting replayed work.

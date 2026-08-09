@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 
 use kittens_code_core::engine::{ModelOutcome, ProposedToolCall, Usage};
+use kittens_code_core::rlm::exec::AskRequest;
 use kittens_code_core::window::{TailItem, WindowLayout};
 use kittens_code_protocol::error::ErrorCode;
 use serde::Deserialize;
@@ -24,6 +25,35 @@ pub type ModelFuture = Pin<Box<dyn Future<Output = Result<ModelOutcome, ModelErr
 pub trait ModelClient: Send + Sync {
     /// One completion over an assembled window.
     fn complete(&self, window: WindowLayout) -> ModelFuture;
+
+    /// One RLM sub-model completion.
+    ///
+    /// The default maps the ask context and question into a small
+    /// [`WindowLayout`] and reuses [`Self::complete`]. Backends that resolve
+    /// `SessionConfig::model_sub` separately can override this method without
+    /// changing the core/driver effect contract.
+    fn complete_submodel(&self, request: AskRequest) -> ModelFuture {
+        self.complete(submodel_window(&request))
+    }
+}
+
+fn submodel_window(request: &AskRequest) -> WindowLayout {
+    let sampling = request.sample_k.map_or_else(String::new, |count| {
+        format!("\nRequested samples: {count}.")
+    });
+    WindowLayout::new(
+        String::from("Answer from the supplied transcript context only."),
+        String::new(),
+        String::new(),
+        format!(
+            "Context:\n{}\n\nQuestion:\n{}{}",
+            request.context, request.question, sampling
+        ),
+        Vec::new(),
+        String::new(),
+        Vec::new(),
+    )
+    .expect("an empty verbatim tail is always atomic")
 }
 
 /// One scripted jail step (D14: ordinal matching for KC0).

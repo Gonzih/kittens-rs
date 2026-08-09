@@ -129,6 +129,53 @@ async fn tool_round_trip_reads_a_real_file() {
 }
 
 #[tokio::test]
+async fn recall_pages_over_the_real_log_and_completes_the_turn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let (appender, _) = Appender::open(&log, Some(header_record(4))).expect("open");
+    let engine = Engine::new(SessionConfig::default(), appender.next_seq());
+    let model = Arc::new(JailClient::new(vec![
+        JailStep {
+            text: String::new(),
+            tool_calls: vec![(
+                String::from("recall"),
+                serde_json::json!({
+                    "script": "grep \"needle\"\nfinal %1"
+                })
+                .to_string(),
+            )],
+            usage: None,
+            fail: None,
+        },
+        JailStep {
+            text: String::from("found it in the transcript"),
+            tool_calls: vec![],
+            usage: None,
+            fail: None,
+        },
+    ]));
+    let mut runner = Runner::new(engine, appender, model.clone(), dir.path().to_path_buf());
+    runner.submit(user(1, "put this needle in the real log"));
+    let events = runner.run_to_idle().await;
+
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::ToolTerminal {
+            outcome: ToolOutcome::Succeeded,
+            ..
+        }
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::TurnEnded {
+            reason: TurnEnd::Completed,
+            ..
+        }
+    )));
+    assert_eq!(model.captured().len(), 2, "recall completion resampled");
+}
+
+#[tokio::test]
 async fn crash_repair_closes_an_open_stream_on_reopen() {
     let dir = tempfile::tempdir().expect("tempdir");
     let log = dir.path().join("session.jsonl");

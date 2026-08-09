@@ -12,7 +12,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use kittens_code_core::record::{
     DecodeOutcome, Record, ScanError, ScanResult, TailFault, scan_records,
@@ -46,6 +46,7 @@ impl From<std::io::Error> for OpenError {
 /// An open, crash-repaired log with the single write handle.
 pub struct Appender {
     file: File,
+    path: PathBuf,
     next_seq: u64,
     persisted: u64,
 }
@@ -113,6 +114,7 @@ impl Appender {
             return Ok((
                 Self {
                     file,
+                    path: path.to_path_buf(),
                     next_seq: 1,
                     persisted: 0,
                 },
@@ -153,6 +155,7 @@ impl Appender {
         Ok((
             Self {
                 file,
+                path: path.to_path_buf(),
                 next_seq,
                 persisted: next_seq.saturating_sub(1),
             },
@@ -205,5 +208,12 @@ impl Appender {
     #[must_use]
     pub fn next_seq(&self) -> u64 {
         self.next_seq
+    }
+
+    /// Filesystem location of this appender's transcript. Kept crate-local
+    /// so the runner can discharge store-read effects without creating a
+    /// second storage owner.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
     }
 }
