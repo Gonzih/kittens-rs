@@ -3580,6 +3580,57 @@ No safe external implementation or unchecked escape is required in K0. Failure t
 
 Sealing is admission control, not a theorem about the adapter implementation. Kittens maintainers still establish the contract through primitive documentation, code review, lost-race/runtime tests, and target tests where hardware semantics matter. The compiler can prove only that reactor code selected an admitted adapter and requested capabilities that its type exposes.
 
+#### 37.6.1 Profile-driven inline one-shot carrier
+
+The first post-K0 source extension is the no-allocation carrier required by
+the `kittens-render` completion gate. Its one public spelling is
+`source::OptionalInlineOneShot<F>`, where `F: Future + Unpin`. There is no
+second always-armed inline type. The optional form is required by the real
+long-running shape: it begins dormant, owns one in-flight operation, becomes
+dormant before delivering that operation's output, and can then be armed with
+the next operation after the handler has recovered its resources.
+
+The carrier stores `Option<F>` inline and exposes exactly `new`,
+`from_future`, `arm`, `future_mut(&mut self) -> Option<&mut F>`, and
+`is_dormant`. `arm` requires exclusive access and returns `AlreadyArmed<F>`
+with the rejected future rather than replacing or dropping live work.
+`future_mut` returns `None` while dormant and provides borrowed access for an
+operation-specific drain request while armed; it cannot remove the future.
+The carrier is a sealed
+`ReactorSource<Item = F::Output, Readiness = Quiescent>`. It polls the same
+stored future with the reactor's current `Context`, removes the completed
+future before yielding its owned output, and returns dormant `Pending` without
+self-waking. It implements neither `DrainableSource` nor `BacklogSource`.
+
+This is a locally armed-only source under section 37.6 point 7. `arm` schedules
+no wake: the supported rearm points are before reactor entry or inside a
+handler/phase whose successful continuation begins the next arbitration.
+Arming after a pending reactor poll from another execution context is not
+supported. Dropping the carrier or whole reactor synchronously drops an
+installed future and returns no resources; a resource-owning operation that
+requires recovery must be drained to completion before teardown. For the
+reviewed render integration specifically, dropping that future drops
+`InFlight`, whose `OwnedTransfer` contract synchronously cancels the operation
+and disarms its completion registration. That is a reviewed adapter contract,
+not silicon evidence and not a cleanup claim for arbitrary `F`.
+
+The enforcement layers are split deliberately. The sealed carrier plus
+ordinary Rust ownership prove inline retention, exclusive arm/rearm, and owned
+output. The inner future's producer-latching, wake registration, cancellation,
+and drop behavior remain that future's reviewed documentation and runtime-test
+obligations. Wrapping an arbitrary future therefore does not make a lazy or
+lossy producer valid. A compiling inert/broken inner future is one adjacent
+negative control; a compile-fail declaration that labels this quiescent
+carrier `may_remain_ready` pins the sealed readiness check independently. The
+render integration must separately prove both
+selection-loss positions with its level-visible, register-then-recheck
+`InFlight` implementation. This extension does not unseal `ReactorSource`, add
+a callback/poll-function escape, allocate, or change the existing heap-pinned
+Tokio `OneShot`/`OptionalOneShot` APIs. The canonical split is mechanical:
+`OptionalInlineOneShot` is the portable no-allocation spelling when the inner
+future is `Unpin`; `OptionalOneShot` remains the heap-pinned Tokio spelling
+when a `!Unpin` future must be retained or host-side allocation is accepted.
+
 ### 37.7 Expansion experiment
 
 The first high-risk decision now has two independent axes. K0 MUST retain and compare:
@@ -4237,9 +4288,9 @@ kittens::reactor! {
         Ok(Control::Continue)
     }
 
-    // Completion returns exclusive ownership of the display and buffer.
-    // Ordinary Rust — not Kittens — makes resubmission unavailable
-    // until this event hands them back.
+    // The original K0 fixture uses a synthetic Latched<TransferDone> here.
+    // The deployment profile replaces it with the retained InFlight source
+    // described below; this arm still receives one owned completion value.
     #[source(transfer_done)]
     #[readiness(quiescent)]
     done = sources.transfer_done => {
@@ -4270,6 +4321,35 @@ kittens::reactor! {
 ```
 
 The topology vocabulary is identical to 38.2 — same shutdown prefix, same readiness tokens, same waiver, same phases — which is the executor-neutrality claim K0 exists to falsify. Boundary — not checked: sleep entry, power draw, DMA-versus-scanout milestones, and whether `Off` mode actually disarms the frame source (runtime guard + deterministic test, section 37.9).
+
+The real K2R-0 completion fixture replaces the synthetic local latch with this
+consumer-owned source shape (the profile crate itself keeps no normal
+dependency on the kernel):
+
+```rust
+struct RenderSources<X, S>
+where
+    X: kittens_render::transfer::OwnedTransfer + Unpin,
+    S: Unpin,
+{
+    transfer_done: kittens::source::OptionalInlineOneShot<
+        kittens_render::transfer::InFlight<X, S>,
+    >,
+}
+```
+
+`InFlight<X, S>` implements `Future<Output = Settled<...>>` under those same
+outer-`Unpin` bounds by delegating to its existing `poll_complete` operation.
+The `transfer_done` handler consumes `Settled`, recovers transport/sent/spare,
+and delivers the exactly-one settlement to the owning sweep. Only after that
+handler borrow ends may application code create the next target-bound flight
+and call `arm`; the required fixture rearms the same carrier for a second
+stripe. Graceful shutdown uses
+`if let Some(flight) = transfer_done.future_mut() { flight.begin_drain(); }`;
+`None` means there is no flight to drain. It continues polling an armed source
+until settlement before stopping. Direct `.await` or manual `poll_complete`
+remains ordinary Rust outside declared reactor topology, and dropping the
+whole source remains the documented non-returning resource boundary.
 
 ### 38.6 Building around the reactor: producer isolation
 

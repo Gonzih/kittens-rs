@@ -1,21 +1,27 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 8, 2026-08-09 (publication-readiness correction: the
-  linked Xtensa compile/link feasibility probe is closed with scope; task
+- Status: revision 9, 2026-08-09 (kernel-carrier contract: the one
+  no-allocation source shape is now specified, with implementation and
+  host/portable-link evidence still required before its gate closes).
+  Revision 8's publication-readiness correction recorded that the linked
+  Xtensa compile/link feasibility probe is closed with scope; task
   wakers are cloned, dropped, and woken outside the adapter's global critical
   section; publication as an experimental 0.1.x evidence release is explicitly
-  not a protocol freeze). Revision 7 added the optional global-coordinate
+  not a protocol freeze. Revision 7 added the optional global-coordinate
   RGB565 stripe target and closed the host pixel-equivalence oracle row.
   Earlier revision history remains in section 12.
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
-- Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
+- Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6
+  became normative in revision 3; revision 9 specifies the previously open
+  kernel-admitted source-carrier shape.
 - Slice boundary: **K2R-0 host slice** means the host-model protocol surface
   and oracles may land against amended section 6. It does not mean K2R-0A or
   full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
   **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
-  Kernel admission, bilateral seam co-sign, `write_region`, board HIL and
+  Kernel-carrier implementation/evidence, bilateral seam co-sign,
+  `write_region`, board HIL and
   silicon interrupt delivery, and capability sealing remain separately named
   gates below.
 
@@ -68,9 +74,9 @@ repairs to the target/start/settlement/sweep lifecycle and revision 7's
 optional draw-target integration. It additionally records the scoped Xtensa
 compile/link result and the reviewed waker/critical-section boundary. This
 section is **normative** for the K2R-0 host slice, superseding revision 2's
-provisional candidates. The one still-open shape is the kernel-admitted source
-carrier (K2R-0A open item 3): how these values appear as `reactor!` arms awaits
-the kernel admission slice and is explicitly not specified here.
+provisional candidates. Revision 9 specifies the kernel-admitted completion
+source below. Its implementation and evidence remain K2R-0A open item 3 until
+the section-8 reactor and portable-link oracles pass.
 
 ### 6.1 Geometry and identity
 
@@ -154,6 +160,38 @@ registration survives the adapter's `Drop` return). “Spare is independently wr
 the owned Rust value only: unconstrained sent-buffer and spare types may share
 safe interior-mutable backing storage, so disjoint physical storage remains a
 reviewed-integration/caller obligation and a published compiling escape.
+
+For kernel composition, `InFlight<X, S>` MUST implement
+`Future<Output = Settled<X::Transport, X::Buffer, S>>` exactly when
+`X: OwnedTransfer + Unpin` and `S: Unpin`; `poll` delegates to the existing
+`poll_complete` operation and introduces no second settlement path. A reactor
+owner stores that future in
+`kittens::source::OptionalInlineOneShot<InFlight<X, S>>`, the sole no-alloc
+inline one-shot admitted by root section 37.6.1. The source starts dormant,
+is armed only with the `Ok(InFlight)` returned by
+`StripeTarget::start_flight`; a `StartFlightError` recovers resources without
+arming it. The source yields the real `Settled`, becomes dormant before its
+handler runs, and is rearmed only after the handler has recovered resources
+and delivered the settlement to its owning `Sweep`. Graceful shutdown uses
+`if let Some(flight) = source.future_mut() { flight.begin_drain(); }`; `None`
+means there is no flight to drain. Arbitration continues until an armed flight
+settles.
+
+Consumer-side composition preserves this profile crate's empty feature-off
+normal dependency graph.
+
+Enforcement layers: the kernel's sealed carrier and ordinary ownership retain
+the same inline future across selection loss and return one owned output;
+`InFlight`'s private state plus deterministic register-then-recheck tests
+establish level-visible completion and wake behavior; the owning-sweep
+delivery remains the existing cooperative documentation boundary. The generic
+carrier does not certify an arbitrary future's producer semantics, and direct
+`.await`/manual `poll_complete` remain compiling raw bypasses. Dropping an
+armed source drops the flight, invoking the reviewed synchronous cancel/disarm
+contract but returning no resources. Arming is local-only and schedules no
+wake; rearm occurs inside a handler/phase whose continuation starts the next
+arbitration. The section-8 controls independently pin an inert inner future
+that still compiles and a readiness-declaration mismatch that does not.
 
 `Settled<T, B, S>` — private resources, outcome, and target; safe external
 code cannot construct one or rewrite its proof-bearing state.
@@ -330,6 +368,12 @@ the executor waker, silicon interrupt delivery or wake counts, physical
 transfer behavior, the kernel-admitted `reactor!` path, or the blocking
 `write_region` transaction; those remain the named runtime/integration gates.
 
+Revision 9 selects the remaining kernel carrier shape:
+`OptionalInlineOneShot<InFlight<...>>`, with the future stored inline under the
+already-demonstrated outer-`Unpin` bounds. This specification change does not
+close open item 3. Closure requires the section-8 real-`reactor!` traces and an
+external no-std consumer linked on both required portable targets.
+
 **Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
 
 ## 8. K2R-0: protocol suite (host slice amended; full acceptance gated)
@@ -337,6 +381,17 @@ transfer behavior, the kernel-admitted `reactor!` path, or the blocking
 The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's host-model-selected shapes. Full K2R-0 acceptance additionally requires K2R-0A's exact target gate and every acceptance item in section 11. The host suite is built as a **named trace matrix** (finding 14) — each trace enumerated, each state transition and transport boundary independently observable — covering at minimum:
 
 - both selection-loss positions for completion; completion before first poll; completion during waker registration;
+- a real `kittens::reactor!` fixture whose source is
+  `OptionalInlineOneShot<InFlight<...>>`: one trace polls completion pending
+  before another source wins, one lets an earlier source win before completion
+  is polled, both recover transport/sent/spare and deliver the real settlement
+  to the owning sweep, and the same carrier is rearmed for the next stripe;
+  shutdown additionally requests `begin_drain` through the `Some` arm of
+  `future_mut` (with dormant `None` a no-op) and proves settlement before stop,
+  while a separate drop trace proves synchronous disarm with intentionally
+  non-returned resources; an inert inner future compiles as the carrier-honesty
+  negative control, while declaring the carrier `may_remain_ready` fails the
+  sealed readiness check;
 - cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
 - full-frame versus stripe-swept RGB565 pixel equivalence through the real
@@ -358,11 +413,11 @@ As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-
 
 ## 10. The bilateral seam (merge with the harness workstream) — gates full K2R-0 acceptance, not this host slice
 
-This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. Acceptance of either spec's slice is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. Until co-signed, neither spec claims the merge.
+This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. Acceptance of either spec's slice is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. Until co-signed, neither spec claims the merge. The render-owned carrier fixture from section 8 is necessary kernel-admission evidence but is not that foreign harness-style consumer and does not close the bilateral seam.
 
 ## 11. Slice acceptance
 
-- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the exact target compile/link probe passes, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative). The current host-model selection is not this full acceptance.
+- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the exact target compile/link probe passes, the kernel-carrier reactor/portable-link oracles pass, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative). The current host-model selection is not this full acceptance.
 - **K2R-0** is done when: K2R-0A is done; the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds and links through an external `no_std` consumer without alloc; clippy/fmt/doc gates clean.
 - Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
 
@@ -424,3 +479,13 @@ requires task-waker clone/drop/wake behavior outside the global critical
 section. An experimental 0.1.x evidence publication is explicitly not the
 freeze that triggers sealing; any later sealing must use an appropriate
 breaking-version boundary.
+
+Revision 9, 2026-08-09: the previously unspecified kernel source carrier is
+now contracted before implementation. The selected shape is one sealed,
+rearmable, inline `OptionalInlineOneShot<F>` in the kernel with `F: Future +
+Unpin`, carrying the existing conditionally-`Unpin` `InFlight` future. The
+required evidence is a real reactor over both selection-loss positions,
+same-carrier rearm, graceful drain, drop behavior, and external thumb/wasm
+links. Arbitrary-future honesty, direct polling/await, cooperative settlement
+delivery, silicon behavior, `write_region`, capability sealing, and the
+bilateral seam remain explicit non-guarantees or gates.
