@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## kittens-code family 0.0.1 — 2026-08-09
+
+First crates.io release of the `kittens-code` KC0 coding-agent harness,
+published in strict dependency order at an independent per-crate `0.0.1`:
+`kittens-code-protocol` → `kittens-code-core` → `kittens-code-driver-tokio`
+→ `kittens-code-cli`. `0.0.1` is a deliberate experimental / expect-churn
+signal matching the SPEC's evidence-release framing; the SPEC is FROZEN and
+authorizes publication. Release-review correctness blockers were closed and
+independently re-verified before publish: the appender torn-tail durability
+fix (physical truncate + `sync_all` to the last valid record boundary before
+any repair/append, so a second reopen never faults) and the lifecycle-ledger
+ownership guard (`commit_stream_terminal` fires only for an owned,
+current-epoch, not-yet-finished effect id; every other completion routes to
+`commit_dropped_completion`, so no orphan `StreamTerminal` is ever persisted).
+Cross-target link gate green on `thumbv7em-none-eabi` and
+`wasm32-unknown-unknown`; workspace tests, `clippy -D warnings`, `fmt`, and
+the `rustdoc -D warnings` publish gate all pass. This release contains the
+items previously listed under Unreleased:
+
 - Enforce kittens-code RLM output and aggregate-budget boundaries with
   branded ask digests, per-line/final verb caps, compiled meter ceilings,
   durable `BudgetUpdate` events, and harden Tokio write/edit tools with
@@ -28,6 +47,10 @@
   provider usage, bounded jittered retries with `Retry-After`, and a
   consecutive-failure circuit breaker. The default driver build remains
   free of the optional HTTP/TLS dependency tree.
+- Drive `kittens-code-driver-tokio` module coverage to ~97% (appender, model,
+  runner, tools, and the feature-gated live client) via a deterministic
+  `cfg(test)` fault seam; remaining uncovered code is defensive or
+  external-only (the live HTTP socket = G10 external smoke).
 
 ## 0.1.1 (kittens-tui) — 2026-08-08
 
