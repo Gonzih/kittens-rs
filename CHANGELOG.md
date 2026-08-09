@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Enforce kittens-code RLM output and aggregate-budget boundaries with
+  branded ask digests, per-line/final verb caps, compiled meter ceilings,
+  durable `BudgetUpdate` events, and harden Tokio write/edit tools with
+  same-directory atomic replacement plus repeated symlink containment checks.
 - Complete the kittens-code Q5 executor meters: window `ask-each` subcalls,
   enforce recursion depth and driver-reported ask time/token costs, and bound
   retained continuation payload memory with deterministic byte accounting.

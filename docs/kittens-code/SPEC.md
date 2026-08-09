@@ -495,10 +495,12 @@ its `TurnEpoch` (R4 — including `TimerFired`).
   repeats component symlink/containment checks after directory creation and
   canonicalizes the parent immediately before temp creation. **Known KC0
   limitation / negative control:** without handle-relative `openat`-family
-  operations, an attacker concurrently replacing an ancestor after that last
-  canonicalization can still win a residual check-to-use race; multi-process
-  hostile workspace mutation is not claimed safe. G7e carries leaf-swap,
-  interrupted-write, and interrupted-edit adversarial fixtures.
+  operations and final-component `O_NOFOLLOW`, an attacker concurrently
+  replacing an ancestor after that last canonicalization, or replacing an
+  edit source leaf between its metadata check and read-open, can still win a
+  residual check-to-use race; multi-process hostile workspace mutation is not
+  claimed safe. G7e carries leaf-swap, interrupted-write, and interrupted-edit
+  adversarial fixtures.
 - K3. `SessionCapabilities` (F11): drivers declare at startup which effect
   families exist (exec: no on web/MCU); tool schemas are advertised to the
   model ONLY for capable families — a data variant compiling is not a

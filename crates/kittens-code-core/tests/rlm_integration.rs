@@ -4,7 +4,8 @@ use kittens_code_core::engine::{
     CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ModelOutcome, ProposedToolCall,
 };
 use kittens_code_core::rlm::exec::{AskResult, Page, PageRecord};
-use kittens_code_protocol::config::SessionConfig;
+use kittens_code_protocol::budgets::BudgetKind;
+use kittens_code_protocol::config::{SessionConfig, SessionConfigPatch};
 use kittens_code_protocol::event::{Event, ToolOutcome};
 use kittens_code_protocol::ids::{EffectId, SubmissionId, TurnEpoch};
 use kittens_code_protocol::op::{Op, Submission};
@@ -56,10 +57,40 @@ fn propose_recall(
 }
 
 #[test]
+fn config_patch_cannot_raise_session_aggregate_limits_above_compiled_maxima() {
+    let mut engine = Engine::new(SessionConfig::default(), 1);
+    let mut budgets = kittens_code_protocol::budgets::Budgets::default();
+    budgets.suspended_queries = u8::MAX;
+    budgets.continuation_memory_bytes = u32::MAX;
+    budgets.scanned_bytes = u64::MAX;
+    let mut patch = SessionConfigPatch::default();
+    patch.budgets = Some(budgets);
+
+    let _ = engine.handle(CoreInput::ClientOp(Submission {
+        id: SubmissionId(1),
+        op: Op::ConfigPatch { patch },
+    }));
+    assert_eq!(engine.config().budgets.suspended_queries, 64);
+    assert_eq!(
+        engine.config().budgets.continuation_memory_bytes,
+        64 * 1_024 * 1_024
+    );
+    assert_eq!(engine.config().budgets.scanned_bytes, 1_024 * 1_024 * 1_024);
+}
+
+#[test]
 fn recall_pages_resolve_as_a_capped_tool_result_then_resample() {
     let mut engine = Engine::new(SessionConfig::default(), 1);
     let (model, epoch) = start_turn(&mut engine);
     let actions = propose_recall(&mut engine, model, epoch, "grep \"x\"\nfinal %1");
+    assert!(actions.iter().any(|action| matches!(
+        action,
+        CoreAction::Publish(Event::BudgetUpdate {
+            kind: BudgetKind::VerbCount,
+            used: 1,
+            limit: 64,
+        })
+    )));
     let (page_id, page_epoch, spec) = started_effects(&actions).remove(0);
     assert!(matches!(
         spec,

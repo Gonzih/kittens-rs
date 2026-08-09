@@ -24,7 +24,7 @@ use crate::caps::{Capped, ToolResult as ToolResultCap};
 use crate::compact::CompactionState;
 use crate::prompts::{self, TemplateId};
 use crate::record::{Record, RecordKind, RecordPayload};
-use crate::rlm::exec::{AskRequest, AskResult, Bound, Executor, Page, StepOutcome};
+use crate::rlm::exec::{AskRequest, AskResult, Bound, Executor, Page, StepOutcome, clamp_budgets};
 use crate::rlm::ir::{BoundValue, Sel};
 use crate::rlm::lower::lower_script;
 use crate::tokens::TokenAccounting;
@@ -360,7 +360,8 @@ impl Engine {
     /// A fresh engine for one session. `header_seq_base` is the next free
     /// sequence after the header record the driver already appended.
     #[must_use]
-    pub fn new(config: SessionConfig, header_seq_base: u64) -> Self {
+    pub fn new(mut config: SessionConfig, header_seq_base: u64) -> Self {
+        config.budgets = clamp_budgets(config.budgets);
         Self {
             config,
             phase: Phase::Idle,
@@ -414,6 +415,7 @@ impl Engine {
     /// wrapping an identifier.
     #[allow(clippy::too_many_lines)] // The ordered record fold is intentionally exhaustive at one audit site.
     pub fn resume(mut base_config: SessionConfig, records: &[Record]) -> Result<Self, ResumeError> {
+        base_config.budgets = clamp_budgets(base_config.budgets);
         if !matches!(
             records.first(),
             Some(Record {
@@ -470,7 +472,9 @@ impl Engine {
                 }
                 RecordPayload::ConfigPatch(patch) => {
                     base_config.apply(patch.clone());
+                    base_config.budgets = clamp_budgets(base_config.budgets);
                     engine.config.apply(patch.clone());
+                    engine.config.budgets = clamp_budgets(engine.config.budgets);
                     engine.compaction.reset_breaker();
                 }
                 RecordPayload::EffectOutcome(bytes) => {
@@ -718,6 +722,7 @@ impl Engine {
                     t,
                 );
                 self.config.apply(patch);
+                self.config.budgets = clamp_budgets(self.config.budgets);
                 self.compaction.reset_breaker();
             }
             Op::Shutdown => {
@@ -1211,6 +1216,7 @@ impl Engine {
         t: &mut Transition,
     ) {
         loop {
+            self.publish_recall_budget_updates(&mut query.executor, t);
             match outcome {
                 StepOutcome::NeedPages(request) => {
                     let Some(child) = self.fresh_effect(t) else {
@@ -1267,7 +1273,7 @@ impl Engine {
                     self.recalls.push(query);
                     return;
                 }
-                StepOutcome::Line { slot, bound } => {
+                StepOutcome::Line { slot, bound, .. } => {
                     self.publish(
                         Event::QueryTrace {
                             query: query.id,
@@ -1283,7 +1289,7 @@ impl Engine {
                     self.resolve_tool_terminal(
                         query.id,
                         ToolOutcome::Succeeded,
-                        &answer,
+                        answer.as_str(),
                         resample,
                         t,
                     );
@@ -1305,6 +1311,21 @@ impl Engine {
                     return;
                 }
             }
+        }
+    }
+
+    /// Drains pure-executor meter changes at the ownership seam so each
+    /// update follows the engine's ordinary commit-before-publication path.
+    fn publish_recall_budget_updates(&mut self, executor: &mut Executor, t: &mut Transition) {
+        for update in executor.take_budget_updates() {
+            self.publish(
+                Event::BudgetUpdate {
+                    kind: update.kind,
+                    used: update.used,
+                    limit: update.limit,
+                },
+                t,
+            );
         }
     }
 

@@ -20,7 +20,56 @@ use alloc::vec::Vec;
 use kittens_code_protocol::budgets::{BudgetKind, Budgets};
 use kittens_code_protocol::error::VerbErrorCause;
 
+use crate::caps::{AskDigest, CapKind, Capped, ToolResult as ToolResultCap, VerbOutput};
 use crate::rlm::ir::{BoundValue, By, FinalValue, Instr, Out, Query, Sel};
+
+const MAX_VERB_COUNT: u16 = 4_096;
+const MAX_RECURSION_DEPTH: u8 = 8;
+const MAX_TOTAL_SUBCALLS: u16 = 1_024;
+const MAX_PARALLEL_SUBCALLS: u8 = 64;
+const MAX_PARTITION_COUNT: u16 = 4_096;
+const MAX_SELECTED_BYTES: u32 = 64 * 1_024 * 1_024;
+const MAX_SCANNED_PAGES: u32 = 65_536;
+const MAX_SCANNED_BYTES: u64 = 1_024 * 1_024 * 1_024;
+const MAX_PAGE_EFFECTS: u32 = 65_536;
+const MAX_SUSPENDED_QUERIES: u8 = 64;
+const MAX_CONTINUATION_MEMORY_BYTES: u32 = 64 * 1_024 * 1_024;
+const MAX_ASK_WALL_CLOCK_MS: u32 = 3_600_000;
+const MAX_ASK_TOKENS: u32 = 1_048_576;
+
+/// Clamps protocol-declared budgets to the core's compiled KC0 maxima.
+///
+/// The protocol deliberately carries plain numbers. This private-runtime
+/// admission check is the enforcement layer that prevents configuration or
+/// replay from enlarging any cap or aggregate meter beyond the audited
+/// implementation bounds (SPEC Q5).
+pub(crate) fn clamp_budgets(mut budgets: Budgets) -> Budgets {
+    budgets.verb_output_bytes = budgets
+        .verb_output_bytes
+        .min(u32::try_from(VerbOutput::HARD_CEILING).unwrap_or(u32::MAX));
+    budgets.tool_result_bytes = budgets
+        .tool_result_bytes
+        .min(u32::try_from(ToolResultCap::HARD_CEILING).unwrap_or(u32::MAX));
+    budgets.ask_digest_bytes = budgets
+        .ask_digest_bytes
+        .min(u32::try_from(AskDigest::HARD_CEILING).unwrap_or(u32::MAX));
+    budgets.verb_count = budgets.verb_count.min(MAX_VERB_COUNT);
+    budgets.recursion_depth = budgets.recursion_depth.min(MAX_RECURSION_DEPTH);
+    budgets.total_subcalls = budgets.total_subcalls.min(MAX_TOTAL_SUBCALLS);
+    budgets.parallel_subcalls = budgets.parallel_subcalls.min(MAX_PARALLEL_SUBCALLS);
+    budgets.partition_count = budgets.partition_count.min(MAX_PARTITION_COUNT);
+    budgets.selected_bytes = budgets.selected_bytes.min(MAX_SELECTED_BYTES);
+    budgets.scanned_pages = budgets.scanned_pages.min(MAX_SCANNED_PAGES);
+    budgets.scanned_bytes = budgets.scanned_bytes.min(MAX_SCANNED_BYTES);
+    budgets.page_effects = budgets.page_effects.min(MAX_PAGE_EFFECTS);
+    budgets.suspended_queries = budgets.suspended_queries.min(MAX_SUSPENDED_QUERIES);
+    budgets.continuation_memory_bytes = budgets
+        .continuation_memory_bytes
+        .min(MAX_CONTINUATION_MEMORY_BYTES);
+    budgets.ask_wall_clock_ms = budgets.ask_wall_clock_ms.min(MAX_ASK_WALL_CLOCK_MS);
+    budgets.ask_tokens = budgets.ask_tokens.min(MAX_ASK_TOKENS);
+    budgets
+}
 
 /// One transcript record rendered to text for the executor (the driver
 /// produces these from the store; their shape is opaque to verbs).
@@ -89,9 +138,9 @@ pub enum Bound {
     /// An integer count.
     Count(u64),
     /// A capped sub-model digest.
-    Digest(String),
+    Digest(Capped<AskDigest>),
     /// Capped digests, ordered by partition index.
-    DigestList(Vec<String>),
+    DigestList(Vec<Capped<AskDigest>>),
     /// An inline verb error (script continues; SPEC Q9).
     Error(VerbErrorCause),
 }
@@ -124,11 +173,15 @@ pub enum StepOutcome {
         slot: u32,
         /// The bound value (may be an inline error).
         bound: Bound,
+        /// The only model-visible rendering of `bound`, capped under the
+        /// per-verb output limit. Full record/chunk selections remain
+        /// internal continuation state for later verbs.
+        output: Capped<VerbOutput>,
     },
     /// The query terminated; `answer` is the final answer.
     Done {
-        /// The final answer.
-        answer: String,
+        /// The final answer, capped at the executor-to-root seam.
+        answer: Capped<VerbOutput>,
     },
     /// A partial `ask-each` batch was accepted; more results are still
     /// outstanding. The driver keeps calling [`Executor::provide_ask`] with
@@ -141,6 +194,18 @@ pub enum StepOutcome {
         /// Which budget or condition ended it.
         cause: VerbErrorCause,
     },
+}
+
+/// One effective aggregate-meter value drained across the executor→engine
+/// seam after the meter materially changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BudgetAdvance {
+    /// Which meter changed.
+    pub kind: BudgetKind,
+    /// Effective amount consumed after the change.
+    pub used: u64,
+    /// Effective compiled-clamped limit.
+    pub limit: u64,
 }
 
 /// The Q5 meter set for one query, all clamped to `Budgets`.
@@ -159,10 +224,12 @@ struct Meters {
     continuation_memory_bytes: u32,
     ask_wall_clock_ms: u32,
     ask_tokens: u32,
+    updates: Vec<BudgetAdvance>,
 }
 
 impl Meters {
     fn new(budgets: Budgets) -> Self {
+        let budgets = clamp_budgets(budgets);
         Self {
             budgets,
             verbs: 0,
@@ -177,6 +244,7 @@ impl Meters {
             continuation_memory_bytes: 0,
             ask_wall_clock_ms: 0,
             ask_tokens: 0,
+            updates: Vec::new(),
         }
     }
 
@@ -186,97 +254,153 @@ impl Meters {
     /// Charges saturate rather than wrap: a charge past a counter's width is
     /// pinned to its maximum, which can only push a meter further over its
     /// (smaller) budget — never falsely under it.
+    #[allow(clippy::too_many_lines)] // Keep the exhaustive kind→counter/limit ledger at one audit site.
     fn charge(&mut self, kind: BudgetKind, amount: u64) -> Result<(), ()> {
         let amount32 = u32::try_from(amount).unwrap_or(u32::MAX);
         let amount16 = u16::try_from(amount).unwrap_or(u16::MAX);
-        match kind {
+        let amount8 = u8::try_from(amount).unwrap_or(u8::MAX);
+        let (before, used, limit) = match kind {
+            BudgetKind::VerbCount => {
+                let before = u64::from(self.verbs);
+                self.verbs = self.verbs.saturating_add(amount16);
+                (
+                    before,
+                    u64::from(self.verbs),
+                    u64::from(self.budgets.verb_count),
+                )
+            }
             BudgetKind::ScannedPages => {
+                let before = u64::from(self.scanned_pages);
                 self.scanned_pages = self.scanned_pages.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.scanned_pages),
                     u64::from(self.budgets.scanned_pages),
                 )
             }
             BudgetKind::ScannedBytes => {
+                let before = self.scanned_bytes;
                 self.scanned_bytes = self.scanned_bytes.saturating_add(amount);
-                over(self.scanned_bytes, self.budgets.scanned_bytes)
+                (before, self.scanned_bytes, self.budgets.scanned_bytes)
             }
             BudgetKind::PageEffects => {
+                let before = u64::from(self.page_effects);
                 self.page_effects = self.page_effects.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.page_effects),
                     u64::from(self.budgets.page_effects),
                 )
             }
             BudgetKind::SelectedBytes => {
+                let before = u64::from(self.selected_bytes);
                 self.selected_bytes = self.selected_bytes.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.selected_bytes),
                     u64::from(self.budgets.selected_bytes),
                 )
             }
             BudgetKind::PartitionCount => {
+                let before = u64::from(self.partitions);
                 self.partitions = self.partitions.saturating_add(amount16);
-                over(
+                (
+                    before,
                     u64::from(self.partitions),
                     u64::from(self.budgets.partition_count),
                 )
             }
             BudgetKind::TotalSubcalls => {
+                let before = u64::from(self.subcalls);
                 self.subcalls = self.subcalls.saturating_add(amount16);
-                over(
+                (
+                    before,
                     u64::from(self.subcalls),
                     u64::from(self.budgets.total_subcalls),
                 )
             }
             BudgetKind::RecursionDepth => {
-                let amount8 = u8::try_from(amount).unwrap_or(u8::MAX);
+                let before = u64::from(self.recursion_depth);
                 self.recursion_depth = self.recursion_depth.saturating_add(amount8);
-                over(
+                (
+                    before,
                     u64::from(self.recursion_depth),
                     u64::from(self.budgets.recursion_depth),
                 )
             }
             BudgetKind::ParallelSubcalls => {
-                let amount8 = u8::try_from(amount).unwrap_or(u8::MAX);
+                let before = u64::from(self.parallel_subcalls);
                 self.parallel_subcalls = self.parallel_subcalls.saturating_add(amount8);
-                over(
+                (
+                    before,
                     u64::from(self.parallel_subcalls),
                     u64::from(self.budgets.parallel_subcalls),
                 )
             }
             BudgetKind::ContinuationMemory => {
+                let before = u64::from(self.continuation_memory_bytes);
                 self.continuation_memory_bytes =
                     self.continuation_memory_bytes.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.continuation_memory_bytes),
                     u64::from(self.budgets.continuation_memory_bytes),
                 )
             }
             BudgetKind::AskWallClock => {
+                let before = u64::from(self.ask_wall_clock_ms);
                 self.ask_wall_clock_ms = self.ask_wall_clock_ms.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.ask_wall_clock_ms),
                     u64::from(self.budgets.ask_wall_clock_ms),
                 )
             }
             BudgetKind::AskTokens => {
+                let before = u64::from(self.ask_tokens);
                 self.ask_tokens = self.ask_tokens.saturating_add(amount32);
-                over(
+                (
+                    before,
                     u64::from(self.ask_tokens),
                     u64::from(self.budgets.ask_tokens),
                 )
             }
-            _ => Ok(()),
+            _ => return Ok(()),
+        };
+        if used != before {
+            self.updates.push(BudgetAdvance { kind, used, limit });
         }
+        over(used, limit)
     }
 
     fn release_parallel_subcalls(&mut self, amount: usize) {
         let amount = u8::try_from(amount).unwrap_or(u8::MAX);
+        let before = self.parallel_subcalls;
         self.parallel_subcalls = self.parallel_subcalls.saturating_sub(amount);
+        if self.parallel_subcalls != before {
+            self.updates.push(BudgetAdvance {
+                kind: BudgetKind::ParallelSubcalls,
+                used: u64::from(self.parallel_subcalls),
+                limit: u64::from(self.budgets.parallel_subcalls),
+            });
+        }
     }
 
     fn begin_ask_node(&mut self) {
+        if self.ask_wall_clock_ms != 0 {
+            self.updates.push(BudgetAdvance {
+                kind: BudgetKind::AskWallClock,
+                used: 0,
+                limit: u64::from(self.budgets.ask_wall_clock_ms),
+            });
+        }
+        if self.ask_tokens != 0 {
+            self.updates.push(BudgetAdvance {
+                kind: BudgetKind::AskTokens,
+                used: 0,
+                limit: u64::from(self.budgets.ask_tokens),
+            });
+        }
         self.ask_wall_clock_ms = 0;
         self.ask_tokens = 0;
     }
@@ -292,9 +416,21 @@ impl Meters {
                 u64::from(retained - self.continuation_memory_bytes),
             )
         } else {
+            let before = self.continuation_memory_bytes;
             self.continuation_memory_bytes = retained;
+            if retained != before {
+                self.updates.push(BudgetAdvance {
+                    kind: BudgetKind::ContinuationMemory,
+                    used: u64::from(retained),
+                    limit: u64::from(self.budgets.continuation_memory_bytes),
+                });
+            }
             Ok(())
         }
+    }
+
+    fn take_updates(&mut self) -> Vec<BudgetAdvance> {
+        core::mem::take(&mut self.updates)
     }
 }
 
@@ -314,20 +450,6 @@ fn slot_index(line: u32) -> Option<usize> {
     (line != 0).then(|| (line - 1) as usize)
 }
 
-/// Truncates text to a byte cap on a UTF-8 boundary (value-cap law:
-/// truncate, never error).
-fn cap(text: &str, limit: u32) -> String {
-    let limit = limit as usize;
-    if text.len() <= limit {
-        return String::from(text);
-    }
-    let mut end = limit;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    String::from(&text[..end])
-}
-
 /// Per-line execution progress for verbs that stream store pages.
 #[derive(Clone, Debug)]
 struct PageWalk {
@@ -340,7 +462,7 @@ struct PageWalk {
 /// The pending `ask-each` join state.
 #[derive(Clone, Debug)]
 struct AskJoin {
-    slots: Vec<Option<String>>,
+    slots: Vec<Option<Capped<AskDigest>>>,
     queued: VecDeque<AskRequest>,
     outstanding: Vec<bool>,
     budget_exhausted: bool,
@@ -422,7 +544,7 @@ impl Executor {
         if self.finished || self.pc >= self.query.len() {
             self.finished = true;
             return StepOutcome::Done {
-                answer: String::new(),
+                answer: Capped::head("", self.meters.budgets.verb_output_bytes, None),
             };
         }
         if !self.depth_checked {
@@ -451,7 +573,12 @@ impl Executor {
                 .clone()
                 .unwrap_or(Bound::Error(VerbErrorCause::Parse));
             self.pc += 1;
-            StepOutcome::Line { slot, bound }
+            let output = self.surface_bound(&bound);
+            StepOutcome::Line {
+                slot,
+                bound,
+                output,
+            }
         }
     }
 
@@ -503,12 +630,17 @@ impl Executor {
             Pending::Ask => {
                 self.meters.release_parallel_subcalls(1);
                 let Some(result) = results.into_iter().next() else {
-                    return self.bind(Bound::Digest(String::new()));
+                    return self.bind(Bound::Digest(Capped::head(
+                        "",
+                        self.meters.budgets.ask_digest_bytes,
+                        None,
+                    )));
                 };
                 if self.charge_ask_cost(&result).is_err() {
                     return self.bind_error(VerbErrorCause::Budget);
                 }
-                let answer = cap(&result.answer, self.meters.budgets.ask_digest_bytes);
+                let answer =
+                    Capped::head(&result.answer, self.meters.budgets.ask_digest_bytes, None);
                 self.bind(Bound::Digest(answer))
             }
             Pending::AskEach(mut join) => {
@@ -526,7 +658,11 @@ impl Executor {
                         join.budget_exhausted = true;
                         join.queued.clear();
                     } else if let Some(slot) = join.slots.get_mut(index) {
-                        *slot = Some(cap(&result.answer, self.meters.budgets.ask_digest_bytes));
+                        *slot = Some(Capped::head(
+                            &result.answer,
+                            self.meters.budgets.ask_digest_bytes,
+                            None,
+                        ));
                     }
                 }
                 if join.budget_exhausted {
@@ -565,11 +701,7 @@ impl Executor {
                 }
 
                 if join.slots.iter().all(Option::is_some) {
-                    let digests = join
-                        .slots
-                        .into_iter()
-                        .map(Option::unwrap_or_default)
-                        .collect();
+                    let digests = join.slots.into_iter().flatten().collect();
                     self.bind(Bound::DigestList(digests))
                 } else if requests.is_empty() {
                     self.pending = Pending::AskEach(join);
@@ -590,8 +722,7 @@ impl Executor {
     fn begin_instruction(&mut self, instr: &Instr) -> StepOutcome {
         // Verb-count is a query-level meter (SPEC Q5): exceeding it
         // terminates the whole query rather than binding an inline error.
-        self.meters.verbs = self.meters.verbs.saturating_add(1);
-        if self.meters.verbs > self.meters.budgets.verb_count {
+        if self.meters.charge(BudgetKind::VerbCount, 1).is_err() {
             return StepOutcome::Failed {
                 cause: VerbErrorCause::Budget,
             };
@@ -786,25 +917,23 @@ impl Executor {
 
     fn finish(&mut self, value: &FinalValue) -> StepOutcome {
         self.finished = true;
-        match value {
-            FinalValue::Literal(text) => StepOutcome::Done {
-                answer: text.clone(),
-            },
-            FinalValue::Ref(r) => {
-                let answer = slot_index(r.line())
-                    .and_then(|i| self.slots.get(i))
-                    .and_then(Option::as_ref)
-                    .map(render_bound)
-                    .unwrap_or_default();
-                StepOutcome::Done { answer }
-            }
+        let answer = match value {
+            FinalValue::Literal(text) => text.clone(),
+            FinalValue::Ref(r) => slot_index(r.line())
+                .and_then(|i| self.slots.get(i))
+                .and_then(Option::as_ref)
+                .map(render_bound)
+                .unwrap_or_default(),
+        };
+        StepOutcome::Done {
+            answer: Capped::head(&answer, self.meters.budgets.verb_output_bytes, None),
         }
     }
 
     /// Binds a value to the current slot and advances the program counter.
     fn bind(&mut self, bound: Bound) -> StepOutcome {
         let slot = slot_of(self.pc);
-        let mut capped = self.cap_bound(bound);
+        let mut capped = bound;
         self.pending = Pending::Idle;
         self.slots[self.pc] = Some(capped.clone());
         if self.retain_continuation_memory().is_err() {
@@ -813,9 +942,11 @@ impl Executor {
             let _ = self.retain_continuation_memory();
         }
         self.pc += 1;
+        let output = self.surface_bound(&capped);
         StepOutcome::Line {
             slot,
             bound: capped,
+            output,
         }
     }
 
@@ -823,17 +954,21 @@ impl Executor {
         self.bind(Bound::Error(cause))
     }
 
-    /// Applies value caps to a binding (truncate, never error).
-    fn cap_bound(&self, bound: Bound) -> Bound {
-        match bound {
-            Bound::Digest(text) => Bound::Digest(cap(&text, self.meters.budgets.ask_digest_bytes)),
-            Bound::DigestList(list) => Bound::DigestList(
-                list.into_iter()
-                    .map(|d| cap(&d, self.meters.budgets.ask_digest_bytes))
-                    .collect(),
-            ),
-            other => other,
-        }
+    /// Renders an internal binding only through the branded per-verb cap.
+    fn surface_bound(&self, bound: &Bound) -> Capped<VerbOutput> {
+        Capped::head(
+            &render_bound(bound),
+            self.meters.budgets.verb_output_bytes,
+            None,
+        )
+    }
+
+    /// Drains typed meter changes for the owning engine to publish as
+    /// `Event::BudgetUpdate`. The executor stays pure and protocol-agnostic;
+    /// publication remains at the engine durability boundary.
+    #[must_use]
+    pub fn take_budget_updates(&mut self) -> Vec<BudgetAdvance> {
+        self.meters.take_updates()
     }
 
     fn render_sel(&self, sel: &Sel) -> String {
@@ -926,10 +1061,10 @@ fn bound_retained_bytes(bound: &Bound) -> u64 {
             .map(|record| record.text.len() as u64)
             .fold(0, u64::saturating_add),
         Bound::Count(_) => 8,
-        Bound::Digest(digest) => digest.len() as u64,
+        Bound::Digest(digest) => digest.as_str().len() as u64,
         Bound::DigestList(digests) => digests
             .iter()
-            .map(|digest| digest.len() as u64)
+            .map(|digest| digest.as_str().len() as u64)
             .fold(0, u64::saturating_add),
         Bound::Error(_) => 0,
     }
@@ -960,7 +1095,7 @@ fn ask_join_retained_bytes(join: &AskJoin) -> u64 {
         .slots
         .iter()
         .filter_map(Option::as_ref)
-        .map(|digest| digest.len() as u64)
+        .map(|digest| digest.as_str().len() as u64)
         .fold(0, u64::saturating_add);
     queued.saturating_add(digests)
 }
@@ -1088,8 +1223,29 @@ fn render_bound(bound: &Bound) -> String {
             }
             s
         }
-        Bound::Digest(d) => d.clone(),
-        Bound::DigestList(list) => list.join("\n"),
+        Bound::Digest(d) => String::from(d.as_str()),
+        Bound::DigestList(list) => {
+            let mut out = String::new();
+            for (index, digest) in list.iter().enumerate() {
+                if index != 0 {
+                    out.push('\n');
+                }
+                out.push_str(digest.as_str());
+            }
+            out
+        }
         Bound::Error(_) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod meter_tests {
+    use super::*;
+
+    #[test]
+    fn value_cap_kinds_are_not_aggregate_meter_charges() {
+        let mut meters = Meters::new(Budgets::default());
+        assert!(meters.charge(BudgetKind::VerbOutput, 1).is_ok());
+        assert!(meters.take_updates().is_empty());
     }
 }
