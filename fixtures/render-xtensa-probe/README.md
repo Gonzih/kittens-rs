@@ -9,7 +9,7 @@ dependency rather than inherit the root workspace.
 Build from this directory:
 
 ```sh
-. /Users/feral/export-esp.sh && cargo +esp build --release --target xtensa-esp32s3-none-elf
+. "$HOME/export-esp.sh" && cargo +esp build --release --target xtensa-esp32s3-none-elf
 ```
 
 **Fact:** the linked path is `#![no_std]`/`#![no_main]`, defines no allocator,
@@ -21,14 +21,20 @@ with command `0x32`, address `0x002c00`, and zero dummy cycles.
 **Fact:** the adapter module forbids unsafe code and implements the current
 `kittens_render::transfer::OwnedTransfer` contract: `poll_done -> Poll<()>`,
 register-then-recheck, cancellation linearization plus progress wake, outcome
-authority in consuming `recover`, `wait()` recovery, and synchronous
-cancel/wait/disarm cleanup on ordinary drop. The firmware statically checks
+authority in consuming `recover`, candidate-waker clone before the global
+critical section with replaced/unused wakers dropped after exclusion,
+`wait()` recovery, and synchronous cancel/wait/disarm cleanup on ordinary
+drop. The firmware statically checks
 the concrete wrapper and its `InFlight` carrier are `Unpin`, identity-checks
 the outer spare, and starts a second transfer with the recovered driver.
 
 **Observation:** a successful link closes only the HAL API, vector-binding,
 Rust ownership, no-allocation, and no-self-reference feasibility question.
 It does not establish behavior on silicon.
+
+**Observation:** SPEC revision 8 changed waker registration after the prior
+linked artifact. The replacement command output and artifact metadata are
+**PENDING REBUILD EVIDENCE** in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`.
 
 **Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
 visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**

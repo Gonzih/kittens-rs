@@ -26,9 +26,10 @@ board's SH8601 path is TX-only, so that seal is acceptable and recorded.
 
 The generic `InFlight<X, S>` carrier implements `Unpin` exactly when
 `X: OwnedTransfer + Unpin` and `S: Unpin` (no bound on `X::Transport` or
-`X::Buffer`). The host-model types meet those bounds; the concrete Xtensa
-wrapper and its `InFlight<_, DmaTxBuf>` carrier now compile with those
-assertions in `fixtures/render-xtensa-probe`.
+`X::Buffer`). The host-model types meet those bounds; the post-revision-8
+Xtensa artifact recorded below compiles the concrete wrapper and its
+`InFlight<_, DmaTxBuf>` carrier with those assertions and the corrected waker
+boundary.
 
 ## Reviewer corrections applied (2026-08-08)
 
@@ -44,11 +45,13 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 
 ## Gate status before spec amendment / freeze
 
-1. **Xtensa compile probe — CLOSED WITH SCOPE (2026-08-09)**:
-   `fixtures/render-xtensa-probe` links for `xtensa-esp32s3-none-elf` with
-   real SPI2 + GDMA_CH0 + two `DmaTxBuf`s, the monomorphized SH8601
-   `half_duplex_write`, concrete `Unpin` assertions, and second-transfer
-   reuse. This closes feasibility only; item 2 remains the silicon gate.
+1. **Xtensa compile probe — CLOSED WITH SCOPE (2026-08-09)**: the
+   post-revision-8 `fixtures/render-xtensa-probe` artifact linked for
+   `xtensa-esp32s3-none-elf` with real SPI2 + GDMA_CH0 + two `DmaTxBuf`s, the
+   monomorphized SH8601 `half_duplex_write`, concrete `Unpin` assertions, and
+   second-transfer reuse. It includes revision 8's corrected source waker
+   boundary. The link closes feasibility only; item 2 remains the silicon
+   gate.
 2. **Board HIL**: silicon interrupt delivery (pending → one wake → ready;
    completion-before-first-poll level visibility; cancel-and-drain returns
    transport + sent buffer + spare).
@@ -61,9 +64,10 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 ## Toolchain status
 
 ESP32-S3 is Xtensa LX7: target probes need the Espressif Rust toolchain
-(`espup`). The `esp` toolchain is installed and the linked target probe passed
-on 2026-08-09. This removes the compile/link blocker; it does not supply the
-board-HIL observations in open item 2.
+(`espup`). The `esp` toolchain is installed and the post-revision-8 target
+probe linked on 2026-08-09. This removes the basic toolchain/compile-link
+feasibility blocker; it does not supply the board-HIL observations in open
+item 2.
 
 ## Exit review round 1 (2026-08-08)
 
@@ -344,11 +348,10 @@ explicit drop-the-old-Sweep guidance on `abandon_active` plus the SPEC
 section-10 clarification that the seam gates full K2R-0 acceptance, not
 this host slice. Loop exit condition met: the codebase is done for the
 host slice, the reviewer passed it, and the author agrees with every
-outstanding proposal. Open beyond this slice, unchanged and honestly
-labeled: pixel equivalence (draw-target slice), bilateral seam co-sign,
-Xtensa probe (espup gate), board HIL (hardware in transit), kernel
-source admission, capability sealing at freeze, and the write_region
-transport gate.
+outstanding proposal. At that point in the chronology, the open work was:
+pixel equivalence (draw-target slice), bilateral seam co-sign, Xtensa probe
+(espup gate), board HIL (hardware in transit), kernel source admission,
+capability sealing at freeze, and the `write_region` transport gate.
 
 ## Post-round-6 draw-target integration slice (2026-08-09)
 
@@ -375,15 +378,19 @@ clippy with warnings denied, workspace rustdoc with warnings denied, Rust 1.85
 feature-off/on checks, the empty feature-off dependency-tree assertion, both
 feature-off and feature-on `thumbv7em-none-eabi` builds, and the downstream
 render/kernel no-std fixtures passed. This closes only host-model pixel
-equivalence. The exact `write_region` adapter, Xtensa probe, physical
+equivalence. At this point in the chronology, the exact `write_region`
+adapter, Xtensa probe, physical
 RGB565/channel/byte fidelity, board HIL, kernel source admission, bilateral
 seam, and capability sealing remain unchanged gates.
 
 ## Xtensa compile/link probe (2026-08-09)
 
-**Fact — build evidence (verbatim):**
+**Fact — post-revision-8 build evidence (verbatim):**
 
-> '. /Users/feral/export-esp.sh && cargo +esp build --release --target xtensa-esp32s3-none-elf' → Finished release in 26.73s, exit 0. Artifact: target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe, 204700 bytes, 'ELF 32-bit LSB executable, Tensilica Xtensa, version 1 (SYSV), statically linked, not stripped'. esp-hal v1.1.0 compiled from the pinned rev d48f747b; kittens-render 0.1.1 path dep compiled no_std.
+Run from `fixtures/render-xtensa-probe` in a network-enabled terminal,
+2026-08-09:
+
+> '. /Users/feral/export-esp.sh && cargo +esp build --release --target xtensa-esp32s3-none-elf' → 'Finished release profile [optimized] target(s) in 1.48s' (incremental over the pinned deps), exit 0. Artifact: target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe, 204292 bytes, 'ELF 32-bit LSB executable, Tensilica Xtensa, version 1 (SYSV), statically linked, not stripped'.
 
 **Fact:** `fixtures/render-xtensa-probe` is a standalone crate with an empty
 `[workspace]`. It pins `esp-hal` rev
@@ -393,22 +400,25 @@ local `kittens-render` path without default features. Its adapter module
 forbids unsafe code; the firmware is `no_std`/`no_main`, supplies the esp-hal
 entry point and panic handler, and defines no allocator.
 
-**Fact:** the linked path owns real SPI2, GDMA_CH0, SIO0–3 GPIO4–7, SCK
+**Fact:** the fixture source owns real SPI2, GDMA_CH0, SIO0–3 GPIO4–7, SCK
 GPIO11, CS GPIO12, static descriptors, and two `DmaTxBuf`s. It starts the
 SH8601 TX-only quad-data write using `Command::_8Bit(0x32, DataMode::Single)`,
 `Address::_24Bit(0x2c << 8, DataMode::Single)`, and zero dummy cycles. The
 concrete adapter implements the current `OwnedTransfer` contract:
 `poll_done -> Poll<()>`, register-then-recheck, cancellation linearization and
-wake, consuming recovery as sole outcome authority, `wait()` recovery, and
+wake, candidate-waker clone before the global critical section with every
+replaced/unused waker dropped after exclusion, consuming recovery as sole
+outcome authority, `wait()` recovery, and
 synchronous cancel/wait/disarm drop cleanup. The firmware compiles a second
 transfer using the recovered driver, statically asserts the concrete wrapper
 and `InFlight` carrier are `Unpin`, identity-checks the outer spare, and
 observes every returned resource on start rejection instead of suppressing
 dead-code warnings.
 
-**Observation:** this linked firmware closes the HAL API, vector-binding,
-language, ownership, no-allocation, and no-self-reference feasibility
-question only. It is not evidence of behavior on silicon.
+**Observation:** the post-revision-8 linked firmware preserves the scoped HAL
+API, vector-binding, language, ownership, no-allocation, and no-self-reference
+feasibility result with the corrected software waker boundary. It is not
+evidence of behavior on silicon.
 
 **Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
 visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
@@ -419,3 +429,9 @@ fixture remain a separate open gate (no data exists).**
 **Gap: the blocking `write_region` exact-stack integration remains open; this
 probe compiles the raw SH8601 pixel phase, not a complete display-driver
 transaction (no data exists).**
+
+## Publication mechanics evidence (2026-08-09)
+
+**Fact — crates.io dry-run evidence (verbatim):**
+
+> 'cargo publish -p kittens-render --dry-run --allow-dirty' from the workspace root succeeded — 'Packaged 103 files, 436.0KiB (122.1KiB compressed)', packaged crate verified/compiled, upload reached and aborted only by the dry-run flag.

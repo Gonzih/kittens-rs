@@ -1,15 +1,19 @@
 //! Terminal lifecycle: raw mode and the alternate screen, with ordered
 //! best-effort restoration attempts on drop, including unwind.
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::fmt;
 use std::io::{self, Write};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crossterm::ExecutableCommand;
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+
+#[cfg(not(test))]
+mod production;
+#[cfg(not(test))]
+use production::backend_for_session;
 
 type Output = dyn Write + Send + Sync + UnwindSafe + RefUnwindSafe;
 type RawModeOperation = dyn FnMut() -> io::Result<()> + Send + Sync + UnwindSafe + RefUnwindSafe;
@@ -24,14 +28,6 @@ struct TerminalBackend {
 }
 
 impl TerminalBackend {
-    fn production() -> Self {
-        Self {
-            output: Box::new(io::stdout()),
-            enable_raw: Box::new(enable_raw_mode),
-            disable_raw: Box::new(disable_raw_mode),
-        }
-    }
-
     fn enable_raw_mode(&mut self) -> io::Result<()> {
         (self.enable_raw)()
     }
@@ -53,23 +49,21 @@ impl TerminalBackend {
     }
 }
 
+#[cfg(test)]
 thread_local! {
     /// One-shot private override used by this module's no-tty lifecycle
-    /// oracles. It is compiled in every build so the tested `begin` body is
-    /// identical to production; callers cannot reach this private slot.
+    /// oracles. The lifecycle body is shared with production; only the final
+    /// live-tty binding is replaced in the unit-test build.
     static BACKEND_OVERRIDE: RefCell<Option<TerminalBackend>> = const { RefCell::new(None) };
 }
 
+#[cfg(test)]
 fn backend_for_session() -> TerminalBackend {
-    // Construct the production backend eagerly even when a unit-test override
-    // is present. This keeps the thin production wiring inside the same
-    // deterministic coverage boundary without invoking terminal operations.
-    let production = TerminalBackend::production();
-    BACKEND_OVERRIDE
-        .try_with(|slot| slot.borrow_mut().take())
-        .ok()
-        .flatten()
-        .unwrap_or(production)
+    BACKEND_OVERRIDE.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .expect("terminal tests install one backend before public begin")
+    })
 }
 
 /// An RAII terminal session.

@@ -1,6 +1,8 @@
 # kittens-tui profile specification (K1-TUI slice)
 
-- Status: controlling contract for the first TUI profile slice; authorized 2026-08-08 as the first post-K0 profile under root `SPEC.md` sections 9.4 and 37.13 step 10
+- Status: controlling contract for the first TUI profile slice; authorized
+  2026-08-08 as the first post-K0 profile under root `SPEC.md` sections 9.4 and
+  37.13 step 10; coverage-boundary correction recorded 2026-08-09
 - Parent contracts: root [`SPEC.md`](../../SPEC.md) (kernel semantics, section 9.4 profile rules, section 2.1 coverage thesis) and [`RESEARCH.md`](../../RESEARCH.md) section 4 (the inspected Grok Build TUI architecture, pinned commit `393430ee`)
 - Evidence basis: the K0 presenter parity oracles (`K0-REPORT.md`, behavioral oracles list) — request coalescing, no-payload draw, last-payload gating, stale acknowledgement, deadline under delayed acknowledgement — all of which ran against an application-owned presenter in both the raw and generated Grok fixtures
 - The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, and **MAY** are normative within this crate's boundary only; where this document conflicts with root `SPEC.md` kernel semantics, the root controls
@@ -85,7 +87,13 @@ a private injectable seam so lifecycle oracles can drive raw-mode and
 alternate-screen success and failure without owning a real tty. The seam is
 test apparatus, not an enforcement layer: `TerminalSession` still owns the
 entered state and ordinary RAII `Drop` still enforces the ordered restoration
-attempts.
+attempts. The final binding from that seam to process stdout and crossterm's
+raw-mode functions lives in `src/terminal/production.rs`. Ordinary CI cannot
+behaviorally drive that process-global, live-tty boundary without owning a
+real PTY and platform terminal state, so that exact file is an explicit
+coverage exemption rather than being constructed and discarded under a fake.
+It remains type-checked, linted, documented here, and exercised by the manual
+real-terminal example gate.
 
 ### 6.3 Input reader
 
@@ -116,6 +124,14 @@ impl InputReader {
 ```
 
 The reactor-facing type is the K0-admitted unbounded `Mpsc` with `close::Emit`: `ChannelEvent::Closed` means "the reader thread exited" — a real, typed, fatal-or-handled event, exactly the Grok terminal-reader shape. The unbounded channel is deliberate and inherited from the inspected design: a synchronous reader thread cannot await capacity (root section 11.6 rationale).
+
+The final binding from the shared reader loop to
+`crossterm::event::{poll, read}` lives in `src/input/production.rs`. Like the
+terminal binding, it requires a real process terminal to exercise honestly and
+is an explicit coverage exemption. Deterministic tests cover the owned loop,
+pause/shutdown protocol, errors, delivery, and typed closure through the same
+`EventPoller` operations; they do not execute and discard the live binding to
+inflate coverage.
 
 ### 6.4 Frame writer
 
@@ -266,8 +282,8 @@ No component promises delivery after drop, async cleanup, or rollback of bytes a
 ## 9. Testing oracles (REQUIRED for this slice)
 
 Deterministic, no tty required (writer generic over sink; reader and terminal
-lifecycle over private backend seams with the crossterm implementations kept
-thin):
+lifecycle over private backend seams with the two live-crossterm binding files
+explicitly exempted below):
 
 1. the five K0 parity scenarios, now against the library presenter: repeated requests coalesce; no-payload draw invents no ack target; stale/early ack does not unlock; ack at-or-beyond unlocks; scheduled deadline survives delayed ack and fires;
 2. writer roundtrip over a Vec sink: order, flush-per-frame, ack-per-frame, drain-on-close, typed failure then exit;
@@ -281,13 +297,24 @@ thin):
    panic unwind attempt restoration in leave-alternate → disable-raw → flush
    order, and restore errors do not prevent later restore steps;
 9. compile-fail: two simultaneous live `Draw`s (E0499);
-10. coverage closure: `cargo llvm-cov -p kittens-tui --all-features
-    --summary-only` reports 100% line coverage and 100% function coverage for
-    every crate source file. Coverage tests remain behavioral oracles for a
-    requirement above or for an adversarial path documented at the code site;
-    executing an otherwise meaningless path is not an oracle. Any genuinely
-    unexecutable line is called out inline and listed in this document rather
-    than silently omitted. There are no such exemptions in this slice.
+10. coverage closure: `cargo llvm-cov --workspace --all-features
+    --ignore-filename-regex
+    'crates/kittens-tui/src/(input|terminal)/production\.rs$'
+    --fail-under-lines 100 --fail-under-functions 100
+    --fail-uncovered-lines 0 --fail-uncovered-functions 0
+    --summary-only` reports 100% line and function coverage with exactly zero
+    uncovered lines or functions across the included workspace. Zero uncovered
+    items also means every included crate source file is at 100%. Coverage
+    tests remain behavioral oracles for a requirement above or for an
+    adversarial path documented at the code site; executing an otherwise
+    meaningless path is not an oracle. The only source exemptions are
+    `src/input/production.rs` and `src/terminal/production.rs`: each is a thin,
+    process-global live-terminal binding that cannot be exercised honestly by
+    the deterministic no-tty suite. CI does not construct and discard either
+    binding. Region percentage is informational rather than a gate: the
+    remaining uncovered regions are compiler-synthesized control-flow regions
+    with no distinct uncovered source line or function, so CI deliberately
+    enforces lines/functions and does not hide source with a region threshold.
 
 Negative controls, published beside the tests per root section 37.9: a raw `write!` to the sink outside the writer lane compiles; a handler calling `presenter.request` in a tight loop compiles (coalescing bounds frames, not requests); nothing stops a caller from never presenting.
 
@@ -311,8 +338,9 @@ Root section 37.14 leaves "generic render gate and phase permit" open pending co
 
 K1-TUI is done when: all section 9 oracles pass in CI on the workspace
 toolchains; the section 9 coverage command reports 100% lines and functions
-for each crate source file; the canonical example compiles and runs against a
-real terminal by hand; clippy/fmt/doc gates stay clean; the crate README states
-the boundary table; and the root README presents the monorepo layout with this
+for every non-exempt crate source file; the two named live-terminal binding
+files remain narrow and the canonical example compiles and runs against a real
+terminal by hand; clippy/fmt/doc gates stay clean; the crate README states the
+boundary table; and the root README presents the monorepo layout with this
 crate as the first profile. Publication to crates.io is out of scope and
 remains gated by the root K0-REPORT decision process.

@@ -1,10 +1,23 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 7, 2026-08-09 (the draw-target integration slice adds the optional global-coordinate RGB565 stripe target and closes the host pixel-equivalence oracle row). Revision 6 incorporated the accepted exit-review round-5 repairs: crate-issued `StartPermit` dispatch, completed flight-construction privacy/regression controls, throttle-anchored rejection evidence, and cooperative owning-sweep reconciliation with its published escapes. Earlier revision history remains in section 12.
+- Status: revision 8, 2026-08-09 (publication-readiness correction: the
+  linked Xtensa compile/link feasibility probe is closed with scope; task
+  wakers are cloned, dropped, and woken outside the adapter's global critical
+  section; publication as an experimental 0.1.x evidence release is explicitly
+  not a protocol freeze). Revision 7 added the optional global-coordinate
+  RGB565 stripe target and closed the host pixel-equivalence oracle row.
+  Earlier revision history remains in section 12.
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
-- Slice boundary: **K2R-0 host slice** means the host-model protocol surface and oracles may land against amended section 6. It does not mean K2R-0A or full K2R-0 acceptance: the exact Xtensa compile/link probe, kernel admission, seam co-sign, and board HIL remain separately named gates below.
+- Slice boundary: **K2R-0 host slice** means the host-model protocol surface
+  and oracles may land against amended section 6. It does not mean K2R-0A or
+  full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
+  **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
+  no-allocation, and no-self-reference feasibility, not behavior on silicon.
+  Kernel admission, bilateral seam co-sign, `write_region`, board HIL and
+  silicon interrupt delivery, and capability sealing remain separately named
+  gates below.
 
 ## 1. One-sentence definition
 
@@ -48,15 +61,16 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 
 ## 6. Normative K2R-0 surface (amended through the draw-target slice)
 
-Revision 7 retains the mechanism selected by the K2R-0A experiment (C
+Revision 8 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
 restructuring, with round-3 batch-6, round-4 batch-7, and round-5 batch-8
-repairs to the target/start/settlement/sweep lifecycle, and adds the optional
-draw-target integration. This section is **normative** for the K2R-0 host slice,
-superseding revision 2's provisional candidates. The one still-open shape is
-the kernel-admitted source carrier (K2R-0A open item 3): how these values
-appear as `reactor!` arms awaits the kernel admission slice and is explicitly
-not specified here.
+repairs to the target/start/settlement/sweep lifecycle and revision 7's
+optional draw-target integration. It additionally records the scoped Xtensa
+compile/link result and the reviewed waker/critical-section boundary. This
+section is **normative** for the K2R-0 host slice, superseding revision 2's
+provisional candidates. The one still-open shape is the kernel-admitted source
+carrier (K2R-0A open item 3): how these values appear as `reactor!` arms awaits
+the kernel admission slice and is explicitly not specified here.
 
 ### 6.1 Geometry and identity
 
@@ -78,6 +92,14 @@ stores the settlement at its completion-observation **linearization point**
 (a racing physical completion after that point is conservatively
 `Cancelled`) and MUST wake a registered waker. `recover(self) ->
 Recovered<T, B>` — the **sole outcome authority**.
+
+A reviewed interrupt-slot implementation MUST clone the candidate task waker
+before entering its global critical section. It MAY compare registrations and
+move `Waker` values while excluded, but every replaced, unused, or completed
+registration MUST leave the critical section before its `RawWaker` clone,
+drop, or wake behavior can run. This prevents executor-lock/global-critical-
+section inversion on a multicore target and keeps ISR exclusion bounded to
+slot and hardware-state operations.
 
 `StartPermit<'a>` — a crate-issued, non-`Clone` dispatch authority with a
 private constructor, lifetime-bound to one `StripeTarget::start_flight` call.
@@ -301,6 +323,13 @@ A **non-freezing experiment**; its deliverable is a selected-and-demonstrated sh
 
 **Pass criteria, decidable (finding 4):** against exact pinned SHAs recorded at spike start, over the named finite trace set of section 8: (1) an exact, safe, no-alloc **target compile probe** of the completion shape (finding 2); (2) completion wake reaches the reactor in both selection-loss positions (polled-then-lost and unpolled-below-winner); (3) the explicit cancel-and-drain transition returns transport, sent buffer, and spare on every trace; (4) busy-poll/self-waking completions are rejected by inspection of the wake trace (finding 2); (5) zero allocation after init; (6) no unsafe self-reference; (7) for B: task ownership (spawn/stop/join), per-display-vs-per-transfer identity, capacity, and close semantics are all specified in the artifact.
 
+Revision 8 records criterion 1 **CLOSED WITH SCOPE** through
+`fixtures/render-xtensa-probe` against the pinned `esp-hal` revision. The
+linked result closes only compile/link feasibility. It is not an oracle for
+the executor waker, silicon interrupt delivery or wake counts, physical
+transfer behavior, the kernel-admitted `reactor!` path, or the blocking
+`write_region` transaction; those remain the named runtime/integration gates.
+
 **Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
 
 ## 8. K2R-0: protocol suite (host slice amended; full acceptance gated)
@@ -385,3 +414,13 @@ the pinned anchor driver's host RGB565 byte order. Section 8 now names the
 three real-witness-chain pixel-equivalence cases required to close the
 manifest row. Physical color/format fidelity remains explicitly behind board
 HIL.
+
+Revision 8, 2026-08-09: the publication-readiness corrections record the
+Xtensa target compile/link feasibility row as **CLOSED WITH SCOPE**, while
+leaving board HIL and silicon interrupt delivery, the kernel-admitted
+`reactor!` fixture, the bilateral `kittens-code` seam, blocking `write_region`,
+and pre-freeze capability sealing open. The concrete adapter contract now
+requires task-waker clone/drop/wake behavior outside the global critical
+section. An experimental 0.1.x evidence publication is explicitly not the
+freeze that triggers sealing; any later sealing must use an appropriate
+breaking-version boundary.

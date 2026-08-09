@@ -8,6 +8,7 @@
 //! [`kittens::source::Mpsc`]. The unbounded channel is deliberate: a
 //! synchronous reader thread cannot await capacity.
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::io;
 use std::sync::Arc;
@@ -16,6 +17,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kittens::source::{Mpsc, close};
+
+#[cfg(not(test))]
+mod production;
+#[cfg(not(test))]
+use production::poller_for_reader;
 
 /// One timestamped terminal event.
 #[derive(Debug)]
@@ -46,13 +52,6 @@ struct EventPoller {
 }
 
 impl EventPoller {
-    fn crossterm() -> Self {
-        Self {
-            poll: Box::new(crossterm::event::poll),
-            read: Box::new(crossterm::event::read),
-        }
-    }
-
     fn poll(&mut self, timeout: Duration) -> io::Result<bool> {
         (self.poll)(timeout)
     }
@@ -62,22 +61,21 @@ impl EventPoller {
     }
 }
 
+#[cfg(test)]
 thread_local! {
     /// One-shot private override used by no-tty constructor oracles. It is
-    /// compiled in every build so the public `spawn` body under test is the
-    /// production body; callers cannot reach this private slot.
+    /// compiled only for unit tests; the owned reader loop is shared with
+    /// production and only the final live-crossterm binding is replaced.
     static POLLER_OVERRIDE: RefCell<Option<EventPoller>> = const { RefCell::new(None) };
 }
 
+#[cfg(test)]
 fn poller_for_reader() -> EventPoller {
-    // Eager construction keeps the thin production binding inside the tested
-    // path without invoking crossterm I/O when an oracle installs a script.
-    let production = EventPoller::crossterm();
-    POLLER_OVERRIDE
-        .try_with(|slot| slot.borrow_mut().take())
-        .ok()
-        .flatten()
-        .unwrap_or(production)
+    POLLER_OVERRIDE.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .expect("input tests install one poller before public spawn")
+    })
 }
 
 #[derive(Default)]

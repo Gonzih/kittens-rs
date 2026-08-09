@@ -379,6 +379,9 @@ mod tests {
     use super::*;
     use crate::geometry::FrameEpoch;
 
+    // This is a contract-conforming model used to observe `InFlight` itself.
+    // Its behavior is test setup, not evidence that arbitrary implementations
+    // of the deliberately open `OwnedTransfer` trait satisfy the contract.
     struct TestTransfer {
         outcome: Option<TransferOutcome>,
         waker: Option<Waker>,
@@ -454,14 +457,18 @@ mod tests {
     }
 
     #[test]
-    fn driven_flight_is_pending_ready_then_terminal() {
-        // The transfer contract makes cancellation idempotent even before it
-        // is carried by InFlight.
-        let mut cancelled = TestTransfer::pending();
-        cancelled.cancel();
-        cancelled.cancel();
-        assert_eq!(cancelled.outcome, Some(TransferOutcome::Cancelled));
+    fn model_transfer_fixture_cancel_is_idempotent() {
+        // `OwnedTransfer` remains an open integration contract. This oracle
+        // validates the contract-conforming test model used below; it does not
+        // claim that arbitrary external implementations are thereby checked.
+        let mut transfer = TestTransfer::pending();
+        transfer.cancel();
+        transfer.cancel();
+        assert_eq!(transfer.outcome, Some(TransferOutcome::Cancelled));
+    }
 
+    #[test]
+    fn driven_flight_is_pending_ready_then_terminal() {
         let mut flight = InFlight::from_started(TestTransfer::pending(), 33, target());
         let mut cx = Context::from_waker(Waker::noop());
         assert!(flight.poll_complete(&mut cx).is_pending());

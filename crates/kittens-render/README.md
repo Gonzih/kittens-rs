@@ -3,13 +3,18 @@
 Embedded rendering/interaction profile for the [Kittens](../kittens)
 reactor kernel, anchored on the Waveshare ESP32-S3 1.8" AMOLED V1 board
 (SH8601 display, FT3168 touch, 368×448). The controlling contract is
-[`SPEC.md`](SPEC.md) (revision 7: section 6 is the normative K2R-0
+[`SPEC.md`](SPEC.md) (revision 8: section 6 is the normative K2R-0
 surface); [`K2R0A-LOG.md`](K2R0A-LOG.md) is the experiment record and
 [`TRACE-MANIFEST.md`](TRACE-MANIFEST.md) maps every required oracle to its
 status. Reviews are retained under [`reviews/`](reviews/).
 
-**Stage:** K2R-0 host slice. Not published; board bring-up (K2R-1) awaits
-hardware and the Xtensa toolchain gate.
+**Stage:** experimental 0.1.x evidence release of the K2R-0 host slice;
+protocols are not frozen. The linked Xtensa compile/link feasibility probe is
+**CLOSED WITH SCOPE**; replacement artifact metadata after revision 8's waker
+correction is explicitly pending in the trace manifest. Board HIL and silicon
+interrupt delivery, K2R-1 measurements, the kernel-admitted `reactor!`
+fixture, bilateral seam co-sign with `kittens-code`, blocking `write_region`,
+and capability sealing remain open gates.
 
 ## What each guarantee rests on
 
@@ -104,8 +109,12 @@ non-clearing, so another full repaint remains due.
 
 ## Deferred, with gates
 
-Xtensa compile probe (espup approval) → board HIL (hardware arrival) →
-K2R-1 numbers; kernel-admitted source carrier (root SPEC 37.6 slice) →
-real `reactor!` fixture; seam co-sign with `kittens-code`; `write_region`
-upstream/fork for stripes plus physical RGB565/channel/byte fidelity on board;
-`FlightStarter` and `OwnedTransfer` sealing before any freeze.
+The pinned Xtensa compile/link feasibility probe is **CLOSED WITH SCOPE**: it
+proves the HAL/API/language/ownership/no-allocation/no-self-reference shape,
+not behavior on silicon. Remaining gates are board HIL (hardware in transit),
+including silicon interrupt delivery and physical RGB565/channel/byte
+fidelity, before K2R-1 measurements; a kernel-admitted source carrier (root
+SPEC 37.6 slice) and real `reactor!` fixture; bilateral seam co-sign with
+`kittens-code`; the blocking `write_region` upstream/fork decision; and
+`FlightStarter`/`OwnedTransfer` sealing before any freeze. Publishing this
+experimental 0.1.x evidence release is not that freeze.

@@ -166,6 +166,11 @@ impl<'d, B> OwnedTransfer for Spi2TxTransfer<'d, B> {
         }
 
         let transfer = self.inner.as_ref().expect("live transfer");
+        // `Waker::clone` invokes the RawWaker vtable. Do that before taking the
+        // global ESP critical section so an executor lock cannot invert with
+        // the multicore critical-section lock. If the current registration is
+        // equivalent, `candidate` remains here and is dropped after exclusion.
+        let mut candidate = Some(cx.waker().clone());
 
         let (ready, replaced, registered) = critical_section::with(|cs| {
             let mut slot = SPI2_DONE.borrow(cs).borrow_mut();
@@ -180,13 +185,15 @@ impl<'d, B> OwnedTransfer for Spi2TxTransfer<'d, B> {
             }
 
             // Register or replace under the same exclusion used by the ISR.
-            let replaced = match slot.waker.as_ref() {
-                Some(old) if old.will_wake(cx.waker()) => None,
-                Some(_) => slot.waker.replace(cx.waker().clone()),
-                None => {
-                    slot.waker = Some(cx.waker().clone());
-                    None
-                }
+            let replace = match slot.waker.as_ref() {
+                Some(old) => !old.will_wake(candidate.as_ref().expect("candidate waker")),
+                None => true,
+            };
+            let replaced = if replace {
+                slot.waker
+                    .replace(candidate.take().expect("candidate waker"))
+            } else {
+                None
             };
 
             // The second level check closes completion-during-registration.
@@ -200,9 +207,11 @@ impl<'d, B> OwnedTransfer for Spi2TxTransfer<'d, B> {
             }
         });
 
-        // Waker clone/drop behavior is kept outside the critical section.
+        // RawWaker clone happened before exclusion. Every replaced, completed,
+        // or equivalent unused registration is moved out before its drop.
         drop(replaced);
         drop(registered);
+        drop(candidate);
 
         if ready {
             self.settled = Some(TransferOutcome::Completed);

@@ -28,6 +28,28 @@ jobs:
       - run: cargo build -p kittens-render --no-default-features --features embedded-graphics --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render-no-std-fixture --target thumbv7em-none-eabi --release
 
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Lines and functions are hard gates. Region percentage is deliberately
+      # informational: the residual regions are compiler-synthesized and have
+      # no distinct uncovered source line or function (TUI SPEC section 9).
+      - name: Enforce behavioral line and function coverage
+        run: >-
+          cargo llvm-cov --workspace --all-features
+          --ignore-filename-regex
+          'crates/kittens-tui/src/(input|terminal)/production\.rs$'
+          --fail-under-lines 100
+          --fail-under-functions 100
+          --fail-uncovered-lines 0
+          --fail-uncovered-functions 0
+          --summary-only
+
   rust-1-85:
     runs-on: ubuntu-latest
     steps:
