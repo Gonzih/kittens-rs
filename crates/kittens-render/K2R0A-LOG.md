@@ -3,32 +3,52 @@
 Per SPEC section 7. This log is the experiment record; the spec is amended
 only from what is demonstrated here.
 
-## Candidate status
+## Selected mechanism (2026-08-08)
+
+**C completion mechanism in an A′ carrier.** The reviewer's engineering
+verdict (retained in full at `probes/esp32s3-spi2/VERDICT.md`): on esp-hal
+v1.1.0 (`d48f747`), a profile-owned SPI2 `TransferDone` ISR with a
+critical-section waker slot honestly implements the `poll_done` boundary —
+stable Rust, no alloc, no unsafe self-reference, **no upstream changes** —
+using `SpiDma<Blocking>::set_interrupt_handler`/`listen`/`unlisten`,
+`SpiInterrupt::TransferDone`, `SpiDmaTransfer::{is_done, cancel, wait}`, and
+`SPI2::regs()` status/enable/clear. The HAL's borrowing async future and
+`into_async()` are unusable for this boundary (private wakers; the handler
+would be replaced; per-poll construction loses the listener). TX-only; the
+board's SH8601 path is TX-only, so that seal is acceptable and recorded.
 
 | Candidate | Status | Evidence |
 |---|---|---|
-| A′ — outer-`Unpin` adapter over waker-registering `poll_done` boundary | **host-model PASS** (2026-08-08): all six trace oracles green — both selection-loss positions, cancel-and-drain full recovery, drain-vs-completion race, failure settlement, spent-slot inertness, zero self-wakes | `src/transfer.rs`, `tests/k2r0a_a_prime.rs` |
-| A — kernel pin admission | not started; only needed if A′ fails the HAL-fidelity check | — |
-| B — named task + channel boundary | not started; last per selection rule | — |
-| C — interrupt-backed transfer state | design reserve: if the real HAL cannot express `poll_done` without the borrowing future, C *becomes* the implementation of the A′ boundary (an interrupt-registered waker + `is_done` check is exactly `poll_done`) | — |
+| A′ carrier + C completion | **selected**; host-model PASS with the corrected oracle suite (11 traces incl. adversarial registration race, cancel-wake, waker replacement, late-IRQ inertness, reuse, spare identity, and a failing check-then-register negative control) | `src/transfer.rs`, `tests/k2r0a_a_prime.rs`, `probes/esp32s3-spi2/VERDICT.md` |
+| A — kernel pin admission | not needed for this boundary | — |
+| B — named task + channel boundary | not needed for this boundary | — |
 | ∅ | not reached | — |
 
-## The load-bearing open question
+## Reviewer corrections applied (2026-08-08)
 
-A′ replaces the unnameable borrowing completion future with a
-`poll_done(&mut self, cx)` boundary the integration must implement. On the
-host model this is trivially honest. On real esp-hal it requires either:
+All nine adopted: (1) register-then-recheck mandated; my model had the exact
+lost-wake race and now carries an adversarial oracle plus a deliberately
+broken negative control proving the oracle bites; (2) `cancel` wakes the
+pending poller; (3) the spare buffer is carried in `InFlight` and returned
+in `Settled`; (4) kernel-admitted source + real `reactor!` fixture remain
+open (below); (5) recovery is the sole outcome authority, `poll_done` is
+`Poll<()>`; (6) `is_draining` clears at settlement; (7) `Failed` documented
+as abstract-boundary-only — the esp-hal adapter never produces it; (8)
+waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 
-1. `is_done()`-style state checks plus a **transfer-done interrupt that wakes
-   a registered waker** (candidate C folded in as A′'s implementation), or
-2. some HAL API that registers a waker without constructing/dropping the
-   borrowing `wait_for_done` future per poll (constructing it per poll is the
-   rejected lost-listener/busy pattern).
+## Open before spec amendment / freeze
 
-External contribution requested from the reviewer (Codex) on exactly this
-question against esp-hal 1.1 documentation; result recorded here when it
-lands. The exact-target compile probe remains gated on the Xtensa toolchain
-(user approval pending).
+1. **Xtensa compile probe** (`probes/esp32s3-spi2/`): linked firmware for
+   `xtensa-esp32s3-none-elf` per the verdict's checklist (real SPI2 + DMA
+   channel + two `DmaTxBuf`s, monomorphized `half_duplex_write`, `Unpin`
+   assertions, second-transfer reuse) — gated on espup approval.
+2. **Board HIL**: silicon interrupt delivery (pending → one wake → ready;
+   completion-before-first-poll level visibility; cancel-and-drain returns
+   transport + sent buffer + spare).
+3. **Kernel-admitted completion source + `reactor!` fixture**: raw-`Context`
+   oracles do not prove delivery into Kittens; the kernel admission path for
+   this profile's sources is the remaining kernel conversation.
+4. **Seal `OwnedTransfer`** to reviewed integrations before any freeze.
 
 ## Toolchain gate
 

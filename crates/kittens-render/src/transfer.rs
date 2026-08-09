@@ -1,70 +1,71 @@
-//! K2R-0A candidate A′: an outer-`Unpin` in-flight adapter over a transfer
-//! boundary that exposes waker-registering completion polling instead of a
-//! borrowing completion future.
+//! K2R-0A transfer boundary: an outer-`Unpin` in-flight adapter over a
+//! waker-registering completion boundary.
 //!
-//! The review established (SPEC review finding 2) that the HAL's borrowing
-//! `wait_for_done(&mut transfer)` future cannot be named as a stable,
-//! no-alloc associated type. Candidate A′ therefore moves the boundary: the
-//! integration implements [`OwnedTransfer::poll_done`] — `&mut self`,
-//! waker-registering, no future object — and the adapter stays `Unpin` and
-//! `&mut`-polled, which the current kernel source contract can admit.
+//! Mechanism verdict (K2R0A-LOG, external engineering contribution): on the
+//! anchor board this boundary is implemented by a profile-owned SPI2
+//! `TransferDone` ISR and critical-section waker slot — candidate C's
+//! completion mechanism carried in candidate A′'s `Unpin` shape. The
+//! borrowing HAL completion future is not used at all.
 //!
-//! Whether `poll_done` is honestly implementable over the *real* esp-hal
-//! transfer (via `is_done` plus interrupt-driven waker registration, or only
-//! via candidate C's hand-built interrupt state) is exactly the open half of
-//! the experiment; `K2R0A-LOG.md` tracks it, and the exact-HAL compile probe
-//! is gated on the Xtensa toolchain.
+//! Contract obligations came out of review corrections and are load-bearing:
+//!
+//! - implementations MUST register-then-recheck in `poll_done`; the
+//!   check-then-register order has a lost-wake race (a completion between
+//!   the check and the registration wakes nobody, forever). The test suite
+//!   contains a deliberately broken check-then-register model proving the
+//!   adversarial oracle catches this;
+//! - `cancel` MUST wake a registered waker: cancellation is progress, and
+//!   hardware may produce no further interrupt to do it for us;
+//! - recovery is the **sole outcome authority**: `poll_done` reports only
+//!   settlement (`Poll<()>`), `recover` reports how;
+//! - the spare buffer is carried through the in-flight state and returned at
+//!   settlement, per SPEC section 7's resource-recovery criterion;
+//! - sealing this trait to reviewed integrations is a pre-freeze obligation
+//!   recorded in `K2R0A-LOG.md`; during the experiment it stays open so
+//!   probes and models can implement it.
 
 use core::task::{Context, Poll};
 
 /// An owned, in-flight region transfer at the HAL boundary.
-///
-/// Contract, per SPEC section 5:
-///
-/// - `poll_done` registers the current waker when pending and MUST NOT
-///   self-wake while no progress is possible (busy-poll rejection is a
-///   K2R-0A pass criterion, asserted by wake-count oracles);
-/// - completion state is level-like: once done, `poll_done` stays `Ready`
-///   and `recover` is legal;
-/// - `cancel` requests cancellation; the transfer still completes (as
-///   cancelled) through `poll_done`, so recovery is always driven to
-///   settlement — this is the explicit cancel-and-drain path. Ordinary drop
-///   of the transfer is the documented non-returning boundary;
-/// - `recover` consumes the settled transfer and returns every resource.
 pub trait OwnedTransfer: Sized {
     /// The transport (bus/display handle) consumed by the transfer.
     type Transport;
     /// The pixel buffer consumed by the transfer.
     type Buffer;
 
-    /// Polls for settlement, registering the waker when pending.
-    fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<TransferOutcome>;
+    /// Polls for settlement, registering the current waker when pending.
+    ///
+    /// Register-then-recheck is mandatory (see module docs). Once settled,
+    /// stays `Ready`. Reports only *that* the transfer settled; how it
+    /// settled is [`OwnedTransfer::recover`]'s answer alone.
+    fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()>;
 
-    /// Requests cancellation. Idempotent. The transfer settles (possibly
-    /// immediately) as [`TransferOutcome::Cancelled`] unless it had already
-    /// completed.
+    /// Requests cancellation. Idempotent. Settles the transfer (possibly
+    /// immediately) and MUST wake any registered waker — cancellation is
+    /// progress and hardware may never interrupt again.
     fn cancel(&mut self);
 
-    /// Consumes a settled transfer, returning the transport and buffer.
-    ///
-    /// Calling this before `poll_done` returned `Ready` is a contract
-    /// violation the integration MUST make impossible or reject; the model
-    /// transport panics in tests to surface it.
+    /// Consumes a settled transfer, returning the transport, the sent
+    /// buffer, and the settlement outcome.
     fn recover(self) -> Recovered<Self::Transport, Self::Buffer>;
 }
 
-/// How an in-flight transfer settled.
+/// How an in-flight transfer settled. Produced only by
+/// [`OwnedTransfer::recover`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TransferOutcome {
-    /// Every byte of the region was written and flushed by the transport's
-    /// own definition of completion. This is `StripeWritten` material — it
-    /// says nothing about bus idleness or physical presentation.
+    /// Every byte of the region was written by the transport's own
+    /// completion definition. Says nothing about bus idleness or physical
+    /// presentation.
     Completed,
-    /// Cancellation settled the transfer before completion. The panel region
-    /// content is undefined; SPEC 5.3 forces a full repaint.
+    /// Cancellation settled the transfer first (its observation is the
+    /// linearization point; a physical completion racing it is
+    /// conservatively classified `Cancelled`). Region content is undefined;
+    /// SPEC 5.3 forces a full repaint.
     Cancelled,
-    /// The transport failed. Panel state for the region is undefined; SPEC
-    /// 5.3 forces a full repaint.
+    /// The integration's reviewed fault source settled the transfer. The
+    /// esp-hal SPI2 adapter has no post-start fault source and never
+    /// produces this; it exists for boundaries that do (and for the model).
     Failed,
 }
 
@@ -73,40 +74,62 @@ pub enum TransferOutcome {
 pub struct Recovered<T, B> {
     /// The transport, ready for the next transfer.
     pub transport: T,
-    /// The buffer that was sent (its content is stale scratch now).
+    /// The buffer that was sent (stale scratch now).
     pub buffer: B,
     /// How the transfer settled.
     pub outcome: TransferOutcome,
 }
 
-/// Candidate A′ in-flight adapter: `Unpin`, `&mut`-polled, drivable to
-/// settlement, never resource-losing on the driven path.
-///
-/// State machine (SPEC 6, corrected per review findings 3/6):
+/// Settlement of the full in-flight state: the transfer's resources plus
+/// the independently held spare buffer.
+#[derive(Debug)]
+pub struct Settled<T, B, S> {
+    /// The transport, ready for the next transfer.
+    pub transport: T,
+    /// The sent buffer.
+    pub buffer: B,
+    /// The spare buffer that stayed writable during the flight.
+    pub spare: S,
+    /// How the transfer settled.
+    pub outcome: TransferOutcome,
+}
+
+/// The in-flight adapter: `Unpin`, `&mut`-polled, drivable to settlement,
+/// never resource-losing on the driven path. Owns the transfer *and* the
+/// spare buffer, which stays independently writable during the flight
+/// (SPEC 6.3's `StripeInFlight` topology).
 ///
 /// ```text
-/// InFlight ── poll_complete Ready ──▶ (Recovered { .., Completed/Failed })
-/// InFlight ── begin_drain ──▶ Draining ── poll_complete Ready ──▶ (Recovered { .., Cancelled/Completed/Failed })
-/// InFlight/Draining ── drop ──▶ resources lost (documented non-returning boundary)
+/// InFlight ── poll_complete Ready ─────────────▶ Settled { .., Completed/Failed }
+/// InFlight ── begin_drain ─▶ draining ── poll_complete Ready ─▶ Settled { .., Cancelled/Completed }
+/// InFlight ── drop ─▶ resources lost (documented non-returning boundary)
 /// ```
 #[derive(Debug)]
-pub struct InFlight<X: OwnedTransfer> {
+pub struct InFlight<X: OwnedTransfer, S> {
     transfer: Option<X>,
+    spare: Option<S>,
     draining: bool,
 }
 
-impl<X: OwnedTransfer> InFlight<X> {
-    /// Wraps a started transfer.
-    pub const fn new(transfer: X) -> Self {
+impl<X: OwnedTransfer, S> InFlight<X, S> {
+    /// Wraps a started transfer together with the spare buffer that remains
+    /// writable during the flight.
+    pub const fn new(transfer: X, spare: S) -> Self {
         Self {
             transfer: Some(transfer),
+            spare: Some(spare),
             draining: false,
         }
     }
 
-    /// Requests cancellation; the transfer still settles through
-    /// [`InFlight::poll_complete`], which is the only path that returns the
-    /// resources. Idempotent.
+    /// The spare buffer, writable while the transfer is in flight.
+    pub const fn spare_mut(&mut self) -> Option<&mut S> {
+        self.spare.as_mut()
+    }
+
+    /// Requests cancellation; the transfer settles through
+    /// [`InFlight::poll_complete`], the only path that returns resources.
+    /// Idempotent.
     pub fn begin_drain(&mut self) {
         if let Some(transfer) = self.transfer.as_mut() {
             if !self.draining {
@@ -116,32 +139,38 @@ impl<X: OwnedTransfer> InFlight<X> {
         }
     }
 
-    /// Whether a drain has been requested and the transfer has not yet
-    /// settled.
+    /// Whether a drain was requested and the transfer has not yet settled.
     pub const fn is_draining(&self) -> bool {
-        self.draining
+        self.draining && self.transfer.is_some()
     }
 
     /// Polls the transfer to settlement. `Ready` consumes the in-flight
-    /// state and returns every resource; afterwards the adapter is spent and
-    /// further polls return `Pending` forever without registering a wake
-    /// (the caller owns moving on).
+    /// state and returns every resource — transport, sent buffer, and
+    /// spare. A spent adapter polls `Pending` forever without registering a
+    /// wake.
     ///
     /// # Panics
     ///
-    /// Never in practice: the internal take follows a checked presence test
-    /// on the same value.
+    /// Never in practice: the internal takes follow a checked presence test
+    /// on the same values.
     pub fn poll_complete(
         &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Recovered<X::Transport, X::Buffer>> {
+    ) -> Poll<Settled<X::Transport, X::Buffer, S>> {
         let Some(transfer) = self.transfer.as_mut() else {
             return Poll::Pending;
         };
         match transfer.poll_done(cx) {
-            Poll::Ready(_outcome) => {
+            Poll::Ready(()) => {
                 let transfer = self.transfer.take().expect("transfer present");
-                Poll::Ready(transfer.recover())
+                let spare = self.spare.take().expect("spare present until settlement");
+                let recovered = transfer.recover();
+                Poll::Ready(Settled {
+                    transport: recovered.transport,
+                    buffer: recovered.buffer,
+                    spare,
+                    outcome: recovered.outcome,
+                })
             }
             Poll::Pending => Poll::Pending,
         }
@@ -153,8 +182,7 @@ impl<X: OwnedTransfer> InFlight<X> {
     }
 }
 
-// The adapter is Unpin whenever the transfer value itself is movable, which
-// is the A′ premise: the integration keeps any address-sensitive state
-// behind its own boundary (e.g. interrupt-registered statics), not in the
-// value the reactor stores.
-impl<X: OwnedTransfer + Unpin> Unpin for InFlight<X> {}
+// A′ premise: address-sensitive state lives behind the integration's own
+// boundary (interrupt-registered statics), never in the value the reactor
+// stores.
+impl<X: OwnedTransfer + Unpin, S: Unpin> Unpin for InFlight<X, S> {}
