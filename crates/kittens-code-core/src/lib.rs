@@ -20,6 +20,14 @@ extern crate alloc;
 
 pub mod caps;
 pub mod compact;
+/// Turn engine: CoreInput/CoreAction state machine (SPEC section 6).
+pub mod engine;
 pub mod prompts;
+/// Codec-independent transcript record model and crash-replay scan
+/// (blind-slice module; provenance input 18).
+pub mod record;
+/// Typed RLM instruction representation and text lowering (blind-slice
+/// module; provenance input 18).
+pub mod rlm;
 pub mod tokens;
 pub mod window;

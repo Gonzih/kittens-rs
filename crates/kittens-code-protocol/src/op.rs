@@ -45,8 +45,10 @@ pub enum Op {
 }
 
 /// An op with its correlation id.
+///
+/// Deliberately NOT `non_exhaustive`: clients construct this to speak at
+/// all; its shape is the wire contract itself.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
 pub struct Submission {
     /// Client-chosen correlation id echoed by responding events.
     pub id: SubmissionId,
