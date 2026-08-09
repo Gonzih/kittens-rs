@@ -122,22 +122,52 @@ impl Appender {
             ));
         }
 
-        // Decode every line; only the FINAL fault is a tolerable tail —
-        // scan_records enforces that (a mid-log fault is structural).
+        // Decode every line, tracking the byte offset at which each valid
+        // line ENDS. `scan_records` tolerates only a FINAL fault; a torn or
+        // checksum-bad tail must be physically removed so a later repair or
+        // append does not land after the bad bytes and turn the tolerable
+        // tail into a fatal mid-log fault on the next reopen (review input 20
+        // #3 / review-19 #2).
         let reader = BufReader::new(File::open(path)?);
         let mut outcomes = Vec::new();
+        let mut byte_offset: u64 = 0;
+        let mut valid_prefix_end: u64 = 0;
         for line in reader.lines() {
             let line = line?;
+            let line_bytes = line.len() as u64 + 1; // + newline
+            let this_start = byte_offset;
+            byte_offset += line_bytes;
             if line.trim().is_empty() {
+                // Blank lines carry no record but still advance the offset;
+                // keep them inside the valid prefix.
+                valid_prefix_end = byte_offset;
                 continue;
             }
-            outcomes.push(decode_line(&line));
+            let outcome = decode_line(&line);
+            match &outcome {
+                DecodeOutcome::Good(_) => valid_prefix_end = byte_offset,
+                DecodeOutcome::Tail(_) => {
+                    // The valid prefix ends where this bad line began; the
+                    // scanner still validates ordering over the goods.
+                    let _ = this_start;
+                }
+            }
+            outcomes.push(outcome);
         }
         let ScanResult {
             repairs,
             replayable,
-            ignored_tail: _,
+            ignored_tail,
         } = scan_records(outcomes, SUPPORTED_SCHEMA_EPOCH).map_err(OpenError::Scan)?;
+
+        // If a tail fault was tolerated, truncate the physical file to the
+        // last valid record boundary BEFORE any repair/append, so the bad
+        // bytes never sit mid-log.
+        if ignored_tail.is_some() && valid_prefix_end < byte_offset {
+            let truncate = OpenOptions::new().write(true).open(path)?;
+            truncate.set_len(valid_prefix_end)?;
+            truncate.sync_all()?;
+        }
 
         // Append repair terminals through the same write path before any
         // replay (SPEC: crash repair is persisted, ordering law).

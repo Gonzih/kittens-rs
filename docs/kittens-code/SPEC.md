@@ -18,9 +18,16 @@
   rename semantics, unknown-kind replay rules, literal import ledger with
   ledger→gate matrix, l3 dialect pinned + recorded. Prior lineage: v0.1 →
   v0.5 in git history of this file.
-  **Not yet frozen, no implementation authorized.** Freeze requires:
-  operator review + closure of D2/D4 exact shapes (§15) + one final Codex
-  verification confirming the input-16 fix list.
+  **FROZEN 2026-08-09 by operator directive.** Implementation is authorized;
+  the KC0 contract is stable. D2/D4 are closed to the implemented, tested
+  types (§15) — the shipped `Op`/`Event`/`CoreInput`/`CoreAction`/
+  `WindowLayout` shapes ARE the frozen contract. Freeze does not claim the
+  implementation is complete or bug-free: the final release review (input 20)
+  found correctness blockers (#3 appender torn-tail truncation, #4 lifecycle
+  ledger validation ordering, #6 resume state reconstruction) that gate
+  crates.io publication, plus deferred KC0 scope (#7 evidence gates, #8–#13).
+  Freezing pins the interface so those fixes proceed against a stable contract
+  rather than a moving one — "we can always improve, but stop re-speccing."
 - Controlling evidence slice: section 14 (KC0) with its **exhaustive import
   ledger** (input 15 F14 — no more ranges). Everything not imported there is
   candidate design retained for lineage, per the root SPEC §37 discipline.
@@ -664,9 +671,9 @@ without interpreter-grade parsing).
 | ID | Decision | Status | Blocking |
 |---|---|---|---|
 | D1 | Topology §3 (tools dissolved into core; driver-tokio/cli naming) | set for KC0 | freeze after KC0 |
-| D2 | Exact Op/Event/CoreInput/CoreAction field shapes | open — **must close at freeze** (F14), draft shapes in §4/§6 | freeze |
+| D2 | Exact Op/Event/CoreInput/CoreAction field shapes | **CLOSED 2026-08-09**: the implemented, tested types in `kittens-code-protocol` (op.rs/event.rs) and `kittens-code-core` (engine.rs) are the frozen contract; additive-only within v0.x (P7) | — |
 | D3 | Verb grammar + IR (§8, appendix A) | closed as KC0 draft; grammar versioned-experimental | E2 |
-| D4 | WindowLayout exact fields (core type) | open — **must close at freeze** (F14) | freeze |
+| D4 | WindowLayout exact fields (core type) | **CLOSED 2026-08-09**: the implemented `WindowLayout` in `kittens-code-core` (window.rs) is the frozen shape; the #11/#14 constructor hardening is a bugfix within the frozen field set, not a shape change | — |
 | D5 | Isolation policy enum | deferred with D8 | post-KC0 |
 | D6 | Wire dialects (Anthropic-style only) | closed for KC0 | KC1 |
 | D7 | no_std search dialect × postcard codec (+ `l3_dialect_version`) | open, spike | MCU claims |

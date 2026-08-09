@@ -387,3 +387,51 @@ async fn out_of_order_append_is_refused_in_release() {
     let err = appender.append(&[wrong]).expect_err("out-of-order refused");
     assert_eq!(err.0, 5, "the failing sequence is reported");
 }
+
+#[tokio::test]
+async fn torn_tail_repair_survives_a_second_reopen() {
+    // The decisive durability case (review input 20 #3): a torn tail is
+    // truncated on the first reopen, so appends land on a clean boundary and
+    // a SECOND reopen does not hit a mid-log fault.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let header = header_record(9);
+    // header + a valid record + a torn final line.
+    let good = Record::new(
+        1,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(kittens_code_protocol::event::Event::ShuttingDown),
+    )
+    .expect("record");
+    let mut text = String::new();
+    text.push_str(&serde_json::to_string(&header).unwrap());
+    text.push('\n');
+    text.push_str(&serde_json::to_string(&good).unwrap());
+    text.push('\n');
+    text.push_str("{\"seq\":2,\"kind\":\"emitted_ev"); // torn, no newline
+    std::fs::write(&log, text).expect("seed log");
+
+    // First reopen: truncates the torn tail, keeps header+record, continues.
+    let (mut appender, replay) = Appender::open(&log, None).expect("first reopen");
+    assert_eq!(replay.len(), 2, "header + valid record retained");
+    let next = appender.next_seq();
+    let more = Record::new(
+        next,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(kittens_code_protocol::event::Event::ShuttingDown),
+    )
+    .expect("record");
+    appender.append(&[more]).expect("append after truncation");
+    drop(appender);
+
+    // SECOND reopen must succeed — the torn bytes are gone, no mid-log fault.
+    let (_appender2, replay2) = Appender::open(&log, None).expect("second reopen must not fault");
+    assert!(
+        replay2.len() >= 3,
+        "the appended record survives the reopen"
+    );
+}
