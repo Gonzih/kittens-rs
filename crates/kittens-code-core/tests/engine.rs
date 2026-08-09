@@ -444,3 +444,36 @@ fn interrupt_terminalizes_the_cancelled_effect_stream() {
         "interrupt terminalizes the cancelled effect's stream"
     );
 }
+
+#[test]
+fn spurious_current_epoch_completion_does_not_terminalize_a_stream() {
+    use kittens_code_core::record::RecordKind;
+    let mut e = engine();
+    let actions = user_input(&mut e, "hi");
+    let (_model_id, epoch, _) = started_effects(&actions)[0].clone();
+
+    // A completion for an effect id the engine NEVER started, in the CURRENT
+    // epoch. It must be dropped with a trace and MUST NOT commit a
+    // StreamTerminal (which would orphan and corrupt replay — review #4).
+    let actions = e
+        .handle(CoreInput::EffectFinished {
+            id: EffectId(9999),
+            epoch,
+            terminal: EffectTerminal::Model(ModelOutcome {
+                text: String::from("spurious"),
+                tool_calls: vec![],
+                usage: None,
+            }),
+        })
+        .actions;
+    assert!(
+        !committed_kinds(&actions).contains(&RecordKind::StreamTerminal),
+        "an unowned completion never terminalizes a stream"
+    );
+    assert!(
+        published(&actions).is_empty(),
+        "no events for a dropped completion"
+    );
+    // And the real turn is untouched: the model effect is still awaited.
+    assert!(started_effects(&actions).is_empty());
+}

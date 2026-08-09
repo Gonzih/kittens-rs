@@ -627,25 +627,31 @@ impl Engine {
         // duplicate, or stale-epoch completions are dropped with a trace and
         // do NOT close a stream (the stream this id started, if any, was
         // already terminalized when its real completion arrived).
-        if epoch != self.epoch || self.finished.contains(&id) {
-            self.commit(
-                RecordKind::EffectOutcome,
-                Some(id),
-                RecordPayload::EffectOutcome(
-                    format!("dropped completion: effect {} epoch {}", id.0, epoch.0).into_bytes(),
-                ),
-                t,
-            );
-            return;
-        }
-        // The effect reached its real terminal: close its lifecycle stream
-        // (paired with the StreamStarted from start_effect, SPEC S3 / #3).
-        self.commit_stream_terminal(id, t);
-        if self
+        // A completion is only honored if this id names an effect the engine
+        // actually started and still owns (an in-flight model call, a live
+        // tool slot, or a live recall child) AND its epoch matches AND it is
+        // not already finished. Anything else — stale epoch, duplicate, or an
+        // id that was never started (spurious/wrong-kind completion) — is
+        // dropped with a trace and NEVER terminalizes a stream (review input
+        // 20 #4): terminalizing an unowned id would persist a StreamTerminal
+        // with no matching StreamStarted and corrupt replay.
+        let owns_recall = self
             .recalls
             .iter()
-            .any(|query| query.pending.iter().any(|pending| pending.id == id))
+            .any(|query| query.pending.iter().any(|pending| pending.id == id));
+        let owns_model = matches!(self.phase, Phase::AwaitingModel(m) if m == id);
+        let owns_tool = self.calls.iter().any(|slot| slot.id == id && !slot.done);
+        if epoch != self.epoch
+            || self.finished.contains(&id)
+            || !(owns_recall || owns_model || owns_tool)
         {
+            self.commit_dropped_completion(id, epoch, "unowned or stale completion", t);
+            return;
+        }
+        // The owned effect reached its real terminal: close its lifecycle
+        // stream (paired with the StreamStarted from start_effect, SPEC S3).
+        self.commit_stream_terminal(id, t);
+        if owns_recall {
             self.on_recall_effect_terminal(id, terminal, t);
             return;
         }
@@ -655,8 +661,19 @@ impl Engine {
                 self.on_tool_terminal(id, outcome, &output, t);
             }
             EffectTerminal::Pages(_) | EffectTerminal::Ask(_) => {
+                // An owned model/tool effect delivered a recall-child terminal
+                // kind — a driver contract violation, not a normal path. The
+                // stream is already closed above; surface it as an internal
+                // error rather than silently dropping.
                 self.finished.push(id);
-                self.commit_dropped_completion(id, epoch, "unowned recall child completion", t);
+                self.publish(
+                    Event::Error(ErrorEvent::new(
+                        ErrorCode::Internal,
+                        String::from("wrong terminal kind for a non-recall effect"),
+                        None,
+                    )),
+                    t,
+                );
             }
             EffectTerminal::Failed { error, message } => {
                 self.finished.push(id);

@@ -21,7 +21,11 @@ the share of concurrency behavior expressed outside the declared vocabulary.
 | `crates/kittens` | `no_std` reactor kernel + Tokio source adapters | root `SPEC.md` §37 + `K0-REPORT.md` |
 | `crates/kittens-macros` | the `reactor!` compiler (parser, topology validator, expansion) | root `SPEC.md` §37 |
 | `crates/kittens-tui` | terminal-orchestration profile (input isolation, frame writer + acks, presenter gate, terminal lifecycle) | `crates/kittens-tui/SPEC.md` |
-| `fixtures/*` | build gates (bare-metal link, feature unification, renamed dependency) | root `SPEC.md` §37.3.1, §37.14 |
+| `crates/kittens-code-protocol` | kittens-code wire contract (ops, events, errors, policies, config, budgets) — `no_std`, serde-only | `docs/kittens-code/SPEC.md` §4 |
+| `crates/kittens-code-core` | kittens-code sans-io agent engine (turn loop, context/RLM engine, budget law) — `no_std` + alloc, no IO | `docs/kittens-code/SPEC.md` §6–§9 |
+| `crates/kittens-code-driver-tokio` | std driver: `kittens::reactor!` loop, log appender, model clients (jail + `live`), tool discharge | `docs/kittens-code/SPEC.md` §11–§12 |
+| `crates/kittens-code-cli` | `kittens-code` headless composition-root binary (JSONL Op-in/Event-out) | `docs/kittens-code/SPEC.md` §13 F1 |
+| `fixtures/*` | build gates (bare-metal link ×2, feature unification, renamed dependency) | root `SPEC.md` §37.3.1, §37.14; `docs/kittens-code/SPEC.md` G1 |
 
 Intended consumers, in ascending ambition: agents building one harness;
 component-library and engine authors building rendering/IO systems on the
@@ -89,6 +93,24 @@ its own boundary in its header.
   `cargo test --workspace --all-features`,
   and for kernel changes the bare-metal gate:
   `cargo build -p kittens-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release`.
+- **kittens-code portability gates** (SPEC G1) — required for any change to
+  `kittens-code-protocol`/`-core`: both crates MUST link on bare-metal and
+  wasm:
+  `cargo build -p kittens-code-no-std-fixture --target thumbv7em-none-eabi --release`
+  and
+  `cargo build -p kittens-code-protocol -p kittens-code-core --target wasm32-unknown-unknown --release`.
+  `core` and `protocol` MUST stay `no_std` + alloc with no std/runtime/IO
+  dep (the `l2`/`swarm-port`/`exec` features stay OFF in the link gate); IO
+  is an Effect discharged by drivers, never in core.
+- **Coverage gate** — new/changed kittens-code code carries tests to full
+  line/function coverage of the changed surface; measure with
+  `cargo llvm-cov -p <crate> --summary-only`. Adversarial paths (crash-repair
+  second-reopen, budget-exactly-at-limit, unowned/stale completions,
+  oversized inputs, path-traversal/symlink swaps) are part of "covered," not
+  extras. A green happy-path test is not coverage.
+- **Determinism** — no floats on any behavioral path in `core` (byte-identical
+  replay, gate G2); all budget/token/id arithmetic is checked or saturating
+  integer math, never silent `+= 1` wraps.
 - Trybuild snapshots: regenerate with `TRYBUILD=overwrite`, and **read every
   regenerated `.stderr` diff** — a silently rewritten snapshot can mask an
   oracle (this happened; it's recorded in `K0-REPORT.md`).
@@ -119,6 +141,20 @@ crates: dependency crates first (`kittens-macros` → `kittens` → profiles),
 wait for index availability between steps, dry-run before each publish,
 record the publication in the changelog and a docs commit. Versions are
 workspace-inherited.
+
+The kittens-code family publishes in strict dependency order —
+`kittens-code-protocol` → `kittens-code-core` → `kittens-code-driver-tokio`
+→ `kittens-code-cli` — because each `cargo publish --dry-run`/publish
+resolves its predecessor from the crates.io index, so you must wait for each
+to appear before the next. Publish preconditions, ALL required: the SPEC
+header is FROZEN and authorizes publication (an unfrozen spec forbids it);
+every gate above green including the portability and coverage gates; a clean
+`cargo publish --dry-run` per crate in order; and no open release-review
+correctness blocker (the review is archived under
+`docs/kittens-code/research-inputs/`). Each publishable crate needs a
+`README.md` and `description`/`license`/`repository` metadata; `-cli` and
+`-driver-tokio` publish their default-lean form (the `live` feature's
+`reqwest`/rustls tree is optional and off by default).
 
 ## What not to do
 
