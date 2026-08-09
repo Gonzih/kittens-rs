@@ -11,13 +11,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use kittens_code_core::engine::{CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine};
+use kittens_code_core::engine::{
+    CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ResumeError,
+};
+use kittens_code_core::record::Record;
+use kittens_code_protocol::config::SessionConfig;
 use kittens_code_protocol::event::Event;
 use kittens_code_protocol::ids::{EffectId, TurnEpoch};
 use kittens_code_protocol::op::Submission;
 use tokio::sync::mpsc;
 
-use crate::appender::Appender;
+use crate::appender::{Appender, OpenError};
 use crate::model::ModelClient;
 use crate::tools;
 
@@ -49,6 +53,15 @@ pub struct Runner {
     failed: bool,
 }
 
+/// Why opening a session failed.
+#[derive(Debug)]
+pub enum OpenSessionError {
+    /// The log could not be opened or crash-repaired.
+    Open(OpenError),
+    /// The replayed records could not seed the engine.
+    Resume(ResumeError),
+}
+
 impl Runner {
     /// Wires a runner over an opened appender and a model client.
     #[must_use]
@@ -71,6 +84,29 @@ impl Runner {
             watermark: 0,
             failed: false,
         }
+    }
+
+    /// Opens (or creates) the session log and wires a runner whose engine is
+    /// resumed from the replayed records (SPEC S2 resume-as-replay). On a
+    /// fresh log this is equivalent to `new` over an engine at the header's
+    /// base sequence; on an existing log the engine's counters are seeded
+    /// above every persisted value so no id is reused.
+    ///
+    /// # Errors
+    ///
+    /// [`OpenError`] if the log cannot be opened or repaired, or a
+    /// [`ResumeError`] if the replayed records cannot seed the engine.
+    pub fn open(
+        log_path: &std::path::Path,
+        fresh_header: Option<Record>,
+        base_config: SessionConfig,
+        model: Arc<dyn ModelClient>,
+        root: PathBuf,
+    ) -> Result<Self, OpenSessionError> {
+        let (appender, replay) =
+            Appender::open(log_path, fresh_header).map_err(OpenSessionError::Open)?;
+        let engine = Engine::resume(base_config, &replay).map_err(OpenSessionError::Resume)?;
+        Ok(Self::new(engine, appender, model, root))
     }
 
     /// Submits a client op into the funnel.

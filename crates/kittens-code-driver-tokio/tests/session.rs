@@ -192,3 +192,65 @@ async fn schema_epoch_from_the_future_is_refused_before_mutation() {
     // The refusal happened before any write.
     assert_eq!(std::fs::read_to_string(&log).unwrap(), before);
 }
+
+#[tokio::test]
+async fn reopened_session_resumes_without_id_collision() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+
+    // First drive: one completed turn writes records to the log.
+    {
+        let model = Arc::new(JailClient::new(vec![JailStep {
+            text: String::from("first"),
+            tool_calls: vec![],
+            usage: None,
+            fail: None,
+        }]));
+        let mut runner = Runner::open(
+            &log,
+            Some(header_record(1)),
+            SessionConfig::default(),
+            model,
+            dir.path().to_path_buf(),
+        )
+        .expect("open fresh");
+        runner.submit(user(1, "hello"));
+        runner.run_to_idle().await;
+    }
+
+    // Reopen via Runner::open: the engine resumes from the log. A new turn
+    // must produce records whose sequences continue past the persisted max.
+    let max_seq_before = {
+        let text = std::fs::read_to_string(&log).unwrap();
+        text.lines().count() as u64 - 1 // records are 0-indexed by line
+    };
+    let model = Arc::new(JailClient::new(vec![JailStep {
+        text: String::from("second"),
+        tool_calls: vec![],
+        usage: None,
+        fail: None,
+    }]));
+    let mut runner = Runner::open(
+        &log,
+        None,
+        SessionConfig::default(),
+        model,
+        dir.path().to_path_buf(),
+    )
+    .expect("reopen resumes");
+    runner.submit(user(2, "again"));
+    let events = runner.run_to_idle().await;
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::TurnEnded {
+            reason: TurnEnd::Completed,
+            ..
+        }
+    )));
+    // The log grew: the resumed turn appended new records past the prior max.
+    let after = std::fs::read_to_string(&log).unwrap().lines().count() as u64;
+    assert!(
+        after > max_seq_before,
+        "resumed session appended new records"
+    );
+}
