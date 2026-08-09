@@ -389,6 +389,50 @@ async fn out_of_order_append_is_refused_in_release() {
 }
 
 #[tokio::test]
+async fn second_live_appender_is_refused_by_writer_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let (appender, _) = Appender::open(&log, Some(header_record(7))).expect("first writer opens");
+
+    assert!(matches!(
+        Appender::open(&log, None),
+        Err(kittens_code_driver_tokio::appender::OpenError::WriterLocked)
+    ));
+
+    drop(appender);
+    assert!(
+        Appender::open(&log, None).is_ok(),
+        "dropping the owner releases the sidecar lock"
+    );
+}
+
+#[tokio::test]
+async fn reopen_reports_an_exhausted_record_sequence() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let header = header_record(8);
+    let final_record = Record::new(
+        u64::MAX,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(Event::ShuttingDown),
+    )
+    .expect("max-sequence record");
+    let text = format!(
+        "{}\n{}\n",
+        serde_json::to_string(&header).unwrap(),
+        serde_json::to_string(&final_record).unwrap()
+    );
+    std::fs::write(&log, text).expect("seed exhausted log");
+
+    assert!(matches!(
+        Appender::open(&log, None),
+        Err(kittens_code_driver_tokio::appender::OpenError::SequenceExhausted)
+    ));
+}
+
+#[tokio::test]
 async fn torn_tail_repair_survives_a_second_reopen() {
     // The decisive durability case (review input 20 #3): a torn tail is
     // truncated on the first reopen, so appends land on a clean boundary and

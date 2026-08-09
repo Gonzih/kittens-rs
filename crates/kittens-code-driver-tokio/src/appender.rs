@@ -27,6 +27,8 @@ pub const CODEC: &str = "jsonl-v1";
 /// Why a log could not be opened.
 #[derive(Debug)]
 pub enum OpenError {
+    /// Another live appender owns the sidecar writer lock.
+    WriterLocked,
     /// Filesystem failure.
     Io(std::io::Error),
     /// The scan refused the log (incompatible epoch, structural damage).
@@ -35,6 +37,8 @@ pub enum OpenError {
     RepairAppend(std::io::Error),
     /// A fresh log was requested with no valid header record.
     BadFreshHeader,
+    /// The persisted log already used the largest sequence number.
+    SequenceExhausted,
 }
 
 impl From<std::io::Error> for OpenError {
@@ -49,6 +53,34 @@ pub struct Appender {
     path: PathBuf,
     next_seq: u64,
     persisted: u64,
+    _writer_lock: WriterLock,
+}
+
+struct WriterLock {
+    _file: File,
+    path: PathBuf,
+}
+
+impl WriterLock {
+    fn acquire(log_path: &Path) -> Result<Self, OpenError> {
+        let mut lock_name = log_path.as_os_str().to_owned();
+        lock_name.push(".lock");
+        let path = PathBuf::from(lock_name);
+        let file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(OpenError::WriterLocked);
+            }
+            Err(error) => return Err(OpenError::Io(error)),
+        };
+        Ok(Self { _file: file, path })
+    }
+}
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Extracts the schema epoch from a header record, or `None` if it is not a
@@ -89,6 +121,7 @@ impl Appender {
         path: &Path,
         fresh_header: Option<Record>,
     ) -> Result<(Self, Vec<Record>), OpenError> {
+        let writer_lock = WriterLock::acquire(path)?;
         let exists = path.exists();
         if !exists {
             // A fresh log's header is validated exactly like an existing
@@ -117,6 +150,7 @@ impl Appender {
                     path: path.to_path_buf(),
                     next_seq: 1,
                     persisted: 0,
+                    _writer_lock: writer_lock,
                 },
                 vec![header],
             ));
@@ -181,13 +215,19 @@ impl Appender {
         if !repairs.is_empty() {
             file.sync_data().map_err(OpenError::RepairAppend)?;
         }
-        let next_seq = replayable.last().map_or(0, |r| r.seq + 1);
+        let next_seq = replayable.last().map_or(Ok(0), |record| {
+            record
+                .seq
+                .checked_add(1)
+                .ok_or(OpenError::SequenceExhausted)
+        })?;
         Ok((
             Self {
                 file,
                 path: path.to_path_buf(),
                 next_seq,
                 persisted: next_seq.saturating_sub(1),
+                _writer_lock: writer_lock,
             },
             replayable,
         ))
@@ -210,16 +250,19 @@ impl Appender {
                     std::io::Error::new(std::io::ErrorKind::InvalidInput, "append out of sequence"),
                 ));
             }
+            let next_seq = record.seq.checked_add(1).ok_or_else(|| {
+                (
+                    record.seq,
+                    std::io::Error::other("sequence namespace exhausted"),
+                )
+            })?;
             let line = serde_json::to_string(record)
                 .map_err(|e| (record.seq, std::io::Error::other(e)))?;
             self.file
                 .write_all(line.as_bytes())
                 .map_err(|e| (record.seq, e))?;
             self.file.write_all(b"\n").map_err(|e| (record.seq, e))?;
-            self.next_seq = record
-                .seq
-                .checked_add(1)
-                .ok_or_else(|| (record.seq, std::io::Error::other("sequence exhausted")))?;
+            self.next_seq = next_seq;
         }
         if let Some(last) = records.last() {
             self.file.sync_data().map_err(|e| (last.seq, e))?;

@@ -4,12 +4,13 @@
 use std::collections::BTreeMap;
 
 use kittens_code_core::engine::{
-    CoreAction, CoreInput, EffectTerminal, Engine, ModelOutcome, ProposedToolCall, ResumeError,
+    CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ModelOutcome, ProposedToolCall,
+    ResumeError,
 };
 use kittens_code_core::record::{LogHeader, Record, RecordKind, RecordPayload};
 use kittens_code_protocol::budgets::Budgets;
 use kittens_code_protocol::config::{SessionConfig, SessionConfigPatch};
-use kittens_code_protocol::event::Event;
+use kittens_code_protocol::event::{Event, ToolOutcome};
 use kittens_code_protocol::ids::{EffectId, SessionId, SubmissionId, TurnEpoch};
 use kittens_code_protocol::op::{Op, Submission};
 use kittens_code_protocol::policy::{ApprovalPolicy, ApprovalVerdict};
@@ -62,6 +63,51 @@ fn committed(actions: &[CoreAction]) -> Vec<&Record> {
         })
         .flatten()
         .collect()
+}
+
+fn retain_committed(log: &mut Vec<Record>, actions: &[CoreAction]) {
+    log.extend(committed(actions).into_iter().cloned());
+}
+
+fn started_model(actions: &[CoreAction]) -> (EffectId, TurnEpoch) {
+    actions
+        .iter()
+        .find_map(|action| match action {
+            CoreAction::StartEffect {
+                id,
+                epoch,
+                spec: EffectSpec::ModelCall(_),
+            } => Some((*id, *epoch)),
+            _ => None,
+        })
+        .expect("transition starts a model call")
+}
+
+fn started_tool(actions: &[CoreAction]) -> (EffectId, TurnEpoch) {
+    actions
+        .iter()
+        .find_map(|action| match action {
+            CoreAction::StartEffect {
+                id,
+                epoch,
+                spec: EffectSpec::Tool(_),
+            } => Some((*id, *epoch)),
+            _ => None,
+        })
+        .expect("transition starts a tool")
+}
+
+fn model_window(actions: &[CoreAction]) -> kittens_code_core::window::WindowLayout {
+    actions
+        .iter()
+        .find_map(|action| match action {
+            CoreAction::StartEffect {
+                spec: EffectSpec::ModelCall(window),
+                ..
+            } => Some(window.clone()),
+            _ => None,
+        })
+        .expect("transition carries the next model window")
 }
 
 fn replay_log() -> Vec<Record> {
@@ -192,6 +238,279 @@ fn header_only_resume_behaves_like_a_fresh_engine() {
         fresh.handle(CoreInput::ClientOp(submission))
     );
     assert_eq!(resumed.epoch(), TurnEpoch(1));
+}
+
+#[test]
+fn resumed_window_matches_uninterrupted_reconstructable_state() {
+    let config = SessionConfig::default();
+    let mut uninterrupted = Engine::new(config.clone(), 1);
+    let mut log = vec![header()];
+
+    // Turn one exercises the full reconstructable call/result path.
+    let transition = uninterrupted.handle(CoreInput::ClientOp(user_submission(1, "read it")));
+    retain_committed(&mut log, &transition.actions);
+    let (model, epoch) = started_model(&transition.actions);
+    let transition = uninterrupted.handle(CoreInput::EffectFinished {
+        id: model,
+        epoch,
+        terminal: EffectTerminal::Model(ModelOutcome {
+            // Final assistant text is currently lossy unless authoritative
+            // ModelDelta records exist, so this equivalence slice keeps it
+            // empty and proves every state-bearing record that does exist.
+            text: String::new(),
+            tool_calls: vec![ProposedToolCall {
+                name: String::from("read"),
+                args_json: String::from("{\"path\":\"note.txt\"}"),
+            }],
+            usage: None,
+        }),
+    });
+    retain_committed(&mut log, &transition.actions);
+    let (tool, tool_epoch) = started_tool(&transition.actions);
+    let transition = uninterrupted.handle(CoreInput::EffectFinished {
+        id: tool,
+        epoch: tool_epoch,
+        terminal: EffectTerminal::Tool {
+            outcome: ToolOutcome::Succeeded,
+            output: String::from("persisted tool output"),
+        },
+    });
+    retain_committed(&mut log, &transition.actions);
+    let (model, epoch) = started_model(&transition.actions);
+    let transition = uninterrupted.handle(CoreInput::EffectFinished {
+        id: model,
+        epoch,
+        terminal: EffectTerminal::Model(ModelOutcome {
+            text: String::new(),
+            tool_calls: vec![],
+            usage: None,
+        }),
+    });
+    retain_committed(&mut log, &transition.actions);
+
+    // Turn two proves that replay distinguishes an idle user input (the
+    // last-query region) from a mid-turn interjection (the tail region).
+    let transition = uninterrupted.handle(CoreInput::ClientOp(user_submission(2, "second turn")));
+    retain_committed(&mut log, &transition.actions);
+    let (model, epoch) = started_model(&transition.actions);
+    let transition = uninterrupted.handle(CoreInput::ClientOp(Submission {
+        id: SubmissionId(3),
+        op: Op::Interject {
+            text: String::from("include this too"),
+        },
+    }));
+    retain_committed(&mut log, &transition.actions);
+    let transition = uninterrupted.handle(CoreInput::EffectFinished {
+        id: model,
+        epoch,
+        terminal: EffectTerminal::Model(ModelOutcome {
+            text: String::new(),
+            tool_calls: vec![],
+            usage: None,
+        }),
+    });
+    retain_committed(&mut log, &transition.actions);
+
+    let mut resumed = Engine::resume(config, &log).expect("committed log resumes");
+    let next = user_submission(4, "same next question");
+    let uninterrupted_actions = uninterrupted
+        .handle(CoreInput::ClientOp(next.clone()))
+        .actions;
+    let resumed_actions = resumed.handle(CoreInput::ClientOp(next)).actions;
+
+    assert_eq!(
+        model_window(&resumed_actions),
+        model_window(&uninterrupted_actions),
+        "resume must reconstruct the next model's complete window recipe"
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn replay_folds_authoritative_deltas_and_applies_compaction_boundary() {
+    let records = vec![
+        header(),
+        record(
+            1,
+            RecordKind::AcceptedOp,
+            None,
+            1,
+            RecordPayload::AcceptedOp(user_submission(1, "old query")),
+        ),
+        record(
+            2,
+            RecordKind::EmittedEvent,
+            None,
+            1,
+            RecordPayload::EmittedEvent(Event::TurnStarted {
+                epoch: TurnEpoch(1),
+                correlates: Some(SubmissionId(1)),
+            }),
+        ),
+        record(
+            3,
+            RecordKind::EmittedEvent,
+            None,
+            1,
+            RecordPayload::EmittedEvent(Event::ModelDelta {
+                epoch: TurnEpoch(1),
+                preview: false,
+                record_seq: 3,
+                text: String::from("old assistant"),
+            }),
+        ),
+        record(
+            4,
+            RecordKind::EmittedEvent,
+            None,
+            1,
+            RecordPayload::EmittedEvent(Event::TurnEnded {
+                epoch: TurnEpoch(1),
+                reason: kittens_code_protocol::event::TurnEnd::Completed,
+            }),
+        ),
+        record(
+            5,
+            RecordKind::EmittedEvent,
+            None,
+            1,
+            RecordPayload::EmittedEvent(Event::CompactionApplied {
+                epoch: TurnEpoch(1),
+            }),
+        ),
+        record(
+            6,
+            RecordKind::AcceptedOp,
+            None,
+            2,
+            RecordPayload::AcceptedOp(user_submission(2, "recent query")),
+        ),
+        record(
+            7,
+            RecordKind::EmittedEvent,
+            None,
+            2,
+            RecordPayload::EmittedEvent(Event::TurnStarted {
+                epoch: TurnEpoch(2),
+                correlates: Some(SubmissionId(2)),
+            }),
+        ),
+        record(
+            8,
+            RecordKind::EmittedEvent,
+            None,
+            2,
+            RecordPayload::EmittedEvent(Event::ModelDelta {
+                epoch: TurnEpoch(2),
+                preview: true,
+                record_seq: 8,
+                text: String::from("duplicate preview"),
+            }),
+        ),
+        record(
+            9,
+            RecordKind::EmittedEvent,
+            None,
+            2,
+            RecordPayload::EmittedEvent(Event::ModelDelta {
+                epoch: TurnEpoch(2),
+                preview: false,
+                record_seq: 9,
+                text: String::from("recent "),
+            }),
+        ),
+        record(
+            10,
+            RecordKind::EmittedEvent,
+            None,
+            2,
+            RecordPayload::EmittedEvent(Event::ModelDelta {
+                epoch: TurnEpoch(2),
+                preview: false,
+                record_seq: 10,
+                text: String::from("assistant"),
+            }),
+        ),
+        record(
+            11,
+            RecordKind::EmittedEvent,
+            None,
+            2,
+            RecordPayload::EmittedEvent(Event::TurnEnded {
+                epoch: TurnEpoch(2),
+                reason: kittens_code_protocol::event::TurnEnd::Completed,
+            }),
+        ),
+    ];
+
+    let mut resumed =
+        Engine::resume(SessionConfig::default(), &records).expect("delta log resumes");
+    let actions = resumed
+        .handle(CoreInput::ClientOp(user_submission(3, "next")))
+        .actions;
+    let window = model_window(&actions);
+    assert_eq!(window.last_user_query, "next");
+    assert_eq!(window.summary, "");
+    assert_eq!(
+        window.verbatim_tail,
+        vec![kittens_code_core::window::TailItem::Message(String::from(
+            "[assistant] recent assistant"
+        ))],
+        "pre-compaction and preview text must not leak into the rebuilt tail"
+    );
+}
+
+#[test]
+fn resume_reports_exhausted_monotonic_namespaces() {
+    let cases = [
+        (
+            record(
+                u64::MAX,
+                RecordKind::EffectOutcome,
+                None,
+                0,
+                RecordPayload::EffectOutcome(vec![]),
+            ),
+            ResumeError::SequenceExhausted,
+        ),
+        (
+            record(
+                1,
+                RecordKind::EffectOutcome,
+                Some(u64::MAX),
+                0,
+                RecordPayload::EffectOutcome(vec![]),
+            ),
+            ResumeError::EffectIdExhausted,
+        ),
+        (
+            record(
+                1,
+                RecordKind::AcceptedOp,
+                None,
+                0,
+                RecordPayload::AcceptedOp(user_submission(u64::MAX, "last request")),
+            ),
+            ResumeError::SubmissionIdExhausted,
+        ),
+        (
+            record(
+                1,
+                RecordKind::EffectOutcome,
+                None,
+                u64::MAX,
+                RecordPayload::EffectOutcome(vec![]),
+            ),
+            ResumeError::TurnEpochExhausted,
+        ),
+    ];
+
+    for (near_max, expected) in cases {
+        assert_eq!(
+            Engine::resume(SessionConfig::default(), &[header(), near_max]).err(),
+            Some(expected)
+        );
+    }
 }
 
 #[test]
