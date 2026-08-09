@@ -28,6 +28,16 @@ jobs:
       - run: cargo build -p kittens-render --no-default-features --features embedded-graphics --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render-no-std-fixture --target thumbv7em-none-eabi --release
 
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and check the GitHub Pages artifact
+        run: |
+          node website/scripts/build.mjs
+          node website/scripts/check.mjs website/dist
+          node website/scripts/repro.mjs
+
   coverage:
     runs-on: ubuntu-latest
     steps:

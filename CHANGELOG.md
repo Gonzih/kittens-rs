@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Launch the public Kittens website on GitHub Pages: an evidence-led,
+  accessible, dependency-free introduction to the coverage thesis, shipped
+  kernel/TUI/render surfaces, lean reactor grammar, honest non-guarantees, and
+  longer-term agent/engine/meta-harness vision. The site reuses the canonical
+  cat-and-yarn artwork, adds a bespoke social card, records its research and
+  controlling W0 contract in-repo, and publishes reproducible output from a
+  provenance-marked `gh-pages` branch without analytics or cookies.
 - Publish `kittens-render` 0.1.1 to crates.io (2026-08-09) as an
   experimental K2R-0 evidence release, human-ordered and gated on the
   round-7 publication-readiness review: all five blockers fixed, workspace

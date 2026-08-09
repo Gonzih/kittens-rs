@@ -9,6 +9,13 @@
 - Normative boundary: this entire file governs the website source, generated
   artifact, and GitHub Pages publication. It does not add to or reinterpret
   any crate's API or semantic guarantees.
+- Revision 1 (2026-08-09): the initial publication gate assumed a controllable
+  browser would be available. The environment's required browser discovery
+  and troubleshooting found none. W0 may therefore publish after its
+  structural, standards, HTTP, and live-deployment oracles pass, but MUST
+  retain manual browser review as an open QA gate and MUST NOT claim that
+  browser or full WCAG conformance review passed. This records the contract
+  drift instead of silently weakening the evidence claim.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative within
 this website boundary.
@@ -214,7 +221,7 @@ W0 targets WCAG 2.2 AA within the limits of automated and manual review.
 |---|---|---|---|
 | local URLs and assets resolve below the project path | build-time structural checker | build plus link/asset scan | external destinations may later move |
 | required claims and boundary language remain present | build-time content assertions + documentation review | marker assertions against rendered HTML | prose cannot prove crate behavior |
-| semantic document and keyboard/focus/reduced-motion affordances | semantic HTML/CSS + structural checker + browser review | automated structure scan and manual keyboard/reduced-motion pass | automated checks are not full WCAG conformance |
+| semantic document and keyboard/focus/reduced-motion affordances | semantic HTML/CSS + structural checker + browser review when available | automated structure/standards scan; manual keyboard/reduced-motion pass remains open when the environment has no browser | automated checks are not full WCAG conformance |
 | no remote runtime dependencies or tracking | source allowlist + network/browser review | structural URL scan and clean-load request inspection | clicking an external link leaves the site boundary |
 | exact deployed source is recoverable | generated `build.json` + deployment commit | compare live `build.json` to merged source SHA | GitHub Pages availability remains external |
 | project claims match shipped evidence | documentation review against controlling contracts | source-linked research ledger and PR review | linked reports retain their own open gates |
@@ -231,7 +238,10 @@ Before the website implementation commit or publication:
 4. the repository's normal formatting, lint, and test gates pass;
 5. a local HTTP server returns the page and every local asset with no 404;
 6. keyboard navigation, narrow and wide layouts, reduced motion, and readable
-   focus are reviewed in a real browser;
+   focus are reviewed in a real browser when one is available; if mandatory
+   browser discovery and troubleshooting returns no browser, publication MAY
+   proceed only after the nonvisual gates pass, the gap is recorded, and no
+   browser-review or WCAG-conformance claim is made;
 7. the implementation enters through a PR to `main` after this spec-first
    commit;
 8. the generated tree is committed and pushed to a new `gh-pages` branch;
