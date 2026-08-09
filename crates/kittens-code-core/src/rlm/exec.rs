@@ -659,6 +659,14 @@ impl Executor {
     }
 }
 
+/// Selects records matching `pattern`, keeping `ctx` records of context on
+/// each side of every hit.
+///
+/// KC0 matches by literal substring: the pinned `no_std` regex dialect (Q6,
+/// decision D7) is not yet available in core, and the std driver will supply
+/// the real Q6 engine through the search port (review input 19 #13). Until
+/// then callers get literal semantics, which is a subset of the eventual
+/// dialect and never over-matches.
 fn grep(records: &[PageRecord], pattern: &str, ctx: u16) -> Vec<PageRecord> {
     let ctx = ctx as usize;
     let mut keep = alloc::vec![false; records.len()];
@@ -686,10 +694,41 @@ fn partition(
     pattern: Option<String>,
 ) -> Vec<Vec<PageRecord>> {
     match by {
-        By::Turns | By::Bytes => {
+        // `--by=turns --size=N`: N records per chunk. Distinguishing
+        // user-turn *boundaries* would require the driver to tag records
+        // with their originating turn; that record-rendering contract is
+        // deferred with D7, so KC0's turn partition is record-count based
+        // and documented as such (review input 19 #13, partial).
+        By::Turns => {
             let n = size.unwrap_or(1).max(1) as usize;
             records.chunks(n).map(<[PageRecord]>::to_vec).collect()
         }
+        // `--by=bytes --size=N`: fill each chunk until its rendered byte
+        // total would exceed N, then start a new chunk. A single record
+        // larger than N occupies its own chunk (never dropped).
+        By::Bytes => {
+            let budget = size.unwrap_or(1).max(1) as usize;
+            let mut chunks: Vec<Vec<PageRecord>> = Vec::new();
+            let mut current: Vec<PageRecord> = Vec::new();
+            let mut used = 0usize;
+            for r in records {
+                let len = r.text.len();
+                if !current.is_empty() && used + len > budget {
+                    chunks.push(core::mem::take(&mut current));
+                    used = 0;
+                }
+                used += len;
+                current.push(r.clone());
+            }
+            if !current.is_empty() {
+                chunks.push(current);
+            }
+            chunks
+        }
+        // `--by=regex "pat"`: start a new chunk at each record matching the
+        // separator. KC0 uses the literal-substring fallback pending the
+        // pinned no_std regex dialect (D7 / review input 19 #13); the std
+        // driver will supply the real Q6 engine through the search port.
         By::Regex => {
             let sep = pattern.unwrap_or_default();
             let mut chunks = Vec::new();

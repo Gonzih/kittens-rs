@@ -260,3 +260,77 @@ fn prelowered_error_line_surfaces_and_script_continues() {
     };
     assert_eq!(answer, "ok");
 }
+
+#[test]
+fn byte_partition_fills_to_budget_not_record_count() {
+    // Four 3-byte records, byte budget 7: greedily fills each chunk until
+    // the next record would exceed 7 bytes -> chunks of [aaa,bbb],[ccc,ddd].
+    let query = vec![
+        instr_line(
+            1,
+            Instr::Partition {
+                sel: Sel::Whole,
+                by: kittens_code_core::rlm::ir::By::Bytes,
+                size: Some(7),
+                pattern: None,
+            },
+        ),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Ref(Ref::new(1)),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, Budgets::default());
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let StepOutcome::Line { bound, .. } = exec.provide_pages(Page {
+        records: vec![rec(1, "aaa"), rec(2, "bbb"), rec(3, "ccc"), rec(4, "ddd")],
+        next_cursor: None,
+    }) else {
+        panic!("partition binds chunks");
+    };
+    let Bound::Chunks(chunks) = bound else {
+        panic!("partition binds a chunk list");
+    };
+    // Budget-fill: two chunks of two records each, not four of one.
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0].len(), 2);
+    assert_eq!(chunks[1].len(), 2);
+}
+
+#[test]
+fn oversized_record_gets_its_own_byte_chunk() {
+    // A single record larger than the budget still forms one chunk (never
+    // dropped).
+    let query = vec![
+        instr_line(
+            1,
+            Instr::Partition {
+                sel: Sel::Whole,
+                by: kittens_code_core::rlm::ir::By::Bytes,
+                size: Some(2),
+                pattern: None,
+            },
+        ),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Literal(String::from("x")),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, Budgets::default());
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let StepOutcome::Line { bound, .. } = exec.provide_pages(Page {
+        records: vec![rec(1, "way bigger than two bytes"), rec(2, "ok")],
+        next_cursor: None,
+    }) else {
+        panic!("partition binds chunks");
+    };
+    let Bound::Chunks(chunks) = bound else {
+        panic!("chunks");
+    };
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks[0].len(), 1, "oversized record is its own chunk");
+}
