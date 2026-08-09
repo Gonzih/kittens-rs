@@ -33,6 +33,8 @@ pub enum OpenError {
     Scan(ScanError),
     /// A repair record could not be written durably.
     RepairAppend(std::io::Error),
+    /// A fresh log was requested with no valid header record.
+    BadFreshHeader,
 }
 
 impl From<std::io::Error> for OpenError {
@@ -46,6 +48,15 @@ pub struct Appender {
     file: File,
     next_seq: u64,
     persisted: u64,
+}
+
+/// Extracts the schema epoch from a header record, or `None` if it is not a
+/// header payload.
+fn header_schema_epoch(record: &Record) -> Option<u32> {
+    match &record.payload {
+        kittens_code_core::record::RecordPayload::Header(h) => Some(h.schema_epoch),
+        _ => None,
+    }
 }
 
 /// Decodes one JSONL line into a scan outcome.
@@ -73,17 +84,24 @@ impl Appender {
     /// [`OpenError`] on IO failure, scan refusal (including a higher
     /// `schema_epoch` — checked before any mutation), or a repair append
     /// that cannot be made durable.
-    ///
-    /// # Panics
-    ///
-    /// If `path` does not exist and `fresh_header` is `None`.
     pub fn open(
         path: &Path,
         fresh_header: Option<Record>,
     ) -> Result<(Self, Vec<Record>), OpenError> {
         let exists = path.exists();
         if !exists {
-            let header = fresh_header.expect("fresh log requires a header record");
+            // A fresh log's header is validated exactly like an existing
+            // one (review input 19 #16): it must be a well-formed, valid,
+            // supported header at seq 0, or the open is refused rather than
+            // panicking.
+            let header = fresh_header.ok_or(OpenError::BadFreshHeader)?;
+            if !header.is_valid()
+                || header.seq != 0
+                || !matches!(header.kind, kittens_code_core::record::RecordKind::Header)
+                || header_schema_epoch(&header).is_none_or(|e| e > SUPPORTED_SCHEMA_EPOCH)
+            {
+                return Err(OpenError::BadFreshHeader);
+            }
             let mut file = OpenOptions::new()
                 .create_new(true)
                 .append(true)
@@ -92,12 +110,11 @@ impl Appender {
             file.write_all(line.as_bytes())?;
             file.write_all(b"\n")?;
             file.sync_data()?;
-            let next_seq = header.seq + 1;
             return Ok((
                 Self {
                     file,
-                    next_seq,
-                    persisted: header.seq,
+                    next_seq: 1,
+                    persisted: 0,
                 },
                 vec![header],
             ));
@@ -151,14 +168,25 @@ impl Appender {
     /// The IO error and the failing sequence, for `PersistFailed`.
     pub fn append(&mut self, records: &[Record]) -> Result<u64, (u64, std::io::Error)> {
         for record in records {
-            debug_assert_eq!(record.seq, self.next_seq, "appender requires strict order");
+            // Strict monotonic order is a hard contract, enforced in release
+            // too (review input 19 #16): an out-of-order record is refused
+            // before it can corrupt the sequence, not merely asserted.
+            if record.seq != self.next_seq {
+                return Err((
+                    record.seq,
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "append out of sequence"),
+                ));
+            }
             let line = serde_json::to_string(record)
                 .map_err(|e| (record.seq, std::io::Error::other(e)))?;
             self.file
                 .write_all(line.as_bytes())
                 .map_err(|e| (record.seq, e))?;
             self.file.write_all(b"\n").map_err(|e| (record.seq, e))?;
-            self.next_seq = record.seq + 1;
+            self.next_seq = record
+                .seq
+                .checked_add(1)
+                .ok_or_else(|| (record.seq, std::io::Error::other("sequence exhausted")))?;
         }
         if let Some(last) = records.last() {
             self.file.sync_data().map_err(|e| (last.seq, e))?;

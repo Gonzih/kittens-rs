@@ -12,6 +12,13 @@ use kittens_code_protocol::event::ToolOutcome;
 use serde::Deserialize;
 
 /// Resolves a workspace-relative path or refuses it (K2 path law).
+///
+/// Lexical checks reject absolute paths and `..`/root traversal, but lexical
+/// normalization alone is not containment: a symlink component can still
+/// escape the root (review input 19 #7). So every existing component of the
+/// resolved path — and the final path itself when it exists — is refused if
+/// it is a symlink, and (defense in depth) the canonicalized ancestor that
+/// exists must stay within the canonicalized root.
 fn resolve(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let p = Path::new(raw);
     if p.is_absolute() {
@@ -20,9 +27,34 @@ fn resolve(root: &Path, raw: &str) -> Result<PathBuf, String> {
     let mut out = PathBuf::from(root);
     for component in p.components() {
         match component {
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part) => {
+                out.push(part);
+                // Refuse any existing symlink component: following it could
+                // leave the root. A not-yet-existing component is fine (it
+                // will be created inside the root by write/edit).
+                if let Ok(meta) = std::fs::symlink_metadata(&out) {
+                    if meta.file_type().is_symlink() {
+                        return Err(String::from("symlinked path components are refused"));
+                    }
+                }
+            }
             Component::CurDir => {}
             _ => return Err(String::from("path traversal is refused")),
+        }
+    }
+    // Containment: the deepest existing ancestor, canonicalized, must be
+    // inside the canonicalized root.
+    let real_root = std::fs::canonicalize(root).map_err(|e| e.to_string())?;
+    let mut probe = out.as_path();
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => break,
+        }
+    }
+    if let Ok(real) = std::fs::canonicalize(probe) {
+        if !real.starts_with(&real_root) {
+            return Err(String::from("resolved path escapes the workspace root"));
         }
     }
     Ok(out)
@@ -162,10 +194,29 @@ mod tests {
 
     #[test]
     fn absolute_and_traversal_paths_are_refused() {
-        let root = Path::new("/tmp/x");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
         assert!(resolve(root, "/etc/passwd").is_err());
         assert!(resolve(root, "../up").is_err());
+        // A not-yet-existing child inside the root resolves.
         assert!(resolve(root, "ok/child.rs").is_ok());
+    }
+
+    #[test]
+    fn symlink_components_are_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("secret"), "top secret").expect("seed secret");
+        // A symlink inside the root pointing outside it.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), root.join("escape")).expect("symlink");
+            // Reaching through the symlink must be refused (K2 / review #7).
+            assert!(resolve(root, "escape/secret").is_err());
+            // The symlink itself as a leaf is also refused.
+            assert!(resolve(root, "escape").is_err());
+        }
     }
 
     #[test]

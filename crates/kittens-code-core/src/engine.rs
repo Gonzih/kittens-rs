@@ -26,8 +26,17 @@ use crate::record::{Record, RecordKind, RecordPayload};
 use crate::tokens::TokenAccounting;
 use crate::window::{TailItem, WindowLayout};
 
-/// Upper bound on actions per transition (L-A2: bounded owned batches).
-pub const MAX_ACTIONS: usize = 64;
+/// Maximum tool calls accepted from one model response. A response
+/// proposing more is truncated to this many with a trace record, so the
+/// resulting transition stays bounded (review input 19 #9: the previous
+/// `MAX_ACTIONS` debug-assert was not a real bound). Each accepted call
+/// contributes a small constant number of actions, so the transition size
+/// is `O(MAX_TOOL_CALLS_PER_TURN)`.
+pub const MAX_TOOL_CALLS_PER_TURN: usize = 32;
+
+/// Bytes reserved within the tool-result budget for the truncation
+/// annotation, so the surfaced value never exceeds the declared cap.
+const ANNOTATION_RESERVE: u32 = 96;
 
 /// A tool call proposed by the model.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,7 +259,6 @@ impl Engine {
                     ))));
             }
         }
-        debug_assert!(t.actions.len() <= MAX_ACTIONS);
         t
     }
 
@@ -475,7 +483,21 @@ impl Engine {
 
     /// Routes proposed calls through their approval policy (L-T4:
     /// approval serial, execution concurrent).
-    fn dispatch_tool_calls(&mut self, calls: Vec<ProposedToolCall>, t: &mut Transition) {
+    fn dispatch_tool_calls(&mut self, mut calls: Vec<ProposedToolCall>, t: &mut Transition) {
+        // Bound the per-turn fan-out so the transition stays small
+        // (review input 19 #9). Excess proposals are dropped with a trace.
+        if calls.len() > MAX_TOOL_CALLS_PER_TURN {
+            let dropped = calls.len() - MAX_TOOL_CALLS_PER_TURN;
+            calls.truncate(MAX_TOOL_CALLS_PER_TURN);
+            self.commit(
+                RecordKind::EffectOutcome,
+                None,
+                RecordPayload::EffectOutcome(
+                    format!("dropped {dropped} tool calls over the per-turn limit").into_bytes(),
+                ),
+                t,
+            );
+        }
         for call in calls {
             let call_id = self.fresh_effect();
             self.tail.push(TailItem::ToolCall {
@@ -574,21 +596,28 @@ impl Engine {
             RecordPayload::EffectOutcome(Vec::from(output.as_bytes())),
             t,
         );
-        let capped = Capped::<ToolResultCap>::head_tail(
-            output,
-            self.config.budgets.tool_result_bytes,
-            Some(full_seq),
-        );
+        // Reserve room for the truncation annotation so the total surfaced
+        // value stays within the declared tool-result budget (review input
+        // 19 #14): the excerpt is capped to budget minus the annotation's
+        // maximum length.
+        let excerpt_budget = self
+            .config
+            .budgets
+            .tool_result_bytes
+            .saturating_sub(ANNOTATION_RESERVE);
+        let capped = Capped::<ToolResultCap>::head_tail(output, excerpt_budget, Some(full_seq));
         let mut text = String::from(capped.as_str());
         if let Some(trunc) = capped.truncation() {
             use core::fmt::Write as _;
             let shown = text.len();
             let _ = write!(
                 text,
-                "\n[truncated: {shown} of {} bytes shown; full output at log seq {full_seq}]",
+                "\n[truncated: {shown} of {} bytes; full output at log seq {full_seq}]",
                 trunc.original_bytes
             );
         }
+        // Never exceed the declared budget, annotation included.
+        debug_assert!(text.len() <= self.config.budgets.tool_result_bytes as usize);
         self.calls[index].done = true;
         self.tail.push(TailItem::ToolResult { call: id, text });
         self.publish(Event::ToolTerminal { call: id, outcome }, t);

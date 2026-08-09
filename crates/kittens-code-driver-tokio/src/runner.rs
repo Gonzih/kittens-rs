@@ -45,6 +45,8 @@ pub struct Runner {
     rx: mpsc::UnboundedReceiver<Wake>,
     published: Vec<Event>,
     outstanding: u32,
+    watermark: u64,
+    failed: bool,
 }
 
 impl Runner {
@@ -66,6 +68,8 @@ impl Runner {
             rx,
             published: Vec::new(),
             outstanding: 0,
+            watermark: 0,
+            failed: false,
         }
     }
 
@@ -109,56 +113,76 @@ impl Runner {
                     })
                 }
             };
-            self.discharge(transition.actions).await;
+            self.discharge(transition.actions);
         }
         &self.published
     }
 
     /// Discharges one bounded action batch as a unit (L-A2b whole-batch
-    /// dispatch), spawning owned effect tasks and bumping the outstanding
-    /// counter.
-    async fn discharge(&mut self, actions: Vec<CoreAction>) {
-        for action in actions {
-            match action {
-                CoreAction::Commit(records) => {
-                    match self.appender.append(&records) {
-                        Ok(watermark) => {
-                            let t = self.engine.handle(CoreInput::Persisted {
-                                up_to_seq: watermark,
-                            });
-                            // Persisted handling produces no further actions
-                            // in KC0 (watermark bookkeeping only).
-                            debug_assert!(t.actions.is_empty());
-                        }
+    /// dispatch): every `Commit` is appended durably first, so that
+    /// `Publish` never surfaces an event whose records are not yet durable
+    /// (L-A3). An append failure latches a terminal state, drops the rest of
+    /// the batch, and feeds the engine exactly one `PersistFailed` whose
+    /// resulting actions (cancels only, once latched) are dispatched without
+    /// re-entering the failed appender — so a persistent store fault cannot
+    /// recurse (review input 19 #1).
+    fn discharge(&mut self, actions: Vec<CoreAction>) {
+        // First pass: durably commit all records in order. On the first
+        // failure, latch and stop committing.
+        if !self.failed {
+            for action in &actions {
+                if let CoreAction::Commit(records) = action {
+                    match self.appender.append(records) {
+                        Ok(watermark) => self.watermark = watermark,
                         Err((at_seq, e)) => {
+                            self.failed = true;
+                            // One PersistFailed; its actions are cancels and
+                            // a fatal error event we surface directly, never
+                            // through another append.
                             let t = self.engine.handle(CoreInput::PersistFailed {
                                 at_seq,
                                 message: e.to_string(),
                             });
-                            // Fatal path: publish and cancel actions follow.
-                            Box::pin(self.discharge(t.actions)).await;
+                            self.dispatch_terminal(t.actions);
+                            return;
                         }
                     }
                 }
-                CoreAction::Publish(event) => {
-                    // L-A3: only publish once the covering records are
-                    // durable. In KC0 commits are synchronous and already
-                    // acknowledged above, so the watermark is current.
-                    self.published.push(event);
-                }
+            }
+            // Acknowledge durability to the engine once, after the whole
+            // batch is committed (not mid-loop).
+            let t = self.engine.handle(CoreInput::Persisted {
+                up_to_seq: self.watermark,
+            });
+            debug_assert!(t.actions.is_empty());
+        }
+
+        // Second pass: publish durable events and start effects in order.
+        // KC0 cancellation is cooperative (a late terminal is dropped by the
+        // engine's exactly-once ledger), so CancelEffect and the
+        // already-handled Commit are no-ops here.
+        for action in actions {
+            match action {
+                CoreAction::Publish(event) => self.published.push(event),
                 CoreAction::StartEffect { id, epoch, spec } => {
-                    self.outstanding += 1;
-                    self.spawn_effect(id, epoch, spec);
+                    if !self.failed {
+                        self.outstanding += 1;
+                        self.spawn_effect(id, epoch, spec);
+                    }
                 }
-                CoreAction::CancelEffect { .. } => {
-                    // KC0 effects are short-lived owned tasks; cancellation
-                    // is cooperative — a late terminal is dropped by the
-                    // engine's exactly-once ledger. The streaming model
-                    // client (post-KC0) wires real abort handles here.
-                }
-                // Unknown future core actions: a driver that cannot honor
-                // one must refuse loudly rather than silently skip it.
+                CoreAction::Commit(_) | CoreAction::CancelEffect { .. } => {}
                 other => unimplemented!("driver missing CoreAction handler: {other:?}"),
+            }
+        }
+    }
+
+    /// Dispatches the terminal (post-failure) action batch: it may publish
+    /// the fatal error but MUST NOT append (the appender is dead) or start
+    /// new effects (review input 19 #1).
+    fn dispatch_terminal(&mut self, actions: Vec<CoreAction>) {
+        for action in actions {
+            if let CoreAction::Publish(event) = action {
+                self.published.push(event);
             }
         }
     }

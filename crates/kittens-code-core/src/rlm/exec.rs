@@ -227,6 +227,12 @@ fn slot_of(pc: usize) -> u32 {
     u32::try_from(pc + 1).unwrap_or(u32::MAX)
 }
 
+/// Zero-based slot index for a one-based `%N` line, or `None` for the
+/// invalid `%0` reference (review input 19 #17).
+fn slot_index(line: u32) -> Option<usize> {
+    (line != 0).then(|| (line - 1) as usize)
+}
+
 /// Truncates text to a byte cap on a UTF-8 boundary (value-cap law:
 /// truncate, never error).
 fn cap(text: &str, limit: u32) -> String {
@@ -536,10 +542,18 @@ impl Executor {
     }
 
     fn begin_ask_each(&mut self, chunks_line: u32, question: &str) -> StepOutcome {
-        let Some(Some(Bound::Chunks(chunks))) = self.slots.get((chunks_line - 1) as usize) else {
+        // `Ref(0)` is invalid; a zero line has no slot (review input 19 #17).
+        let Some(index) = slot_index(chunks_line) else {
+            return self.bind_error(VerbErrorCause::BadRef);
+        };
+        let Some(Some(Bound::Chunks(chunks))) = self.slots.get(index) else {
             return self.bind_error(VerbErrorCause::BadRef);
         };
         let chunks = chunks.clone();
+        // An empty partition resolves immediately to an empty digest list.
+        if chunks.is_empty() {
+            return self.bind(Bound::DigestList(Vec::new()));
+        }
         if self
             .meters
             .charge(BudgetKind::TotalSubcalls, chunks.len() as u64)
@@ -550,9 +564,15 @@ impl Executor {
         let mut requests = Vec::with_capacity(chunks.len());
         for (index, chunk) in chunks.iter().enumerate() {
             let context = render_records(chunk);
-            let _ = self
+            // Selected-bytes exhaustion aborts the whole ask-each with a
+            // budget error rather than silently over-spending (input 19 #11).
+            if self
                 .meters
-                .charge(BudgetKind::SelectedBytes, context.len() as u64);
+                .charge(BudgetKind::SelectedBytes, context.len() as u64)
+                .is_err()
+            {
+                return self.bind_error(VerbErrorCause::Budget);
+            }
             requests.push(AskRequest {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
                 question: String::from(question),
@@ -574,9 +594,8 @@ impl Executor {
                 answer: text.clone(),
             },
             FinalValue::Ref(r) => {
-                let answer = self
-                    .slots
-                    .get((r.line() - 1) as usize)
+                let answer = slot_index(r.line())
+                    .and_then(|i| self.slots.get(i))
                     .and_then(Option::as_ref)
                     .map(render_bound)
                     .unwrap_or_default();
@@ -617,9 +636,8 @@ impl Executor {
 
     fn render_sel(&self, sel: &Sel) -> String {
         match sel {
-            Sel::Ref(r) => self
-                .slots
-                .get((r.line() - 1) as usize)
+            Sel::Ref(r) => slot_index(r.line())
+                .and_then(|i| self.slots.get(i))
                 .and_then(Option::as_ref)
                 .map(render_bound)
                 .unwrap_or_default(),
@@ -634,8 +652,8 @@ impl Executor {
     /// (used by tests and, later, richer validation).
     #[must_use]
     pub fn slot_out(&self, line: u32) -> Option<Out> {
-        self.slots
-            .get((line - 1) as usize)
+        slot_index(line)
+            .and_then(|i| self.slots.get(i))
             .and_then(Option::as_ref)
             .and_then(Bound::out)
     }

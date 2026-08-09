@@ -43,36 +43,45 @@ impl Default for TokenAccounting {
 
 impl TokenAccounting {
     /// Estimates tokens for `bytes` of not-yet-reported tail content.
+    ///
+    /// All products are computed in `u128` and saturated back to `u64` so no
+    /// adversarial byte count can overflow (review input 19 #15); the result
+    /// is deterministic across targets.
     #[must_use]
     pub fn estimate_tail(&self, bytes: u64) -> u64 {
-        (bytes * RATIO_SCALE).div_ceil(self.bytes_per_token_milli.max(1))
+        let scaled = u128::from(bytes) * u128::from(RATIO_SCALE);
+        let per = u128::from(self.bytes_per_token_milli.max(1));
+        u64::try_from(scaled.div_ceil(per)).unwrap_or(u64::MAX)
     }
 
     /// The current best window total: exact history plus estimated tail.
     #[must_use]
     pub fn window_tokens(&self, tail_bytes: u64) -> u64 {
-        self.history_tokens + self.estimate_tail(tail_bytes)
+        self.history_tokens
+            .saturating_add(self.estimate_tail(tail_bytes))
     }
 
     /// Records a provider usage report covering content that measured
     /// `reported_bytes` on our side and `reported_tokens` on the provider's.
     ///
     /// Recalibrates the ratio (running mean over samples) and records the
-    /// relative error the pre-report estimate would have made.
+    /// relative error the pre-report estimate would have made. All
+    /// intermediate products use `u128` so no input can overflow.
     pub fn record_provider_usage(&mut self, reported_tokens: u64, reported_bytes: u64) {
         if reported_tokens == 0 {
             return;
         }
         let estimate = self.estimate_tail(reported_bytes);
-        let error = estimate.abs_diff(reported_tokens);
-        let error_permille =
-            u32::try_from((error * 1_000).div_ceil(reported_tokens)).unwrap_or(u32::MAX);
+        let error = u128::from(estimate.abs_diff(reported_tokens));
+        let error_permille = u32::try_from((error * 1_000).div_ceil(u128::from(reported_tokens)))
+            .unwrap_or(u32::MAX);
         self.max_error_permille = self.max_error_permille.max(error_permille);
 
-        let observed_milli = (reported_bytes * RATIO_SCALE) / reported_tokens;
-        let n = u64::from(self.samples);
-        self.bytes_per_token_milli = ((self.bytes_per_token_milli * n) + observed_milli) / (n + 1);
-        self.bytes_per_token_milli = self.bytes_per_token_milli.max(1);
+        let observed_milli =
+            (u128::from(reported_bytes) * u128::from(RATIO_SCALE)) / u128::from(reported_tokens);
+        let n = u128::from(self.samples);
+        let blended = ((u128::from(self.bytes_per_token_milli) * n) + observed_milli) / (n + 1);
+        self.bytes_per_token_milli = u64::try_from(blended).unwrap_or(u64::MAX).max(1);
         self.samples = self.samples.saturating_add(1);
         self.history_tokens = self.history_tokens.saturating_add(reported_tokens);
     }
@@ -130,6 +139,23 @@ mod tests {
         acc.record_provider_usage(1_000, 3_000);
         // Estimate for 3000 bytes at default ratio was 750: 25% error.
         assert_eq!(acc.max_error_permille(), 250);
+    }
+
+    #[test]
+    fn extreme_inputs_do_not_overflow() {
+        let mut acc = TokenAccounting::default();
+        // u64::MAX bytes at the default ratio must compute without panicking
+        // (u128 intermediate) and stay within u64.
+        let est = acc.estimate_tail(u64::MAX);
+        assert!(est > 0);
+        // Provider reports at the extremes must not panic.
+        acc.record_provider_usage(u64::MAX, u64::MAX);
+        acc.record_provider_usage(1, u64::MAX);
+        // With a tiny ratio and huge tail, the tail estimate saturates to
+        // the ceiling rather than wrapping.
+        acc.bytes_per_token_milli = 1;
+        assert_eq!(acc.estimate_tail(u64::MAX), u64::MAX);
+        let _ = acc.window_tokens(u64::MAX);
     }
 
     #[test]
