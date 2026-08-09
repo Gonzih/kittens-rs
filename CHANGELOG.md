@@ -4,10 +4,12 @@
 
 - Add `kittens-render` (unpublished K2R-0 host slice): the embedded
   rendering/interaction profile anchored on the Waveshare ESP32-S3 1.8"
-  AMOLED V1 — spec-first with four external exit-review rounds adopted in
+  AMOLED V1 — spec-first with five external exit-review rounds adopted in
   full; witness-driven transfer→sweep→demand composition (under sealed
-  integrations, coverage cannot be caller-claimed and is constructed only from
-  completed settlements); provenance-branded
+  integrations and cooperative owning-sweep delivery, coverage cannot be
+  caller-claimed and is constructed only from matching completed settlements;
+  dropped/misapplied settlements and abandonment are published escapes);
+  provenance-branded
   demand settlement; generation-latched touch protocol; K2R-0A mechanism
   verdict (SPI2 TransferDone ISR completion in a carrier that is `Unpin`
   exactly when its owned transfer and spare are both `Unpin`); the historical
@@ -22,9 +24,10 @@
 - Complete the `kittens-render` exit-review Batch 6 host-core repair: make
   `StripeTarget::start_flight` the only public flight construction and return
   rejected starts through `StartFlightError`; make `Settled::into_parts`
-  return mandatory `StripeSettlement::{Written, Unwritten}` proof; enforce one
-  outstanding target per sweep position and poison the epoch on cancellation
-  or failure; document abort's stale-write window and the full-repaint plus
+  return exactly one move-only `StripeSettlement::{Written, Unwritten}` proof;
+  enforce one outstanding target per sweep position and poison the epoch when
+  its matching cancellation/failure settlement is delivered; document abort's
+  stale-write window and the full-repaint plus
   `invalidate()` remedy; use checked, profile-independent epoch and
   `Tick::MAX` horizons; add explicit move-only witness controls; and publish
   the safe shared-backing sent-buffer/spare escape.
@@ -32,9 +35,19 @@
   callback starter with seal-at-freeze `FlightStarter` and state target/start
   structure only for sealed integrations; reject sweep abort while a target is
   outstanding; carry idle invalidation into the next minted sweep; bound the
-  explicit drop-plus-abandon escape with the reviewed adapter's synchronous
+  flight-drop-plus-abandon escape with the reviewed adapter's synchronous
   cancel/disarm contract; and complete the constructor-privacy, move-only start
   error, and demand-rejection state evidence.
+- Complete the `kittens-render` exit-review Batch 8 repair: require a
+  crate-issued, private-constructor, non-`Clone`, lifetime-bound `StartPermit`
+  for `FlightStarter::start`; pin direct invocation, the removed raw-closure
+  path, permit construction/cloning, and both private `InFlight` construction
+  paths with compile-fail controls; re-run all four demand-settlement rejection
+  oracles after a successful-write throttle anchor and prove exact future
+  eligibility plus successor epoch; and narrow owning-sweep delivery to its
+  cooperative contract. Lost or wrong-owner-consumed settlements and
+  abandonment recover by dropping old values, `abandon_active` forced repaint,
+  and idle `invalidate` before replacement when stale work may overlap.
 
 ## 0.1.1 (kittens-tui) — 2026-08-08
 

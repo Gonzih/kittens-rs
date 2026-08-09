@@ -9,7 +9,9 @@ use std::task::{Context, Poll, Waker};
 use kittens_render::demand::{FrameDemand, Tick};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::SweepPlan;
-use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{
+    FlightStarter, OwnedTransfer, Recovered, StartPermit, TransferOutcome,
+};
 
 struct AliasTransfer {
     region: Region,
@@ -43,7 +45,11 @@ impl FlightStarter for AliasStart {
     type Transfer = AliasTransfer;
     type Error = Infallible;
 
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         Ok(AliasTransfer {
             region,
             buffer: self.sent,

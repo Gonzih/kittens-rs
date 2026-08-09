@@ -26,7 +26,9 @@
 //!   experiment they stay open so probes and models can implement them. A
 //!   dishonest experiment-phase starter can ignore its region, return a
 //!   prestarted transfer, or start and then reject; that is the documented
-//!   integration-honesty escape, not a structural guarantee.
+//!   integration-honesty escape, not a structural guarantee. Safe external
+//!   code still cannot invoke a starter directly: [`StartPermit`] is issued
+//!   only inside [`StripeTarget::start_flight`].
 
 use core::task::{Context, Poll};
 
@@ -62,24 +64,45 @@ pub trait OwnedTransfer: Sized {
     fn recover(self) -> Recovered<Self::Transport, Self::Buffer>;
 }
 
+/// Crate-issued authority for one [`FlightStarter::start`] dispatch.
+///
+/// The constructor and field are private, and this type deliberately does not
+/// implement `Clone`. Its lifetime is tied to one
+/// [`StripeTarget::start_flight`] call, so an experiment-phase starter cannot
+/// return the received permit in its lifetime-independent error type for later
+/// direct invocation. The type is public only because external integrations
+/// must name it when implementing [`FlightStarter`].
+pub struct StartPermit<'a> {
+    _key: &'a mut (),
+}
+
+impl<'a> StartPermit<'a> {
+    pub(crate) const fn new(key: &'a mut ()) -> Self {
+        Self { _key: key }
+    }
+}
+
 /// One operation-bound capability for starting a transfer at a crate-supplied
 /// region.
 ///
 /// This trait is deliberately open during the experiment and MUST be sealed
 /// to reviewed integrations on the same pre-freeze schedule as
-/// [`OwnedTransfer`]. Under those sealed integrations, consuming the starter
-/// and invoking it inside [`StripeTarget::start_flight`] makes target/start
-/// pairing structural. While it remains open, safe dishonest implementations
-/// can ignore `region`, return a transfer started for another region, or start
-/// and then return `Err`; those are explicit integration-honesty escapes in
-/// the same class as `TouchReader`'s untorn-snapshot obligation.
+/// [`OwnedTransfer`]. Requiring a crate-issued [`StartPermit`] makes direct
+/// safe invocation unavailable even while the trait remains open. Under sealed
+/// integrations, consuming the starter and invoking it inside
+/// [`StripeTarget::start_flight`] makes target/start pairing structural. While
+/// it remains open, safe dishonest implementations can ignore `region`, return
+/// a transfer started for another region, or start and then return `Err`; those
+/// are explicit integration-honesty escapes in the same class as
+/// `TouchReader`'s untorn-snapshot obligation.
 pub trait FlightStarter: Sized {
     /// The accepted, already-started transfer.
     type Transfer: OwnedTransfer;
     /// Rejection plus every resource captured by this operation.
     type Error;
 
-    /// Starts exactly `region`, consuming the operation and its resources.
+    /// Starts exactly `region` under one crate-issued dispatch permit,
+    /// consuming the operation, permit, and operation resources.
     ///
     /// `Err` is acceptance-atomic by contract: no live transfer exists and no
     /// later physical write can result. An operation that may still complete
@@ -89,7 +112,7 @@ pub trait FlightStarter: Sized {
     ///
     /// Returns `Self::Error` only when no transfer was accepted; it owns every
     /// resource captured by this operation so the caller can recover them.
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error>;
+    fn start(self, region: Region, permit: StartPermit<'_>) -> Result<Self::Transfer, Self::Error>;
 }
 
 /// How an in-flight transfer settled. Produced only by
@@ -126,7 +149,7 @@ pub struct Recovered<T, B> {
 /// finding 4): safe code can neither construct a settlement nor rewrite
 /// its outcome, so the coverage proof chain starts only at a real,
 /// settled transfer.
-#[must_use = "a settled transfer must be recovered and reconciled with its sweep"]
+#[must_use = "dropping this value loses resources and leaves its sweep outstanding"]
 #[derive(Debug)]
 pub struct Settled<T, B, S> {
     transport: T,
@@ -150,9 +173,15 @@ impl<T, B, S> Settled<T, B, S> {
     }
 
     /// Consumes the settlement and returns every resource together with the
-    /// mandatory, single-use witness that reconciles the transfer with its
+    /// single-use witness that the cooperative path delivers to the transfer's
     /// owning sweep. Completion yields `Written`; cancellation or failure
-    /// yields `Unwritten`, so recovery cannot silently skip sweep poisoning.
+    /// yields `Unwritten`. Rust prevents forging, relabeling, or duplicating
+    /// that witness, but cannot force its delivery: dropping it or consuming
+    /// it in a rejected wrong-sweep call is a published recovery escape. Drop
+    /// the outstanding owner and use
+    /// [`crate::demand::FrameDemand::abandon_active`] to retain demand and
+    /// force a full repaint; use idle `invalidate` before replacement if stale
+    /// physical work or external invalidation may overlap.
     pub fn into_parts(self) -> (T, B, S, StripeSettlement) {
         let settlement = match self.outcome {
             TransferOutcome::Completed => StripeSettlement::Written(StripeWritten {
@@ -204,10 +233,13 @@ impl StripeTarget {
     /// Starts the transfer from this target's exact region and, on success,
     /// moves the returned transfer, spare, and same target into flight.
     ///
-    /// This is the only public path into [`InFlight`]. Target/start pairing is
-    /// structural once [`FlightStarter`] is sealed to reviewed integrations.
-    /// During the experiment, a dishonest implementation can still ignore the
-    /// supplied region or return an independently started transfer.
+    /// This is the only public path into [`InFlight`]. It issues the fresh
+    /// [`StartPermit`] required by [`FlightStarter::start`], so safe callers
+    /// cannot dispatch a starter without consuming a target. Target/start
+    /// pairing is structural once [`FlightStarter`] is sealed to reviewed
+    /// integrations. During the experiment, a dishonest implementation can
+    /// still ignore the supplied region or return an independently started
+    /// transfer.
     ///
     /// # Errors
     ///
@@ -224,7 +256,9 @@ impl StripeTarget {
     where
         F: FlightStarter,
     {
-        match starter.start(self.region) {
+        let mut permit_key = ();
+        let permit = StartPermit::new(&mut permit_key);
+        match starter.start(self.region, permit) {
             Ok(transfer) => Ok(InFlight::from_started(transfer, spare, self)),
             Err(error) => Err(StartFlightError {
                 error,

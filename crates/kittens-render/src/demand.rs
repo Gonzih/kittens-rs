@@ -303,9 +303,10 @@ impl FrameDemand {
     }
 
     /// Conservative recovery when the active sweep's value was dropped
-    /// (early return, panic path, lost token): clears the active epoch,
-    /// retains demand, forces a full repaint, does not advance the
-    /// throttle. Idempotent when idle (finding 8).
+    /// (early return, panic path, dropped `Settled`/`StripeSettlement`, or a
+    /// settlement consumed by the wrong sweep): clears the active epoch,
+    /// retains demand, forces a full repaint, and does not advance the
+    /// throttle. Idempotent when idle (finding 8; exit-review round 5).
     ///
     /// **Caller obligation (round-2 finding on premature abandonment):**
     /// this machine can terminally reject the abandoned epoch's witnesses
@@ -315,8 +316,11 @@ impl FrameDemand {
     /// synchronously cancels/disarms on `Drop`, but safe Rust cannot force the
     /// caller to drop rather than retain or drive it. If that bounded stale
     /// write window can overlap the replacement, call
-    /// [`FrameDemand::invalidate`] while idle: the sticky latch marks that next
-    /// sweep non-clearing so another forced full repaint remains due.
+    /// [`FrameDemand::invalidate`] **while idle after abandonment and before
+    /// replacement**: the sticky latch marks that next sweep non-clearing so
+    /// another forced full repaint remains due. Settlement delivery to the
+    /// owning sweep is a cooperative contract; this state machine cannot make
+    /// Rust values linear.
     pub fn abandon_active(&mut self) {
         if self.sweeping.take().is_some() {
             self.invalidation = InvalidationState::Clear;

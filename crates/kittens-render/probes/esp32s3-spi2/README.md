@@ -18,8 +18,11 @@ The trait as landed uses `poll_done -> Poll<()>` with recovery as the sole
 outcome authority (the verdict's own correction 5, applied after it was
 written). The landed host API also removed public `InFlight::new`:
 `StripeTarget::start_flight` now invokes an operation-bound `FlightStarter`
-with the target's exact region, and `Settled::into_parts` returns the mandatory
-`StripeSettlement::{Written, Unwritten}` consumed by `Sweep::settle`. The
+with the target's exact region and a crate-issued `StartPermit<'_>`, and
+`Settled::into_parts` returns exactly one move-only
+`StripeSettlement::{Written, Unwritten}`. The cooperative caller path delivers
+that witness to its owning `Sweep::settle`; Rust cannot force delivery or
+prevent a consuming wrong-owner rejection. The
 verdict text is retained unedited as the historical record; any future exact
 Xtensa probe must implement the corrected signatures and lifecycle. Pairing
 is structural under integrations reviewed and sealed at freeze; while both
@@ -29,7 +32,11 @@ acceptance-atomic rejection remain explicit integration obligations:
 ```rust
 fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()>;      // settlement only
 fn recover(self) -> Recovered<Self::Transport, Self::Buffer>;   // sole outcome authority
-fn start(self, region: Region) -> Result<Self::Transfer, Self::Error>; // FlightStarter
+fn start(
+    self,
+    region: Region,
+    permit: StartPermit<'_>,
+) -> Result<Self::Transfer, Self::Error>; // FlightStarter
 ```
 
 Additionally, per finding 2, the blueprint's `cancel()` already stores the

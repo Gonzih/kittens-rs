@@ -18,15 +18,17 @@
 //! 1. `poll_done` returns `Poll<()>`; the outcome is stored internally and
 //!    reported only by `recover` (correction 5).
 //! 2. `StripeTarget::start_flight(spare, starter)` calls the operation-bound
-//!    `FlightStarter::start` implementation with that target's exact `Region`;
+//!    `FlightStarter::start` implementation with that target's exact `Region`
+//!    and a crate-issued `StartPermit<'_>`;
 //!    `StartFlightError` returns the starter error, spare, and unchanged target
 //!    when the integration reports that no transfer was accepted. This is
 //!    structural only after `FlightStarter` is sealed to reviewed adapters.
 //!    During the experiment, a dishonest safe implementation can still return
 //!    a prestarted transfer for another region or start and then return `Err`.
-//! 3. `Settled::into_parts` returns resources plus exactly one
-//!    `StripeSettlement`; `Sweep::settle` advances on `Written` and poisons
-//!    irreversibly on `Unwritten` (cancelled/failed).
+//! 3. `Settled::into_parts` returns resources plus exactly one move-only
+//!    `StripeSettlement`; cooperative delivery to the matching owner advances
+//!    on `Written` and poisons irreversibly on `Unwritten` (cancelled/failed).
+//!    Rust cannot force delivery or prevent a wrong-owner consuming rejection.
 //! 4. Register-then-recheck ordering is a trait-level contract with an
 //!    adversarial oracle; the slot discipline below satisfies it.
 //!
@@ -38,7 +40,11 @@
 //!     type Transfer = StartedTransfer;
 //!     type Error = StartError;
 //!
-//!     fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+//!     fn start(
+//!         self,
+//!         region: Region,
+//!         _permit: StartPermit<'_>,
+//!     ) -> Result<Self::Transfer, Self::Error> {
 //!         self.adapter.start_region(self.sent, region)
 //!     }
 //! }

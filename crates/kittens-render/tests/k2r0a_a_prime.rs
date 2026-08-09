@@ -13,7 +13,7 @@ use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::{StripeSettlement, StripeTarget, Sweep};
 use kittens_render::transfer::{
-    FlightStarter, InFlight, OwnedTransfer, Recovered, TransferOutcome,
+    FlightStarter, InFlight, OwnedTransfer, Recovered, StartPermit, TransferOutcome,
 };
 
 fn relinquish_owned<T>(_value: T) {}
@@ -186,7 +186,11 @@ impl FlightStarter for ModelStart {
     type Transfer = ModelTransfer;
     type Error = core::convert::Infallible;
 
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         Ok(start_on(&self.slot, self.transport, self.buffer, region))
     }
 }
@@ -201,7 +205,11 @@ impl FlightStarter for RejectStart {
     type Transfer = ModelTransfer;
     type Error = (ModelTransport, ModelBuffer);
 
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         assert_eq!(region, self.expected, "target supplies the starter region");
         Err((self.transport, self.buffer))
     }

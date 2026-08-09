@@ -4,10 +4,14 @@
 //! Exit-review restructuring through round 3 (round-1 findings 4, 5, 9;
 //! round-3 findings 1–3):
 //!
-//! - coverage consumes **every driven transfer settlement**, not caller claims:
-//!   [`crate::transfer::Settled::into_parts`] returns exactly one
-//!   [`StripeSettlement`]; written settlements advance, while failed or
-//!   cancelled settlements poison the epoch and leave only abort;
+//! - on the cooperative driven path, coverage consumes each matching transfer
+//!   settlement rather than caller claims:
+//!   [`crate::transfer::Settled::into_parts`] returns exactly one move-only
+//!   [`StripeSettlement`]; matching written settlements advance, while matching
+//!   failed or cancelled settlements poison the epoch and leave only abort.
+//!   Rust cannot force delivery: dropping or misapplying the settlement is a
+//!   published escape recovered through owner drop plus
+//!   [`crate::demand::FrameDemand::abandon_active`]'s forced full repaint;
 //! - the sweep value is crate-owned and binds the demand-fixed panel plan,
 //!   the scene snapshot (owned, exposed by shared reference only), the
 //!   repaint mode, and the provenance-branded epoch — there is no public
@@ -24,9 +28,11 @@ use crate::transfer::TransferOutcome;
 /// transfer must carry to witness coverage. Minted only by
 /// [`Sweep::next_target`]; non-`Clone`, private fields, and consumed by
 /// [`StripeTarget::start_flight`]. The target itself supplies the starter's
-/// region. Pairing is structural under sealed `FlightStarter` integrations;
-/// an open experiment-phase implementation can still be dishonest about the
-/// region (exit-review round-3 finding 1; round-4 finding 1).
+/// region and is the only path that receives a crate-issued `StartPermit`, so
+/// safe external code cannot invoke `FlightStarter::start` directly. Pairing
+/// is structural under sealed `FlightStarter` integrations; an open
+/// experiment-phase implementation can still be dishonest about the region
+/// (exit-review round-3 finding 1; rounds 4–5 finding 1).
 #[derive(Debug)]
 pub struct StripeTarget {
     pub(crate) demand_id: u64,
@@ -72,7 +78,7 @@ impl StripeWritten {
 /// Witness that one stripe settled without a complete write. It carries the
 /// real `Cancelled` or `Failed` recovery outcome plus private target identity;
 /// safe code can neither forge one nor relabel it as [`StripeWritten`].
-#[must_use = "an unreconciled unwritten stripe leaves its sweep outstanding"]
+#[must_use = "dropping or misapplying this witness leaves its owning sweep outstanding"]
 #[derive(Debug)]
 pub struct StripeUnwritten {
     pub(crate) demand_id: u64,
@@ -99,10 +105,12 @@ impl StripeUnwritten {
     }
 }
 
-/// The mandatory move-only reconciliation witness for one started transfer.
+/// The move-only reconciliation witness for one started transfer. The
+/// cooperative caller contract delivers it to its owning [`Sweep::settle`].
 /// Separate unforgeable inner types prevent safe code from rewriting a failed
-/// or cancelled recovery into written coverage.
-#[must_use = "every transfer settlement must be reconciled with its sweep"]
+/// or cancelled recovery into written coverage, but Rust cannot force the
+/// witness's destination or prevent ordinary drop.
+#[must_use = "dropping or misapplying this settlement leaves its owning sweep outstanding"]
 #[derive(Debug)]
 pub enum StripeSettlement {
     /// A real completed write; accepting it advances coverage once.
@@ -120,7 +128,7 @@ impl StripeSettlement {
         }
     }
 
-    /// The epoch this settlement must reconcile with.
+    /// The owning epoch encoded by this settlement.
     pub const fn epoch(&self) -> FrameEpoch {
         match self {
             Self::Written(written) => written.epoch,
@@ -247,7 +255,9 @@ pub struct AbortedSweep {
 
 /// A settlement did not match the sweep's one outstanding target. This also
 /// covers foreign provenance, settlement with no target outstanding, and any
-/// attempt after poison; rejection leaves all sweep state unchanged.
+/// attempt after poison; rejection leaves all receiving-sweep state unchanged.
+/// Because [`Sweep::settle`] consumes the supplied witness, a wrong-owner call
+/// still loses that witness and leaves its actual owner outstanding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct WrongStripe {
     /// The region the plan expected next, if any remained.
@@ -362,7 +372,10 @@ impl<S> Sweep<S> {
     ///
     /// [`WrongStripe`] for foreign demand/epoch/region identity, no target
     /// outstanding, a fully covered sweep, or an already-poisoned sweep. All
-    /// observable sweep state is unchanged.
+    /// observable receiving-sweep state is unchanged, but the by-value
+    /// settlement is consumed. If it belonged to another sweep, drop that
+    /// outstanding owner and use `FrameDemand::abandon_active` to retain demand
+    /// and force a full repaint.
     #[allow(clippy::needless_pass_by_value)] // witness consumption is the contract
     pub fn settle(&mut self, settlement: StripeSettlement) -> Result<TransferOutcome, WrongStripe> {
         let expected = self.next_region();
@@ -423,14 +436,17 @@ impl<S> Sweep<S> {
     /// Aborts a ready or poisoned sweep and returns the snapshot. An
     /// outstanding target or flight must settle first.
     ///
-    /// This restriction adds no liveness cost to an accepted flight:
+    /// On the cooperative delivery path this restriction adds no liveness cost
+    /// to an accepted flight:
     /// [`crate::transfer::InFlight::begin_drain`] requests cancellation,
     /// `poll_complete` settles by the [`crate::transfer::OwnedTransfer`]
-    /// contract, `Settled::into_parts` returns the mandatory witness, and
+    /// contract, `Settled::into_parts` returns the move-only witness, and
     /// [`Sweep::settle`] clears outstanding (poisoning on cancellation) before
-    /// retrying `abort`. A never-accepted target instead requires retry to
-    /// settlement or the explicit drop-plus-`FrameDemand::abandon_active`
-    /// recovery boundary.
+    /// retrying `abort`. A never-accepted target or a dropped/misapplied
+    /// settlement instead requires the explicit drop-plus-
+    /// `FrameDemand::abandon_active` recovery boundary. That recovery forces a
+    /// full repaint; use idle `invalidate` before replacement when stale
+    /// physical work or external invalidation may overlap.
     ///
     /// # Errors
     ///

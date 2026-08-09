@@ -1,10 +1,10 @@
 error[E0382]: use of moved value: `target`
-  --> tests/ui/reuse_stripe_target.rs:24:19
+  --> tests/ui/reuse_stripe_target.rs:28:19
    |
-21 |     target: StripeTarget,
+25 |     target: StripeTarget,
    |     ------ move occurs because `target` has type `StripeTarget`, which does not implement the `Copy` trait
-22 | ) {
-23 |     let _first = target.start_flight(first_spare, Accept(first));
+26 | ) {
+27 |     let _first = target.start_flight(first_spare, Accept(first));
    |                  ------ value moved here
-24 |     let _second = target.start_flight(second_spare, Accept(second));
+28 |     let _second = target.start_flight(second_spare, Accept(second));
    |                   ^^^^^^ value used here after move

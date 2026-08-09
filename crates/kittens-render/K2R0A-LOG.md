@@ -158,14 +158,16 @@ That is structural identity/start coupling; whether the admitted adapter
 really writes the supplied region remains the explicitly sealed-integration
 obligation.
 
-Settlement is now mandatory on resource recovery:
+Resource extraction now returns a companion settlement:
 `Settled::into_parts` returns transport, sent buffer, spare, and exactly one
 move-only `StripeSettlement`. `Written(StripeWritten)` is the sole coverage
 path; `Unwritten(StripeUnwritten)` preserves the real cancelled/failed outcome
-and irreversibly poisons its owning sweep. `Sweep::next_target(&mut self)`
-admits only one outstanding target per plan position, and `Sweep::settle`
-alone clears it. A poisoned sweep cannot mint or finish; only the
-always-available `abort` remains.
+and irreversibly poisons its owning sweep **when the matching owner accepts
+it**. `Sweep::next_target(&mut self)` admits only one outstanding target per
+plan position, and `Sweep::settle` alone clears it. Batch 8 later corrected the
+overbroad delivery claim: Rust cannot force the caller to deliver rather than
+drop or misapply that witness. A poisoned sweep cannot mint or finish; only
+abort remains.
 
 Abort is intentionally bookkeeping-terminal rather than physical revocation:
 an outstanding transfer may still write after a replacement starts. Accepting
@@ -183,8 +185,10 @@ building its zero-test harness, adds the missing foreign `finish_failed` and
 cross-demand stripe-settlement rejections, and asserts all observable state on
 every rejection path. `TRACE-MANIFEST.md` now records those oracles, the
 normative exact-SHA/no-allocation `write_region` gate, and an explicit adjacent
-negative control or an honest reason none exists for each row; sweep coverage
-is marked closed only against the repaired target/start/settlement lifecycle.
+negative control or an honest reason none exists for each row. The matching-
+settlement state machine is covered against the repaired lifecycle; batch 8
+separates that result from cooperative owning-sweep delivery, which remains a
+published documentation boundary.
 
 The probe's `adapter-blueprint.rs` is now labeled accurately: it is a
 non-compile-ready pseudocode delta over the retained `VERDICT.md`, not
@@ -205,9 +209,11 @@ prose states the experiment-phase boundary honestly instead of claiming
 nonexistence; (3) `abort` requires settlement — `Err(sweep)` while a
 target is outstanding — which has no liveness cost because cancel-and-
 drain settles by contract; drop-cancellation is bounded by the adapter `Drop`
-contract and remains the explicit non-returning drop-plus-abandon escape,
-while every started transfer on the driven, resource-returning path settles
-through its owning sweep; `invalidate`'s
+contract and remains one explicit non-returning drop-plus-abandon escape,
+while the cooperative driven path delivers each recovered settlement to its
+owning sweep. Round 5 later established that safe Rust cannot force that
+delivery; dropped or wrong-owner-consumed settlements are additional escapes.
+`invalidate`'s
 idle-time timing hole closes by making the pending invalidation stick to
 the next mint instead of being cleared by it. Batch 7 delegated.
 
@@ -224,14 +230,15 @@ rejection. That integration-honesty boundary is published beside the
 `TouchReader` untorn-snapshot obligation rather than claimed away.
 
 `Sweep::abort` now returns the sweep unchanged while its target is outstanding
-and succeeds only from ready or poisoned state. An accepted flight can always
-use the contractually settling path — begin drain, poll completion, recover the
-mandatory settlement, reconcile it through `Sweep::settle`, then abort — so
-the restriction adds no driven-path liveness cost. The remaining explicit
-escape is drop plus `FrameDemand::abandon_active`: reviewed adapters must
+and succeeds only from ready or poisoned state. On the cooperative path an
+accepted flight can begin drain, poll completion, recover the move-only
+settlement, deliver it through the matching `Sweep::settle`, then abort, so the
+restriction adds no liveness cost on that path. One explicit escape addressed
+by batch 7 is drop plus `FrameDemand::abandon_active`: reviewed adapters must
 synchronously cancel the physical operation and disarm completion registration
-when a flight is dropped, while safe Rust cannot force a dishonest caller to
-drop an old sweep rather than retain and drive it.
+when a flight is dropped, while safe Rust cannot force a caller to drop an old
+sweep rather than retain and drive it. Round 5 added dropped and wrong-owner-
+consumed settlements to the published escape set.
 
 Idle invalidation is now sticky. `invalidate()` records a pending latch that
 only the next successful `begin_sweep` transfers into that minted epoch's
@@ -239,8 +246,10 @@ discard state; rejected, throttled, or panicking begin attempts cannot erase
 it. Thus invalidation between abort/abandon and replacement cannot be lost.
 The remaining finding-5 evidence repairs cover the private `from_started`
 constructor, `StartFlightError`'s move-only boundary, and every observable
-epoch/throttle state after demand-settlement rejection. With those oracles
-landed, the sweep-coverage manifest row is corrected.
+epoch/throttle state after demand-settlement rejection. Those repairs corrected
+the immediate rejection-state evidence; round 5 found that the manifest's
+owning-delivery completeness claim and unanchored future-throttle evidence were
+still overbroad, and batch 8 corrects both.
 
 Batch 7 verification passed: 59 runtime oracles plus 25 compile-fail and 7
 compile-pass UI controls; trybuild first ran with `TRYBUILD=overwrite`, every
@@ -269,3 +278,54 @@ raw-closure compile-fail controls; InFlight struct-literal privacy
 fixture; rejection oracles re-run against an established throttle anchor
 with exact future-eligibility and successor-epoch assertions; claims
 narrowed in SPEC/manifest/log/CHANGELOG.
+
+## Exit-review batch 8 landed and verified (2026-08-08)
+
+SPEC revision 6 is implemented in the host surface. `FlightStarter::start`
+now requires a crate-issued `StartPermit<'_>` as well as the target region.
+The permit has a private constructor, is non-`Clone`, and borrows a dispatch-
+local key; safe external code cannot mint it, invoke a starter without it, or
+return the received permit in the starter's fixed associated error type. Only
+`StripeTarget::start_flight` issues one. This closes direct safe dispatch while
+leaving the separately published open-integration honesty boundary intact: the
+permit cannot prove that an implementation uses the supplied region or reports
+rejection atomically.
+
+The UI suite now pins direct one-argument starter invocation, private permit
+construction, permit cloning, lifetime escape through `Error`, the removed raw
+closure start path, both the private `InFlight::from_started` constructor and
+the four-field `InFlight { ... }` literal, and the pre-existing move-only proof
+boundaries. All example, model, downstream fixture, and pseudocode-blueprint
+implementations name the permit parameter.
+
+All four external `FrameDemand` settlement-rejection oracles now begin after a
+real successful epoch-0 write installs a non-`None` throttle anchor. The two
+foreign tests preserve equal epoch numbers across demands; the stale/abandoned
+tests advance through their replacement epochs. After each rejection, the
+tests compare immediate state and then prove the exact original eligibility
+instant plus successor epoch (2 for foreign, 3 for stale/abandoned), so a
+conditional mutation of an existing throttle anchor no longer escapes.
+
+The owning-sweep claim is deliberately narrower. `Settled::into_parts` returns
+exactly one unforgeable, move-only, non-relabelable settlement, and matching
+`Sweep::settle` acceptance is the sole progress/poison path, but delivery is a
+cooperative caller contract. Ordinary drop or a consuming wrong-owner
+rejection leaves the owner outstanding. Recovery is to drop all old values,
+call `FrameDemand::abandon_active` (retaining demand and forcing full repaint),
+then call idle `invalidate` before replacement when stale physical work or
+external invalidation may overlap. `TRACE-MANIFEST.md` reports that delivery
+row as documentation rather than complete static enforcement; the SPEC,
+README, source docs, example, probe prose, and CHANGELOG publish the same
+boundary.
+
+Batch 8 verification passed: 59 runtime oracles, 31 compile-fail controls, and
+7 compile-pass controls. Trybuild ran first with `TRYBUILD=overwrite`; every
+new snapshot and the line-only change to the moved-target snapshot were read,
+then the suite passed clean. Package tests and the full workspace/all-feature
+test suite passed; `cargo fmt --all --check`, workspace/all-target/all-feature
+clippy with warnings denied, and workspace rustdoc with warnings denied were
+clean. The canonical host example completed its written frame and settled
+shutdown. Both `kittens-render` and the downstream
+`kittens-render-no-std-fixture` built for `thumbv7em-none-eabi --release`. No
+Xtensa, board-HIL, kernel-admission, capability-sealing, or bilateral-seam gate
+is claimed by these host/ARM results.

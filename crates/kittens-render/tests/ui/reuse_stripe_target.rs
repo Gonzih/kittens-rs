@@ -1,6 +1,6 @@
 use kittens_render::geometry::Region;
 use kittens_render::sweep::StripeTarget;
-use kittens_render::transfer::{FlightStarter, OwnedTransfer};
+use kittens_render::transfer::{FlightStarter, OwnedTransfer, StartPermit};
 
 struct Accept<X>(X);
 
@@ -8,7 +8,11 @@ impl<X: OwnedTransfer> FlightStarter for Accept<X> {
     type Transfer = X;
     type Error = ();
 
-    fn start(self, _region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        _region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         Ok(self.0)
     }
 }

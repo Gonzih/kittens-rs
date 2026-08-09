@@ -1,0 +1,13 @@
+error[E0451]: fields `transfer`, `spare`, `draining` and `target` of struct `InFlight` are private
+ --> tests/ui/in_flight_struct_literal_is_private.rs:6:9
+  |
+5 |     let _flight = InFlight {
+  |                   -------- in this type
+6 |         transfer: Some(transfer),
+  |         ^^^^^^^^ private field
+7 |         spare: Some(spare),
+  |         ^^^^^ private field
+8 |         draining: false,
+  |         ^^^^^^^^ private field
+9 |         target: Some(target),
+  |         ^^^^^^ private field

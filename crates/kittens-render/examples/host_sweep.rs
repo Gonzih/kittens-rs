@@ -5,15 +5,19 @@
 //! the same ownership and proof boundaries as a hardware integration: the
 //! transfer owns the transport and sent buffer,
 //! [`InFlight`](kittens_render::transfer::InFlight) owns the spare
-//! and an unforgeable target, and every settlement must reconcile with the
-//! sweep (completion advances; failure or cancellation poisons).
+//! and an unforgeable target. This example follows the cooperative settlement
+//! contract by delivering each witness to its owning sweep (completion
+//! advances; failure or cancellation poisons). Rust cannot force that
+//! delivery; the crate documents loss and wrong-owner delivery as escapes.
 
 use std::task::{Context, Poll, Waker};
 
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::{StripeTarget, Sweep, SweepPlan};
-use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{
+    FlightStarter, OwnedTransfer, Recovered, StartPermit, TransferOutcome,
+};
 
 const STRIPE_HEIGHT: u16 = 112;
 
@@ -144,7 +148,11 @@ impl FlightStarter for HostStart {
 
     /// Consuming this one-shot operation lets the target supply the only
     /// region that can reach the concrete transport start boundary.
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         Ok(self.transport.start(self.buffer, region))
     }
 }
@@ -176,8 +184,8 @@ impl HostResources {
 
 /// One stripe follows the complete proof chain: the sweep mints its target,
 /// consuming the target invokes the starter with its exact region, settlement
-/// returns one mandatory witness, and only reconciling that witness may
-/// advance the sweep plan.
+/// returns one move-only witness, and only its accepted reconciliation may
+/// advance the sweep plan. This function performs the caller-owned delivery.
 fn write_next_stripe(
     sweep: &mut Sweep<FrameSnapshot>,
     resources: HostResources,
@@ -287,9 +295,9 @@ fn finish_written_frame(
     snapshot
 }
 
-/// An accepted flight cannot be bypassed during shutdown: drain it, recover
-/// every resource, reconcile its cancelled settlement (which poisons the
-/// sweep), and only then abort and settle the active demand as failed.
+/// The cooperative shutdown path drains an accepted flight, recovers every
+/// resource, delivers its cancelled settlement to the owning sweep (poisoning
+/// it), and only then aborts and settles the active demand as failed.
 fn drain_and_abort_frame(
     demand: &mut FrameDemand,
     mut sweep: Sweep<FrameSnapshot>,

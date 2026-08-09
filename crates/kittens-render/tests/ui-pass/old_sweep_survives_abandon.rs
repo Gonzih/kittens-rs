@@ -13,7 +13,9 @@ use std::task::{Context, Poll};
 use kittens_render::demand::{FrameDemand, Tick};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::SweepPlan;
-use kittens_render::transfer::{FlightStarter, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{
+    FlightStarter, OwnedTransfer, Recovered, StartPermit, TransferOutcome,
+};
 
 struct DropCancelledTransfer {
     region: Region,
@@ -60,7 +62,11 @@ impl FlightStarter for LateStart {
     type Transfer = DropCancelledTransfer;
     type Error = Infallible;
 
-    fn start(self, region: Region) -> Result<Self::Transfer, Self::Error> {
+    fn start(
+        self,
+        region: Region,
+        _permit: StartPermit<'_>,
+    ) -> Result<Self::Transfer, Self::Error> {
         Ok(DropCancelledTransfer {
             region,
             cancelled: self.cancelled,
