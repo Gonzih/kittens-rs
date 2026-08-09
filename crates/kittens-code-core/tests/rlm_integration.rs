@@ -148,6 +148,8 @@ fn recall_ask_runs_as_a_child_effect_and_returns_its_answer() {
             terminal: EffectTerminal::Ask(vec![AskResult {
                 index: 0,
                 answer: String::from("digest answer"),
+                wall_clock_ms: 0,
+                tokens: 0,
             }]),
         })
         .actions;
@@ -216,6 +218,8 @@ fn recall_ask_each_waits_for_already_started_child_effects() {
             terminal: EffectTerminal::Ask(vec![AskResult {
                 index: second_requests[0].index,
                 answer: String::from("B"),
+                wall_clock_ms: 0,
+                tokens: 0,
             }]),
         })
         .actions;
@@ -231,6 +235,8 @@ fn recall_ask_each_waits_for_already_started_child_effects() {
             terminal: EffectTerminal::Ask(vec![AskResult {
                 index: first_requests[0].index,
                 answer: String::from("A"),
+                wall_clock_ms: 0,
+                tokens: 0,
             }]),
         })
         .actions;

@@ -13,6 +13,15 @@ fn rec(seq: u64, text: &str) -> PageRecord {
     }
 }
 
+fn ask_result(index: u32, answer: &str) -> AskResult {
+    AskResult {
+        index,
+        answer: String::from(answer),
+        wall_clock_ms: 0,
+        tokens: 0,
+    }
+}
+
 fn instr_line(slot: u32, instr: Instr) -> Binding {
     Binding {
         slot,
@@ -78,7 +87,7 @@ fn grep_walks_multiple_pages_then_binds_matches() {
 }
 
 #[test]
-fn ask_each_rejoins_out_of_order_results() {
+fn ask_each_windows_parallel_subcalls_and_rejoins_out_of_order() {
     // Line 1: partition whole into byte chunks of 1 record.
     // Line 2: ask-each over %1. Line 3: final %2.
     let query = vec![
@@ -105,37 +114,76 @@ fn ask_each_rejoins_out_of_order_results() {
             },
         ),
     ];
-    let mut exec = Executor::new(query, Budgets::default());
+    let mut budgets = Budgets::default();
+    budgets.parallel_subcalls = 2;
+    let mut exec = Executor::new(query, budgets);
 
-    // Partition: one page with three records, no cursor -> 3 chunks.
+    // Partition: one page with five records, no cursor -> 5 chunks.
     assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
     let outcome = exec.provide_pages(Page {
-        records: vec![rec(1, "a"), rec(2, "b"), rec(3, "c")],
+        records: vec![
+            rec(1, "a"),
+            rec(2, "b"),
+            rec(3, "c"),
+            rec(4, "d"),
+            rec(5, "e"),
+        ],
         next_cursor: None,
     });
     assert!(matches!(outcome, StepOutcome::Line { slot: 1, .. }));
 
-    // ask-each: three requests.
+    // Only the initial width-two window is dispatched.
     let StepOutcome::NeedAsk(requests) = exec.step() else {
         panic!("expected ask batch");
     };
-    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    let mut outstanding = vec![0, 1];
+    assert!(outstanding.len() <= 2);
 
-    // Provide results out of order (index 2, then 0, then 1).
-    let mid = exec.provide_ask(vec![AskResult {
-        index: 2,
-        answer: String::from("C"),
-    }]);
+    // Complete index 1 before 0. Each completion releases one permit and
+    // dispatches exactly one queued chunk, keeping width at two.
+    let mid = exec.provide_ask(vec![ask_result(1, "B")]);
+    outstanding.retain(|index| *index != 1);
+    let StepOutcome::NeedAsk(requests) = mid else {
+        panic!("completion should open the next window slot");
+    };
+    assert_eq!(requests[0].index, 2);
+    outstanding.push(2);
+    assert!(outstanding.len() <= 2);
+
+    let mid = exec.provide_ask(vec![ask_result(0, "A")]);
+    outstanding.retain(|index| *index != 0);
+    let StepOutcome::NeedAsk(requests) = mid else {
+        panic!("completion should dispatch partition 3");
+    };
+    assert_eq!(requests[0].index, 3);
+    outstanding.push(3);
+    assert!(outstanding.len() <= 2);
+
+    let mid = exec.provide_ask(vec![ask_result(3, "D")]);
+    outstanding.retain(|index| *index != 3);
+    let StepOutcome::NeedAsk(requests) = mid else {
+        panic!("completion should dispatch the final queued partition");
+    };
+    assert_eq!(requests[0].index, 4);
+    outstanding.push(4);
+    assert!(outstanding.len() <= 2);
+
+    let mid = exec.provide_ask(vec![ask_result(4, "E")]);
+    outstanding.retain(|index| *index != 4);
     assert!(matches!(mid, StepOutcome::AwaitingMore));
-    let mid = exec.provide_ask(vec![AskResult {
-        index: 0,
-        answer: String::from("A"),
-    }]);
-    assert!(matches!(mid, StepOutcome::AwaitingMore));
-    let done = exec.provide_ask(vec![AskResult {
-        index: 1,
-        answer: String::from("B"),
-    }]);
+    assert!(outstanding.len() <= 2);
+
+    // Partition 2 is deliberately last despite being dispatched earlier.
+    let done = exec.provide_ask(vec![ask_result(2, "C")]);
+    outstanding.retain(|index| *index != 2);
+    assert!(outstanding.is_empty());
     let StepOutcome::Line { slot: 2, bound } = done else {
         panic!("ask-each should bind once all results arrive");
     };
@@ -143,7 +191,7 @@ fn ask_each_rejoins_out_of_order_results() {
         panic!("ask-each binds a digest list");
     };
     // Rejoined in partition-index order despite out-of-order arrival.
-    assert_eq!(list, vec!["A", "B", "C"]);
+    assert_eq!(list, vec!["A", "B", "C", "D", "E"]);
 }
 
 #[test]
@@ -219,6 +267,8 @@ fn ask_digest_is_capped() {
     let StepOutcome::Line { bound, .. } = exec.provide_ask(vec![AskResult {
         index: 0,
         answer: String::from("this is far too long"),
+        wall_clock_ms: 0,
+        tokens: 0,
     }]) else {
         panic!("ask binds a digest");
     };
@@ -226,6 +276,124 @@ fn ask_digest_is_capped() {
         panic!("ask binds a digest");
     };
     assert_eq!(d.len(), 4, "digest capped to the ask_digest_bytes budget");
+}
+
+#[test]
+fn continuation_memory_exhaustion_binds_inline_error() {
+    let mut budgets = Budgets::default();
+    budgets.continuation_memory_bytes = 3;
+    let query = vec![
+        instr_line(1, Instr::Slice { sel: Sel::Whole }),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Literal(String::from("continued")),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let StepOutcome::Line { slot: 1, bound } = exec.provide_pages(Page {
+        records: vec![rec(1, "four")],
+        next_cursor: None,
+    }) else {
+        panic!("the oversized retained record should bind an error");
+    };
+    assert!(matches!(
+        bound,
+        Bound::Error(kittens_code_protocol::error::VerbErrorCause::Budget)
+    ));
+    let StepOutcome::Done { answer } = exec.step() else {
+        panic!("the script should continue after an inline memory error");
+    };
+    assert_eq!(answer, "continued");
+}
+
+#[test]
+fn ask_wall_clock_exhaustion_binds_inline_error() {
+    let mut budgets = Budgets::default();
+    budgets.ask_wall_clock_ms = 9;
+    let query = vec![
+        instr_line(
+            1,
+            Instr::Ask {
+                sel: Sel::Whole,
+                question: String::from("q"),
+                sample_k: None,
+            },
+        ),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Literal(String::from("continued")),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(exec.step(), StepOutcome::NeedAsk(_)));
+    let StepOutcome::Line { bound, .. } = exec.provide_ask(vec![AskResult {
+        index: 0,
+        answer: String::from("answer"),
+        wall_clock_ms: 10,
+        tokens: 0,
+    }]) else {
+        panic!("wall-clock exhaustion should bind an inline error");
+    };
+    assert!(matches!(
+        bound,
+        Bound::Error(kittens_code_protocol::error::VerbErrorCause::Budget)
+    ));
+}
+
+#[test]
+fn ask_token_exhaustion_binds_inline_error() {
+    let mut budgets = Budgets::default();
+    budgets.ask_tokens = 4;
+    let query = vec![instr_line(
+        1,
+        Instr::Ask {
+            sel: Sel::Whole,
+            question: String::from("q"),
+            sample_k: None,
+        },
+    )];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(exec.step(), StepOutcome::NeedAsk(_)));
+    let StepOutcome::Line { bound, .. } = exec.provide_ask(vec![AskResult {
+        index: 0,
+        answer: String::from("answer"),
+        wall_clock_ms: 0,
+        tokens: 5,
+    }]) else {
+        panic!("token exhaustion should bind an inline error");
+    };
+    assert!(matches!(
+        bound,
+        Bound::Error(kittens_code_protocol::error::VerbErrorCause::Budget)
+    ));
+}
+
+#[test]
+fn recursion_depth_guard_rejects_the_current_query_depth() {
+    let mut budgets = Budgets::default();
+    budgets.recursion_depth = 0;
+    let query = vec![instr_line(
+        1,
+        Instr::Final {
+            value: FinalValue::Literal(String::from("unreachable")),
+        },
+    )];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(
+        exec.step(),
+        StepOutcome::Failed {
+            cause: kittens_code_protocol::error::VerbErrorCause::Budget
+        }
+    ));
 }
 
 #[test]
