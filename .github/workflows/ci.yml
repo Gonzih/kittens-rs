@@ -22,6 +22,7 @@ jobs:
       - run: cargo test -p kittens --doc --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc -p kittens --all-features --no-deps
       - run: cargo build -p kittens-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release --bins
+      - run: cargo build -p kittens-render --target thumbv7em-none-eabi --release
 
   rust-1-85:
     runs-on: ubuntu-latest

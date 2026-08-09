@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add `kittens-render` (unpublished K2R-0 host slice): the embedded
+  rendering/interaction profile anchored on the Waveshare ESP32-S3 1.8"
+  AMOLED V1 — spec-first with two external review rounds adopted in full;
+  witness-driven transfer→sweep→demand composition (coverage cannot be
+  claimed, only constructed from Completed settlements); provenance-branded
+  demand settlement; generation-latched touch protocol; K2R-0A mechanism
+  verdict (SPI2 TransferDone ISR completion in an Unpin carrier) with the
+  compile-ready blueprint retained under probes/.
+
 ## 0.1.1 (kittens-tui) — 2026-08-08
 
 - Add `kittens-tui`: the terminal-orchestration profile (K1-TUI slice) —

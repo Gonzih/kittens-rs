@@ -1,9 +1,9 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 2, 2026-08-08. Revision 1 was reviewed by the same external reviewer as the research (Codex `gpt-5.6-sol`, ultra effort): 12 blocking, 5 important, 1 minor finding; verdict — *K2R-0A may start only as a non-freezing feasibility experiment; K2R-0 must not start yet.* This revision adopts that verdict and all findings (disposition log in section 12). The controlling consequence: **section 6 is a provisional candidate surface, not a normative API.** K2R-0A selects and demonstrates the real shapes; this spec is then amended before K2R-0 freezes anything.
+- Status: revision 3, 2026-08-08 (section 6 amended into the normative K2R-0 surface per the K2R-0A outcome and exit-review round 1; revision 2 recorded the review adoption). Revision 1 was reviewed by the same external reviewer as the research (Codex `gpt-5.6-sol`, ultra effort): 12 blocking, 5 important, 1 minor finding; verdict — *K2R-0A may start only as a non-freezing feasibility experiment; K2R-0 must not start yet.* Revision 2 adopted that verdict and all findings (disposition log in section 12) and made section 6 provisional; the K2R-0A experiment then selected and demonstrated the shapes, and exit-review round 1's restructuring landed — so revision 3 amends section 6 into the normative surface, exactly the sequence the verdict required.
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
-- Normativity: **MUST/SHOULD** language binds only sections 5, 7, 8, 9, 10, and 11 (the experiment design, protocols-as-rules, and gates). Section 6 is explicitly provisional throughout.
+- Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
 
 ## 1. One-sentence definition
 
@@ -38,15 +38,82 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
 6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
 
-## 6. Provisional candidate surface (NOT normative — K2R-0A input)
+## 6. Normative K2R-0 surface (amended per K2R-0A outcome and exit-review round 1)
 
-Everything in this section is a *candidate* the K2R-0A experiment is free to reject (finding 1). Shown to make the experiment concrete, retained from revision 1 with the review's corrections noted:
+Revision 3 amendment: the K2R-0A experiment selected its mechanism (C
+completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
+restructured the composition; this section is now **normative** for the
+K2R-0 host slice, superseding revision 2's provisional candidates. The one
+still-open shape is the kernel-admitted source carrier (K2R-0A open item
+3): how these values appear as `reactor!` arms awaits the kernel admission
+slice and is explicitly not specified here.
 
-- `Region` (global panel coordinates), `FrameEpoch` (monotonic, minted by demand policy only).
-- `Returned<T, B>` / `Failed<T, B, E>`; `BlockingRegionWrite`/`OwningRegionWrite` split — **with the caveats**: `type Completion` cannot name the safe ESP-HAL adapter on stable Rust without allocation (`impl Trait` in associated types is unstable; boxing violates no-alloc; hand-rolled owner-plus-borrower is the rejected self-reference), so the owning capability's final shape is exactly what K2R-0A must demonstrate — RPITIT, an upstream named transfer state, or another compiled shape (finding 2). `BlockingRegionWrite` does not freeze unless a no-allocation adapter compiles against an exact fork/upstream `write_region` SHA — stock `sh8601-rs` cannot honor it (finding 7).
-- Stripe typestates (`PreparedStripe`/`StripeInFlight`) — incomplete as drafted (no constructors, `StartFailed` undefined, region dropped, no spare access or pin projection); the K2R-0A amendment MUST deliver the complete outcome-specific transition API or replace the shape (finding 6).
-- `FrameDemand` — revised candidate per finding 10 and 18: an unforgeable **active-sweep token** replaces raw epoch callbacks; one `finish(token, now, outcome)` transition; `begin_sweep(now)` is the sole acknowledgment of elapsed eligibility (`on_eligible` removed); a complete state table (request-during-sweep, stale/duplicate outcomes, initial and clearing rules for the full-repaint obligation) is a K2R-0 deliverable.
-- A crate-owned `Sweep<S>` value binding the immutable snapshot, target geometry, and repaint mode, plus a crate-owned monotonic tick representation, replacing revision 1's hand-waved `DrawTarget` and host/target `Instant` split (finding 16).
+### 6.1 Geometry and identity
+
+`Region` — global panel coordinates, never stripe-local. `FrameEpoch` —
+monotonic scene-snapshot identity, minted only by `FrameDemand`; no public
+constructor.
+
+### 6.2 Transfer boundary
+
+`OwnedTransfer` (sealed-before-freeze; open during the experiment so probes
+and models implement it): `poll_done(&mut self, cx) -> Poll<()>` —
+**register-then-recheck mandatory** (the check-then-register order has a
+lost-wake race; the suite carries a deliberately broken negative control);
+reports settlement only. `cancel(&mut self)` — idempotent; classifies and
+stores the settlement at its completion-observation **linearization point**
+(a racing physical completion after that point is conservatively
+`Cancelled`) and MUST wake a registered waker. `recover(self) ->
+Recovered<T, B>` — the **sole outcome authority**.
+
+`InFlight<X, S>` — `Unpin`, `&mut`-polled; owns the transfer, the
+independently writable spare, and the epoch/region identity;
+`begin_drain`/`poll_complete` is the only resource-returning path;
+ordinary drop is the documented non-returning boundary (but integrations
+MUST disarm their completion slot on drop — no stale registrations).
+
+`Settled<T, B, S>` — transport, sent buffer, spare, outcome, epoch,
+region. `Settled::stripe_written()` is the **only mint** for a
+`StripeWritten` witness and exists only for `Completed` settlements:
+marking a cancelled, failed, or never-started stripe is unrepresentable.
+
+### 6.3 Sweep
+
+`SweepPlan` — validated full-panel stripe plan (empty/zero/overflow
+rejected), fixed at `FrameDemand` construction; sweeps cannot substitute
+another. `Sweep<S>` — crate-owned, minted only by `begin_sweep`; owns the
+immutable snapshot (shared-reference access only), the plan, the repaint
+mode, and the provenance-branded epoch; `mark_written(StripeWritten)`
+enforces epoch match and plan order; `finish(self)` yields
+`(SweepWritten, S)` only at full coverage; `abort(self)` yields
+`(AbortedSweep, S)` at any point. Coverage is a construction, never a
+caller claim.
+
+### 6.4 Demand
+
+`FrameDemand` — owns the plan and a crate-owned monotonic `Tick` throttle;
+`request` (the only kittens-tui-shared vocabulary), `begin_sweep(now,
+snapshot)` (sole eligibility acknowledgment; one sweep in flight),
+`eligible_at`, `finish_written(SweepWritten, now) ->
+Result<WrittenDisposition, ForeignSweep>`, `finish_failed(AbortedSweep,
+now)`, `abandon_active` (dropped-sweep recovery), `invalidate` (bool
+latch; a mid-sweep invalidation makes that sweep's settlement
+`DiscardedByInvalidation`: obligations retained, throttle unchanged).
+Foreign/stale witnesses are rejected **without mutation, in release
+builds**. Milestone vocabulary is written-only: `finish_written`,
+`last_written`, `SweepWritten` — nothing claims physical presentation.
+
+### 6.5 Touch
+
+Per findings 10–13 (implementation authored by the reviewing engineer):
+the ISR-side producer bumps the generation **then** wakes on a separate
+pending-latch `swap` — wake dedup without the idle-check TOCTOU; the
+service side clears with clear-then-recheck/re-latch; a persistent retry
+latch stays authoritative across INT-only activations, read failure,
+budget exhaustion, and counter wrap; per-activation budget is
+`NonZeroU8`; semantics are latest-state-with-coalescing over complete
+untorn snapshots, with edges reconstructed between surfaced reports and
+**no edge for an unchanged contact**.
 
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
