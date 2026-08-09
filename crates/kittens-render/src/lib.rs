@@ -15,4 +15,5 @@
 pub mod demand;
 pub mod geometry;
 pub mod sweep;
+pub mod touch;
 pub mod transfer;
