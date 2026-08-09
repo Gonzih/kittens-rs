@@ -87,3 +87,29 @@ cannot erase arrivals (tradeoff: at most one redundant wake). Batch 3
 (author: session agent): SPEC revision 3 amendment, trace manifest,
 profile README checklist, changelog, crate no_std CI gate. All gates
 green: 41 oracles, fmt, clippy zero, thumbv7em-none-eabi release build.
+
+## Exit review round 2 (2026-08-08)
+
+Full text: `reviews/2026-08-08-exit-review-2-codex.md`. Verdict: **FAIL**.
+Findings 1, 2, 7–13 verified ADDRESSED with evidence; 3–6, 14, 15 remain,
+sharpened, plus six new findings from the fixes themselves. Disposition:
+**all accepted.** Batch 4 (core, author: session agent): privatize the
+proof chain — `Settled` fields private with a consuming single-use
+witness mint; `StripeTarget` minted by the `Sweep` binds demand/epoch/
+region into `InFlight::new` so targets cannot be claimed independently;
+admitted panel geometry (anchor-board constant; arbitrary panels become a
+named escape); demand IDs to `AtomicU64` and documented epoch-exhaustion
+stance; `Tick` regression clamping plus a documented trusted-time
+boundary; `abandon_active` documented as witness-terminal only (live
+transfers still physically write — caller drains first) with a rejection
+oracle; SPEC §5.2/§6.2 sealing language reconciled; stale stage prose in
+lib.rs/geometry/Cargo.toml fixed; probes README/CHANGELOG stop claiming a
+nonexistent compile-ready corrected probe (corrected blueprint file
+added). Batch 5 (delegated to the reviewing engineer): canonical runnable
+example, trybuild ui/ui-pass controls (forged-construction compile-fails
+become real once fields are private), the lost request-during-sweep
+oracle, slow-successful-sweep throttle, duplicate/replay and
+state-unchanged rejection oracles, external no-std consumer link fixture,
+manifest rows for board-HIL and sealing plus per-row negative-control
+naming, `#[must_use]` advisories, prose/count repairs. Round-3 review
+follows.
