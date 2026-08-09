@@ -1,19 +1,44 @@
-//! K2R-0A trace oracles over the host model (SPEC section 7 pass criteria,
-//! reviewer corrections applied).
-//!
-//! The model mirrors the verdict's SPI2 mechanism: an externally driven
-//! completion ("interrupt"), a waker slot registered under the same
-//! exclusion the ISR uses, register-then-recheck in `poll_done`, and a
-//! cancel that wakes. A deliberately broken check-then-register model at
-//! the bottom proves the adversarial oracle catches the lost-wake race.
+//! K2R-0A transfer-boundary trace oracles (exit-review round 1 model:
+//! one shared, reusable done-slot — the analogue of the single static SPI2
+//! ISR slot — with explicit active/disarm state, cancel-settlement
+//! linearization, and drop disarming).
 
 #![allow(missing_docs)]
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
+use kittens_render::geometry::{FrameEpoch, Region};
 use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
+
+fn epoch(n: u64) -> FrameEpoch {
+    // FrameEpoch has no public constructor by design; tests obtain real
+    // epochs through FrameDemand in the sweep suite. Here the transfer
+    // boundary is tested in isolation with a demand-minted epoch.
+    let plan = kittens_render::sweep::SweepPlan::new(REGION_FULL, 4).expect("plan");
+    let mut demand = kittens_render::demand::FrameDemand::new(0, plan);
+    let mut minted = None;
+    for _ in 0..=n {
+        demand.request();
+        let sweep = demand
+            .begin_sweep(kittens_render::demand::Tick(0), ())
+            .expect("mint");
+        minted = Some(sweep.epoch());
+        let (aborted, ()) = sweep.abort();
+        demand
+            .finish_failed(aborted, kittens_render::demand::Tick(0))
+            .expect("active");
+    }
+    minted.expect("minted at least one epoch")
+}
+
+const REGION_FULL: Region = Region {
+    x: 0,
+    y: 0,
+    width: 8,
+    height: 4,
+};
 
 struct CountingWaker {
     wakes: AtomicUsize,
@@ -36,65 +61,86 @@ fn counting_waker() -> (Arc<CountingWaker>, Waker) {
     (inner, waker)
 }
 
-/// Model "hardware": completion driven externally like a transfer-done
-/// interrupt. `complete_on_register` deterministically reproduces the race
-/// where completion lands between waker registration and the recheck.
+/// The single shared done-slot: the model analogue of the adapter's one
+/// static ISR slot. Reused across sequential transfers; `active` mirrors
+/// the arm/disarm discipline of the verdict's SPI2 design.
 #[derive(Default)]
-struct ModelHw {
-    done: AtomicBool,
-    fail: AtomicBool,
-    cancelled: AtomicBool,
-    complete_on_register: AtomicBool,
-    waker: Mutex<Option<Waker>>,
+struct SharedSlot {
+    state: Mutex<SlotState>,
 }
 
-impl ModelHw {
+#[derive(Default)]
+struct SlotState {
+    active: bool,
+    done: bool,
+    fail: bool,
+    complete_on_register: bool,
+    waker: Option<Waker>,
+}
+
+impl SharedSlot {
+    /// The model "interrupt": wakes only an active registration.
     fn complete(&self) {
-        self.done.store(true, Ordering::SeqCst);
-        if let Some(waker) = self.waker.lock().expect("waker lock").take() {
+        let waker = {
+            let mut slot = self.state.lock().expect("slot lock");
+            slot.done = true;
+            if slot.active { slot.waker.take() } else { None }
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
+
     fn fail(&self) {
-        self.fail.store(true, Ordering::SeqCst);
+        self.state.lock().expect("slot lock").fail = true;
         self.complete();
+    }
+
+    fn is_disarmed(&self) -> bool {
+        let slot = self.state.lock().expect("slot lock");
+        !slot.active && slot.waker.is_none()
     }
 }
 
 struct ModelTransport(&'static str);
-struct ModelBuffer(Vec<u8>);
+struct ModelBuffer(&'static str);
 struct ModelSpare(&'static str);
 
+/// One model transfer over the shared slot. Arms the slot on start;
+/// disarms on recovery *and* on drop (the reviewed adapter's Drop
+/// obligation, finding 1).
 struct ModelTransfer {
-    hw: Arc<ModelHw>,
+    slot: Arc<SharedSlot>,
     transport: Option<ModelTransport>,
     buffer: Option<ModelBuffer>,
     settled: Option<TransferOutcome>,
 }
 
-fn start_model_transfer(
+fn start_on(
+    slot: &Arc<SharedSlot>,
     transport: ModelTransport,
     buffer: ModelBuffer,
-) -> (ModelTransfer, Arc<ModelHw>) {
-    let hw = Arc::new(ModelHw::default());
-    (
-        ModelTransfer {
-            hw: Arc::clone(&hw),
-            transport: Some(transport),
-            buffer: Some(buffer),
-            settled: None,
-        },
-        hw,
-    )
+) -> ModelTransfer {
+    {
+        let mut state = slot.state.lock().expect("slot lock");
+        state.active = true;
+        state.done = false;
+        state.fail = false;
+        state.waker = None;
+    }
+    ModelTransfer {
+        slot: Arc::clone(slot),
+        transport: Some(transport),
+        buffer: Some(buffer),
+        settled: None,
+    }
 }
 
 impl ModelTransfer {
-    fn outcome_from_hw(&self) -> TransferOutcome {
-        if self.hw.fail.load(Ordering::SeqCst) {
-            TransferOutcome::Failed
-        } else {
-            TransferOutcome::Completed
-        }
+    fn disarm_slot(&self) {
+        let mut state = self.slot.state.lock().expect("slot lock");
+        state.active = false;
+        state.waker = None;
     }
 }
 
@@ -106,68 +152,114 @@ impl OwnedTransfer for ModelTransfer {
         if self.settled.is_some() {
             return Poll::Ready(());
         }
-        if self.hw.cancelled.load(Ordering::SeqCst) && !self.hw.done.load(Ordering::SeqCst) {
-            self.settled = Some(TransferOutcome::Cancelled);
-            return Poll::Ready(());
+        let outcome = {
+            let mut state = self.slot.state.lock().expect("slot lock");
+            // Fast path.
+            if state.done {
+                Some(if state.fail {
+                    TransferOutcome::Failed
+                } else {
+                    TransferOutcome::Completed
+                })
+            } else {
+                // Register-then-recheck under the same exclusion the model
+                // "ISR" uses; deterministic race injection lands between.
+                state.waker = Some(cx.waker().clone());
+                if state.complete_on_register {
+                    state.complete_on_register = false;
+                    state.done = true;
+                }
+                if state.done {
+                    state.waker = None;
+                    Some(if state.fail {
+                        TransferOutcome::Failed
+                    } else {
+                        TransferOutcome::Completed
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+        match outcome {
+            Some(outcome) => {
+                self.settled = Some(outcome);
+                Poll::Ready(())
+            }
+            None => Poll::Pending,
         }
-        // Register-then-recheck, per the mandated order. First a fast path:
-        if self.hw.done.load(Ordering::SeqCst) {
-            self.settled = Some(self.outcome_from_hw());
-            return Poll::Ready(());
-        }
-        // Register.
-        *self.hw.waker.lock().expect("waker lock") = Some(cx.waker().clone());
-        // Deterministic race injection: completion lands "during"
-        // registration, before the recheck.
-        if self.hw.complete_on_register.swap(false, Ordering::SeqCst) {
-            self.hw.done.store(true, Ordering::SeqCst);
-        }
-        // Recheck closes the completion-during-registration window.
-        if self.hw.done.load(Ordering::SeqCst) {
-            self.hw.waker.lock().expect("waker lock").take();
-            self.settled = Some(self.outcome_from_hw());
-            return Poll::Ready(());
-        }
-        Poll::Pending
     }
 
     fn cancel(&mut self) {
         if self.settled.is_some() {
             return;
         }
-        self.hw.cancelled.store(true, Ordering::SeqCst);
-        // Cancellation is progress and may produce no hardware interrupt:
-        // wake the registered waker ourselves (reviewer correction 2).
-        if let Some(waker) = self.hw.waker.lock().expect("waker lock").take() {
+        // The cancellation observation is the linearization point (finding
+        // 2): classify and STORE the settlement here, atomically with the
+        // completion observation. A hardware completion landing after this
+        // point is conservatively Cancelled and cannot rewrite the outcome.
+        let (outcome, waker) = {
+            let mut state = self.slot.state.lock().expect("slot lock");
+            let outcome = if state.done {
+                if state.fail {
+                    TransferOutcome::Failed
+                } else {
+                    TransferOutcome::Completed
+                }
+            } else {
+                TransferOutcome::Cancelled
+            };
+            state.active = false;
+            (outcome, state.waker.take())
+        };
+        self.settled = Some(outcome);
+        // Cancellation is progress and may produce no hardware interrupt.
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
 
-    fn recover(self) -> Recovered<ModelTransport, ModelBuffer> {
+    fn recover(mut self) -> Recovered<ModelTransport, ModelBuffer> {
         let outcome = self.settled.expect("recover called before settlement");
+        self.disarm_slot();
         Recovered {
-            transport: self.transport.expect("transport held until recovery"),
-            buffer: self.buffer.expect("buffer held until recovery"),
+            transport: self.transport.take().expect("transport held"),
+            buffer: self.buffer.take().expect("buffer held"),
             outcome,
         }
     }
 }
 
-fn in_flight() -> (InFlight<ModelTransfer, ModelSpare>, Arc<ModelHw>) {
-    let (transfer, hw) = start_model_transfer(ModelTransport("qspi"), ModelBuffer(vec![0xAB; 16]));
-    (InFlight::new(transfer, ModelSpare("spare-0")), hw)
+impl Drop for ModelTransfer {
+    fn drop(&mut self) {
+        // A dropped pending transfer must not leave a stale registration:
+        // the adapter's Drop disarms the slot (finding 1's drop trace).
+        if self.transport.is_some() {
+            self.disarm_slot();
+        }
+    }
+}
+
+fn flight_on(slot: &Arc<SharedSlot>, e: u64) -> InFlight<ModelTransfer, ModelSpare> {
+    InFlight::new(
+        start_on(slot, ModelTransport("qspi"), ModelBuffer("buf-a")),
+        ModelSpare("spare-0"),
+        epoch(e),
+        REGION_FULL,
+    )
 }
 
 #[test]
 fn polled_then_lost_arbitration_gets_exactly_one_wake() {
-    let (mut flight, hw) = in_flight();
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
     assert!(flight.poll_complete(&mut cx).is_pending());
     assert_eq!(counter.wakes.load(Ordering::SeqCst), 0, "no self-wake");
 
-    hw.complete();
+    slot.complete();
     assert_eq!(
         counter.wakes.load(Ordering::SeqCst),
         1,
@@ -178,18 +270,23 @@ fn polled_then_lost_arbitration_gets_exactly_one_wake() {
         Poll::Ready(settled) => {
             assert_eq!(settled.outcome, TransferOutcome::Completed);
             assert_eq!(settled.transport.0, "qspi");
-            assert_eq!(settled.buffer.0.len(), 16);
-            assert_eq!(settled.spare.0, "spare-0", "spare returned at settlement");
+            assert_eq!(settled.spare.0, "spare-0");
+            assert!(
+                settled.stripe_written().is_some(),
+                "completed mints a witness"
+            );
         }
         Poll::Pending => panic!("completed transfer must recover"),
     }
     assert!(flight.is_spent());
+    assert!(slot.is_disarmed(), "recovery disarms the shared slot");
 }
 
 #[test]
 fn unpolled_below_winner_recovers_on_first_poll() {
-    let (mut flight, hw) = in_flight();
-    hw.complete();
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
+    slot.complete();
 
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
@@ -197,59 +294,60 @@ fn unpolled_below_winner_recovers_on_first_poll() {
     assert_eq!(counter.wakes.load(Ordering::SeqCst), 0);
 }
 
-/// The adversarial oracle from reviewer correction 1: completion lands
-/// between waker registration and the recheck. Register-then-recheck makes
-/// the same poll observe it; nothing is lost.
 #[test]
 fn completion_during_registration_is_not_lost() {
-    let (mut flight, hw) = in_flight();
-    hw.complete_on_register.store(true, Ordering::SeqCst);
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
+    slot.state.lock().expect("slot lock").complete_on_register = true;
 
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
-    match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => assert_eq!(settled.outcome, TransferOutcome::Completed),
-        Poll::Pending => panic!("register-then-recheck must observe the racing completion"),
-    }
-    assert_eq!(
-        counter.wakes.load(Ordering::SeqCst),
-        0,
-        "settlement in the same poll needs no wake"
+    assert!(
+        flight.poll_complete(&mut cx).is_ready(),
+        "register-then-recheck observes the racing completion in the same poll"
     );
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), 0);
 }
 
-/// Reviewer correction 2's required trace: pending poll → cancel → exactly
-/// one progress wake → repoll recovers everything as Cancelled.
+/// Finding 2's adversarial oracle: cancel first, hardware completes late,
+/// the settlement stays Cancelled — the cancellation observation was the
+/// linearization point.
 #[test]
-fn cancel_wakes_the_pending_poller() {
-    let (mut flight, hw) = in_flight();
+fn cancel_then_late_completion_stays_cancelled() {
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
     assert!(flight.poll_complete(&mut cx).is_pending());
     flight.begin_drain();
-    assert_eq!(
-        counter.wakes.load(Ordering::SeqCst),
-        1,
-        "cancellation is progress and must wake"
-    );
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), 1, "cancel wakes");
+
+    // Hardware completes AFTER the cancellation linearization point,
+    // before the repoll.
+    slot.complete();
 
     match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
-            assert_eq!(settled.outcome, TransferOutcome::Cancelled);
-            assert_eq!(settled.transport.0, "qspi");
-            assert_eq!(settled.buffer.0.len(), 16);
-            assert_eq!(settled.spare.0, "spare-0");
+            assert_eq!(
+                settled.outcome,
+                TransferOutcome::Cancelled,
+                "late completion cannot rewrite a cancelled settlement"
+            );
+            assert!(
+                settled.stripe_written().is_none(),
+                "a cancelled stripe mints no coverage witness"
+            );
         }
         Poll::Pending => panic!("a drained transfer must settle"),
     }
-    let _ = hw;
 }
 
 #[test]
-fn drain_racing_completion_reports_completed() {
-    let (mut flight, hw) = in_flight();
-    hw.complete();
+fn drain_racing_prior_completion_reports_completed() {
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
+    slot.complete();
     flight.begin_drain();
 
     let (_counter, waker) = counting_waker();
@@ -261,130 +359,147 @@ fn drain_racing_completion_reports_completed() {
 }
 
 #[test]
-fn failure_settles_and_returns_resources() {
-    let (mut flight, hw) = in_flight();
+fn failure_settles_returns_resources_and_mints_no_witness() {
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
     assert!(flight.poll_complete(&mut cx).is_pending());
 
-    hw.fail();
+    slot.fail();
     match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => {
             assert_eq!(settled.outcome, TransferOutcome::Failed);
-            assert_eq!(settled.buffer.0.len(), 16);
+            assert_eq!(settled.buffer.0, "buf-a", "buffer recovered");
+            assert!(settled.stripe_written().is_none());
         }
         Poll::Pending => panic!("failed transfer must settle"),
     }
 }
 
-/// Reviewer correction 8: waker replacement — a later poll with a different
-/// waker replaces the registration; completion wakes only the newest.
 #[test]
 fn waker_replacement_wakes_only_the_newest() {
-    let (mut flight, hw) = in_flight();
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
     let (old_counter, old_waker) = counting_waker();
     let (new_counter, new_waker) = counting_waker();
 
-    let mut old_cx = Context::from_waker(&old_waker);
-    let mut new_cx = Context::from_waker(&new_waker);
+    assert!(
+        flight
+            .poll_complete(&mut Context::from_waker(&old_waker))
+            .is_pending()
+    );
+    assert!(
+        flight
+            .poll_complete(&mut Context::from_waker(&new_waker))
+            .is_pending()
+    );
 
-    assert!(flight.poll_complete(&mut old_cx).is_pending());
-    assert!(flight.poll_complete(&mut new_cx).is_pending());
-
-    hw.complete();
+    slot.complete();
     assert_eq!(
         old_counter.wakes.load(Ordering::SeqCst),
         0,
         "stale waker silent"
     );
-    assert_eq!(
-        new_counter.wakes.load(Ordering::SeqCst),
-        1,
-        "newest waker woken"
-    );
+    assert_eq!(new_counter.wakes.load(Ordering::SeqCst), 1, "newest woken");
 }
 
-/// Reviewer correction 8: a late "interrupt" after recovery must not wake
-/// anything — the slot was cleared at settlement.
+/// Finding 1's late-IRQ trace, now meaningful: recovery disarmed the
+/// SHARED slot, so a late "interrupt" wakes nobody even though the slot
+/// object persists.
 #[test]
-fn late_completion_after_recovery_is_inert() {
-    let (mut flight, hw) = in_flight();
+fn late_completion_after_recovery_is_inert_via_disarm() {
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
     assert!(flight.poll_complete(&mut cx).is_pending());
-    hw.complete();
+    slot.complete();
     assert!(flight.poll_complete(&mut cx).is_ready());
-    let wakes_at_recovery = counter.wakes.load(Ordering::SeqCst);
+    let wakes = counter.wakes.load(Ordering::SeqCst);
+    assert!(slot.is_disarmed());
 
-    hw.complete();
-    assert_eq!(
-        counter.wakes.load(Ordering::SeqCst),
-        wakes_at_recovery,
-        "late completion wakes nobody"
-    );
-    assert!(
-        flight.poll_complete(&mut cx).is_pending(),
-        "spent adapter stays inert"
-    );
+    slot.complete(); // late spurious interrupt on the same shared slot
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), wakes, "wakes nobody");
 }
 
-/// Reviewer correction 8: transfer N recovery feeds transfer N+1 — the
-/// recovered transport and buffer start a second flight that completes
-/// independently, and the spare's identity survives both flights.
+/// Finding 1's drop trace: dropping a pending in-flight transfer disarms
+/// the shared slot; a late interrupt wakes nobody. Resource recovery is
+/// intentionally lost on this path (the documented non-returning
+/// boundary) — but no stale registration survives.
 #[test]
-fn recovered_resources_start_the_next_transfer() {
-    let (mut flight, hw) = in_flight();
-    let (_counter, waker) = counting_waker();
-    let mut cx = Context::from_waker(&waker);
-    hw.complete();
-    let first = match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => settled,
-        Poll::Pending => panic!("first flight must settle"),
-    };
+fn dropped_pending_transfer_disarms_the_slot() {
+    let slot = Arc::new(SharedSlot::default());
+    let (counter, waker) = counting_waker();
+    {
+        let mut flight = flight_on(&slot, 0);
+        let mut cx = Context::from_waker(&waker);
+        assert!(flight.poll_complete(&mut cx).is_pending());
+        // flight dropped here with the transfer pending.
+    }
+    assert!(slot.is_disarmed(), "drop disarms");
+    slot.complete();
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), 0, "no stale wake");
+}
 
-    let (second_transfer, second_hw) = start_model_transfer(first.transport, first.buffer);
-    let mut second_flight = InFlight::new(second_transfer, first.spare);
-    assert!(second_flight.poll_complete(&mut cx).is_pending());
-    second_hw.complete();
-    match second_flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => {
-            assert_eq!(settled.outcome, TransferOutcome::Completed);
-            assert_eq!(settled.transport.0, "qspi", "same transport identity");
-            assert_eq!(settled.spare.0, "spare-0", "same spare identity");
+/// Finding 1's N→N+1 trace against the SAME shared slot: the second
+/// transfer re-arms the slot the first one used and completes cleanly.
+#[test]
+fn sequential_transfers_reuse_the_same_slot() {
+    let slot = Arc::new(SharedSlot::default());
+    let (_c, waker) = counting_waker();
+    let mut cx = Context::from_waker(&waker);
+
+    let mut first = flight_on(&slot, 0);
+    slot.complete();
+    let settled = match first.poll_complete(&mut cx) {
+        Poll::Ready(s) => s,
+        Poll::Pending => panic!("first settles"),
+    };
+    assert!(slot.is_disarmed());
+
+    // Second transfer on the SAME slot with the recovered transport.
+    let second_transfer = start_on(&slot, settled.transport, ModelBuffer("buf-b"));
+    let mut second = InFlight::new(second_transfer, settled.spare, epoch(1), REGION_FULL);
+    assert!(second.poll_complete(&mut cx).is_pending());
+    slot.complete();
+    match second.poll_complete(&mut cx) {
+        Poll::Ready(s) => {
+            assert_eq!(s.outcome, TransferOutcome::Completed);
+            assert_eq!(s.transport.0, "qspi", "same transport identity");
+            assert_eq!(s.spare.0, "spare-0", "same spare identity");
         }
-        Poll::Pending => panic!("second flight must settle"),
+        Poll::Pending => panic!("second settles"),
     }
 }
 
 #[test]
 fn spare_is_writable_during_flight_and_drain_flag_clears() {
-    let (mut flight, hw) = in_flight();
-    let (_counter, waker) = counting_waker();
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = flight_on(&slot, 0);
+    let (_c, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
 
     assert!(flight.poll_complete(&mut cx).is_pending());
-    assert!(flight.spare_mut().is_some(), "spare writable in flight");
+    assert!(flight.spare_mut().is_some());
 
     flight.begin_drain();
     assert!(flight.is_draining());
     assert!(flight.poll_complete(&mut cx).is_ready());
     assert!(
         !flight.is_draining(),
-        "a settled adapter is no longer draining (reviewer correction 6)"
+        "settled adapter is no longer draining"
     );
-    let _ = hw;
 }
 
 // ---------------------------------------------------------------------------
-// Negative control (reviewer-requested): a check-then-register
-// implementation LOSES the completion that lands between the check and the
-// registration. This test asserts the defect occurs, proving the adversarial
-// oracle above is load-bearing and the mandated order is not ceremony.
+// Negative control: check-then-register loses the racing completion. Kept
+// from round 1; proves the adversarial oracle is load-bearing.
 // ---------------------------------------------------------------------------
 
 struct BrokenTransfer {
-    hw: Arc<ModelHw>,
+    slot: Arc<SharedSlot>,
     settled: bool,
 }
 
@@ -393,43 +508,44 @@ impl BrokenTransfer {
         if self.settled {
             return Poll::Ready(());
         }
+        let mut state = self.slot.state.lock().expect("slot lock");
         // BROKEN ORDER: check first...
-        if self.hw.done.load(Ordering::SeqCst) {
+        if state.done {
+            drop(state);
             self.settled = true;
             return Poll::Ready(());
         }
-        // ...completion lands here (injected deterministically)...
-        if self.hw.complete_on_register.swap(false, Ordering::SeqCst) {
-            self.hw.done.store(true, Ordering::SeqCst);
-            // The "interrupt" fires with no waker registered: wakes nobody.
+        // ...completion lands here...
+        if state.complete_on_register {
+            state.complete_on_register = false;
+            state.done = true;
+            // fires with no waker registered: wakes nobody.
         }
         // ...then register, too late, with no recheck.
-        *self.hw.waker.lock().expect("waker lock") = Some(cx.waker().clone());
+        state.waker = Some(cx.waker().clone());
         Poll::Pending
     }
 }
 
 #[test]
 fn negative_control_check_then_register_loses_the_wake() {
-    let hw = Arc::new(ModelHw::default());
-    hw.complete_on_register.store(true, Ordering::SeqCst);
+    let slot = Arc::new(SharedSlot::default());
+    {
+        let mut state = slot.state.lock().expect("slot lock");
+        state.active = true;
+        state.complete_on_register = true;
+    }
     let mut broken = BrokenTransfer {
-        hw: Arc::clone(&hw),
+        slot: Arc::clone(&slot),
         settled: false,
     };
 
     let (counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
-
-    // The racing completion is missed: pending, and nobody will ever wake.
     assert!(broken.poll_done_check_then_register(&mut cx).is_pending());
-    assert_eq!(
-        counter.wakes.load(Ordering::SeqCst),
-        0,
-        "the lost-wake race: done is set, waker registered too late, no wake ever fires"
-    );
+    assert_eq!(counter.wakes.load(Ordering::SeqCst), 0, "the wake is lost");
     assert!(
-        hw.done.load(Ordering::SeqCst),
-        "hardware really did complete — the event exists and was lost"
+        slot.state.lock().expect("slot lock").done,
+        "hardware really completed — the event exists and was lost"
     );
 }

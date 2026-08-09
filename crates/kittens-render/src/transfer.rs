@@ -26,6 +26,9 @@
 
 use core::task::{Context, Poll};
 
+use crate::geometry::{FrameEpoch, Region};
+use crate::sweep::StripeWritten;
+
 /// An owned, in-flight region transfer at the HAL boundary.
 pub trait OwnedTransfer: Sized {
     /// The transport (bus/display handle) consumed by the transfer.
@@ -81,7 +84,7 @@ pub struct Recovered<T, B> {
 }
 
 /// Settlement of the full in-flight state: the transfer's resources plus
-/// the independently held spare buffer.
+/// the independently held spare buffer, the epoch, and the region.
 #[derive(Debug)]
 pub struct Settled<T, B, S> {
     /// The transport, ready for the next transfer.
@@ -92,6 +95,28 @@ pub struct Settled<T, B, S> {
     pub spare: S,
     /// How the transfer settled.
     pub outcome: TransferOutcome,
+    /// The epoch this stripe belonged to.
+    pub epoch: FrameEpoch,
+    /// The region this transfer targeted.
+    pub region: Region,
+}
+
+impl<T, B, S> Settled<T, B, S> {
+    /// Mints the coverage witness — exists **only** for a `Completed`
+    /// settlement, which is what makes marking a cancelled, failed, or
+    /// never-started stripe unrepresentable (exit-review finding 4).
+    /// Duplicate witnesses from the same settlement are harmless by
+    /// construction: the sweep's in-order region check makes a replay of an
+    /// already-marked stripe unusable, and epochs never repeat.
+    pub fn stripe_written(&self) -> Option<StripeWritten> {
+        match self.outcome {
+            TransferOutcome::Completed => Some(StripeWritten {
+                epoch: self.epoch,
+                region: self.region,
+            }),
+            TransferOutcome::Cancelled | TransferOutcome::Failed => None,
+        }
+    }
 }
 
 /// The in-flight adapter: `Unpin`, `&mut`-polled, drivable to settlement,
@@ -109,16 +134,21 @@ pub struct InFlight<X: OwnedTransfer, S> {
     transfer: Option<X>,
     spare: Option<S>,
     draining: bool,
+    epoch: FrameEpoch,
+    region: Region,
 }
 
 impl<X: OwnedTransfer, S> InFlight<X, S> {
     /// Wraps a started transfer together with the spare buffer that remains
-    /// writable during the flight.
-    pub const fn new(transfer: X, spare: S) -> Self {
+    /// writable during the flight, and the epoch/region identity the
+    /// eventual settlement witnesses.
+    pub const fn new(transfer: X, spare: S, epoch: FrameEpoch, region: Region) -> Self {
         Self {
             transfer: Some(transfer),
             spare: Some(spare),
             draining: false,
+            epoch,
+            region,
         }
     }
 
@@ -170,6 +200,8 @@ impl<X: OwnedTransfer, S> InFlight<X, S> {
                     buffer: recovered.buffer,
                     spare,
                     outcome: recovered.outcome,
+                    epoch: self.epoch,
+                    region: self.region,
                 })
             }
             Poll::Pending => Poll::Pending,

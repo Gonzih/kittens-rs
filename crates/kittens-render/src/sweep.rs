@@ -1,34 +1,47 @@
-//! The fixed full-panel sweep plan and its consuming progress token.
+//! The crate-owned sweep value, its fixed full-panel plan, and the
+//! unforgeable stripe/sweep witnesses.
 //!
-//! Review finding 9 established that sweep completion must never be a
-//! caller assertion: two overlapping writes that miss a row could otherwise
-//! be declared "every stripe". Here, the only way to obtain a
-//! [`CompletedSweep`] — the only value [`crate::demand::FrameDemand`]
-//! accepts as a presented sweep — is to mark every planned region written,
-//! in order. Coverage is a construction, not a claim.
+//! Exit-review round 1 restructuring (findings 4, 5, 9):
 //!
-//! K2R-0 deliberately supports exactly one plan shape: the full panel in
-//! top-to-bottom stripes (damage sweeps are deferred; SPEC section 4).
+//! - coverage consumes **transfer outcomes**, not caller claims: the only
+//!   way to mark a stripe is a [`StripeWritten`] witness, and the only mint
+//!   for that witness is a settled transfer whose outcome was `Completed`
+//!   ([`crate::transfer::Settled::stripe_written`]);
+//! - the sweep value is crate-owned and binds the demand-fixed panel plan,
+//!   the immutable scene snapshot (owned, exposed by shared reference
+//!   only), the repaint mode, and the provenance-branded epoch — there is
+//!   no public path to attach a foreign or trivial plan;
+//! - milestone vocabulary is honest: the terminal witness is
+//!   [`SweepWritten`] — every planned stripe was *written*; nothing here
+//!   claims physical presentation.
 
 use crate::geometry::{FrameEpoch, Region};
 
-/// An unforgeable witness of one active sweep. Minted only by
-/// [`crate::demand::FrameDemand::begin_sweep`]; consumed by settlement.
-/// Non-`Clone`, no public constructor: at most one exists per sweep.
+/// Witness that one stripe's transfer settled `Completed`. Minted only by
+/// [`crate::transfer::Settled::stripe_written`]; non-`Clone`, no public
+/// constructor. A cancelled, failed, or never-started stripe has no witness
+/// and therefore cannot be marked.
 #[derive(Debug)]
-pub struct SweepToken {
+pub struct StripeWritten {
     pub(crate) epoch: FrameEpoch,
-    pub(crate) invalidations_at_mint: u32,
+    pub(crate) region: Region,
 }
 
-impl SweepToken {
-    /// The epoch this sweep renders.
+impl StripeWritten {
+    /// The epoch the written stripe belongs to.
     pub const fn epoch(&self) -> FrameEpoch {
         self.epoch
     }
+
+    /// The written region.
+    pub const fn region(&self) -> Region {
+        self.region
+    }
 }
 
-/// A validated full-panel stripe plan.
+/// A validated full-panel stripe plan. Fixed at
+/// [`crate::demand::FrameDemand`] construction; sweeps cannot substitute
+/// another.
 #[derive(Clone, Copy, Debug)]
 pub struct SweepPlan {
     panel: Region,
@@ -42,6 +55,8 @@ pub enum InvalidPlan {
     EmptyPanel,
     /// Stripe height is zero.
     ZeroStripe,
+    /// Panel extents overflow the coordinate space.
+    Overflow,
 }
 
 impl SweepPlan {
@@ -50,13 +65,18 @@ impl SweepPlan {
     ///
     /// # Errors
     ///
-    /// [`InvalidPlan`] for an empty panel or a zero stripe height.
+    /// [`InvalidPlan`] for an empty panel, a zero stripe height, or panel
+    /// extents that overflow `u16` coordinates.
     pub const fn new(panel: Region, stripe_height: u16) -> Result<Self, InvalidPlan> {
         if panel.width == 0 || panel.height == 0 {
             return Err(InvalidPlan::EmptyPanel);
         }
         if stripe_height == 0 {
             return Err(InvalidPlan::ZeroStripe);
+        }
+        if panel.x.checked_add(panel.width).is_none() || panel.y.checked_add(panel.height).is_none()
+        {
+            return Err(InvalidPlan::Overflow);
         }
         Ok(Self {
             panel,
@@ -90,95 +110,150 @@ impl SweepPlan {
     }
 }
 
-/// Progress through one sweep: regions must be marked written in plan
-/// order; completion is obtainable only after every region is written.
+/// Witness that every planned stripe of the sweep was written, in order.
+/// The only success value [`crate::demand::FrameDemand::finish_written`]
+/// accepts. Carries its demand provenance; a foreign demand rejects it
+/// without mutating (finding 6).
 #[derive(Debug)]
-pub struct SweepProgress {
-    plan: SweepPlan,
-    token: SweepToken,
-    next: u16,
+pub struct SweepWritten {
+    pub(crate) demand_id: u32,
+    pub(crate) epoch: FrameEpoch,
 }
 
-/// The marked region was not the next planned region.
+/// Witness of an aborted sweep — transfer failure, cancellation, or
+/// shutdown. The only value [`crate::demand::FrameDemand::finish_failed`]
+/// accepts.
+#[derive(Debug)]
+pub struct AbortedSweep {
+    pub(crate) demand_id: u32,
+    pub(crate) epoch: FrameEpoch,
+}
+
+/// The marked witness did not match the sweep's next planned stripe.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct WrongRegion {
-    /// The region the plan expected next, if any.
+pub struct WrongStripe {
+    /// The region the plan expected next, if any remained.
     pub expected: Option<Region>,
 }
 
-/// Witness that every planned region of the sweep was written, in order.
-/// The only value accepted by `FrameDemand::finish_presented`.
-#[derive(Debug)]
-pub struct CompletedSweep {
-    pub(crate) token: SweepToken,
+/// One crate-owned sweep: the immutable scene snapshot, the demand-fixed
+/// plan, the repaint mode, and the branded epoch. Minted only by
+/// [`crate::demand::FrameDemand::begin_sweep`].
+///
+/// The snapshot is owned here and exposed by shared reference only — the
+/// scene cannot be mutated through the sweep, so every stripe of the epoch
+/// renders one state (SPEC 6.4 rule 1's enforcement at this layer).
+pub struct Sweep<S> {
+    snapshot: S,
+    plan: SweepPlan,
+    next: u16,
+    full_repaint: bool,
+    pub(crate) demand_id: u32,
+    pub(crate) epoch: FrameEpoch,
 }
 
-/// Witness of an aborted sweep. The only value accepted by
-/// `FrameDemand::finish_failed`.
-#[derive(Debug)]
-pub struct AbortedSweep {
-    pub(crate) token: SweepToken,
+impl<S> core::fmt::Debug for Sweep<S> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Sweep")
+            .field("epoch", &self.epoch)
+            .field("next", &self.next)
+            .field("full_repaint", &self.full_repaint)
+            .finish_non_exhaustive()
+    }
 }
 
-impl SweepProgress {
-    /// Binds a sweep token to the plan it renders.
-    pub const fn new(plan: SweepPlan, token: SweepToken) -> Self {
+impl<S> Sweep<S> {
+    pub(crate) const fn mint(
+        snapshot: S,
+        plan: SweepPlan,
+        full_repaint: bool,
+        demand_id: u32,
+        epoch: FrameEpoch,
+    ) -> Self {
         Self {
+            snapshot,
             plan,
-            token,
             next: 0,
+            full_repaint,
+            demand_id,
+            epoch,
         }
+    }
+
+    /// The immutable scene snapshot for this epoch.
+    pub const fn snapshot(&self) -> &S {
+        &self.snapshot
+    }
+
+    /// Whether this sweep must repaint everything (always true for the
+    /// K2R-0 full-panel plan; carried for damage-sweep forward shape).
+    pub const fn full_repaint(&self) -> bool {
+        self.full_repaint
     }
 
     /// The epoch under sweep.
     pub const fn epoch(&self) -> FrameEpoch {
-        self.token.epoch
+        self.epoch
     }
 
-    /// The next region to render and write, if any remain.
+    /// The next region to render and transfer, if any remain.
     pub const fn next_region(&self) -> Option<Region> {
         self.plan.region_at(self.next)
     }
 
-    /// Records that `region` was written (its transfer settled
-    /// `Completed`). Must be exactly [`SweepProgress::next_region`].
+    /// Records one written stripe by consuming its transfer witness. The
+    /// witness must carry this sweep's epoch and exactly the next planned
+    /// region.
     ///
     /// # Errors
     ///
-    /// [`WrongRegion`] when `region` is out of order or the sweep is
-    /// already fully covered; progress is unchanged.
-    pub fn mark_written(&mut self, region: Region) -> Result<(), WrongRegion> {
+    /// [`WrongStripe`] for an out-of-order region, a foreign epoch, or a
+    /// fully covered sweep; progress is unchanged.
+    pub fn mark_written(&mut self, witness: StripeWritten) -> Result<(), WrongStripe> {
         match self.next_region() {
-            Some(expected) if expected == region => {
+            Some(expected) if witness.epoch == self.epoch && witness.region == expected => {
                 self.next += 1;
                 Ok(())
             }
-            expected => Err(WrongRegion { expected }),
+            expected => Err(WrongStripe { expected }),
         }
     }
 
-    /// Whether every planned region has been written.
+    /// Whether every planned stripe has been written.
     pub const fn is_complete(&self) -> bool {
         self.next >= self.plan.stripe_count()
     }
 
-    /// Consumes fully covered progress into the presented-sweep witness.
+    /// Consumes a fully covered sweep into its terminal witness, returning
+    /// the snapshot to the caller.
     ///
     /// # Errors
     ///
-    /// Returns the progress unchanged while regions remain unwritten.
-    pub fn complete(self) -> Result<CompletedSweep, SweepProgress> {
+    /// Returns the sweep unchanged while stripes remain unwritten.
+    pub fn finish(self) -> Result<(SweepWritten, S), Sweep<S>> {
         if self.is_complete() {
-            Ok(CompletedSweep { token: self.token })
+            Ok((
+                SweepWritten {
+                    demand_id: self.demand_id,
+                    epoch: self.epoch,
+                },
+                self.snapshot,
+            ))
         } else {
             Err(self)
         }
     }
 
-    /// Aborts the sweep at any point (transfer failure, cancellation,
-    /// shutdown). The epoch terminates; `FrameDemand::finish_failed`
-    /// retains demand and records the full-repaint obligation.
-    pub fn abort(self) -> AbortedSweep {
-        AbortedSweep { token: self.token }
+    /// Aborts the sweep at any point, returning the snapshot. The epoch
+    /// terminates; `finish_failed` retains demand and records the
+    /// full-repaint obligation.
+    pub fn abort(self) -> (AbortedSweep, S) {
+        (
+            AbortedSweep {
+                demand_id: self.demand_id,
+                epoch: self.epoch,
+            },
+            self.snapshot,
+        )
     }
 }
