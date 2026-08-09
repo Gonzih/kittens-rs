@@ -190,3 +190,21 @@ non-compile-ready pseudocode delta over the retained `VERDICT.md`, not
 shape-complete or compile-ready adapter source. The real pinned-SHA Xtensa
 adapter/link gate, board HIL, kernel admission, sealing, and bilateral seam
 remain open; batch 6 does not claim any of them closed.
+
+## Exit review round 4 (2026-08-08)
+
+Full text: `reviews/2026-08-08-exit-review-4-codex.md`. Verdict: **FAIL**;
+findings 2, 4, 6 and two advisories ADDRESSED; 1 and 3 remain blocking,
+5 partially. Disposition: accepted, with the author's resolutions for the
+two blockers recorded here before delegation: (1) the closure starter can
+never be sealed — replace it with a `FlightStarter` trait invoked BY the
+crate with the target's region, marked seal-at-freeze like `OwnedTransfer`;
+pairing becomes structural under sealed integrations, and SPEC/blueprint
+prose states the experiment-phase boundary honestly instead of claiming
+nonexistence; (3) `abort` requires settlement — `Err(sweep)` while a
+target is outstanding — which has no liveness cost because cancel-and-
+drain settles by contract; with drop-cancellation bounded by the adapter
+Drop contract, the stale-write window closes and SPEC 5.3's every-
+started-transfer-settles rule becomes literally true; `invalidate`'s
+idle-time timing hole closes by making the pending invalidation stick to
+the next mint instead of being cleared by it. Batch 7 delegated.
