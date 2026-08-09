@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Publish `kittens-render` 0.1.1 to crates.io (2026-08-09) as an
+  experimental K2R-0 evidence release, human-ordered and gated on the
+  round-7 publication-readiness review: all five blockers fixed, workspace
+  coverage gate green (3754/3754 lines, 381/381 functions under the
+  declared exclusion contract), dry-run verified, then published from
+  main at 21a0b98. Open gates carried honestly in the published docs:
+  board HIL, silicon wake delivery, seam co-sign, `write_region`
+  transport, kernel-admitted `reactor!` fixture, and capability sealing
+  at the 0.2.0 boundary.
 - Add the default-off `kittens-render/embedded-graphics` integration: a
   no-alloc, global-coordinate RGB565 target over an exact caller-owned stripe
   byte buffer, with full-panel layout bounds, clipping/translation, and the
