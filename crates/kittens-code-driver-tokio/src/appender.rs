@@ -207,6 +207,12 @@ impl Appender {
         // replay (SPEC: crash repair is persisted, ordering law).
         let mut file = OpenOptions::new().append(true).open(path)?;
         for record in &repairs {
+            #[cfg(test)]
+            if path.file_name().and_then(|name| name.to_str()) == Some("fail-repair-append.jsonl") {
+                return Err(OpenError::RepairAppend(std::io::Error::other(
+                    "injected repair append failure",
+                )));
+            }
             let line = serde_json::to_string(record).map_err(std::io::Error::other)?;
             file.write_all(line.as_bytes())
                 .map_err(OpenError::RepairAppend)?;
@@ -288,5 +294,225 @@ impl Appender {
     /// second storage owner.
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Replaces the append handle with a read-only handle so runner tests can
+    /// exercise the real persistence-failure path without changing the
+    /// production appender API.
+    #[cfg(test)]
+    pub(crate) fn inject_write_failure(&mut self) {
+        self.file = File::open(&self.path).expect("test log remains readable");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kittens_code_core::prompts::PROMPT_PACK_VERSION;
+    use kittens_code_core::record::{Checksum, LogHeader, RecordKind, RecordPayload};
+    use kittens_code_protocol::event::Event;
+    use kittens_code_protocol::ids::{EffectId, SessionId, TurnEpoch};
+
+    fn header(session: u8) -> Record {
+        Record::new(
+            0,
+            RecordKind::Header,
+            None,
+            TurnEpoch(0),
+            RecordPayload::Header(LogHeader {
+                session_id: SessionId([session; 16]),
+                parent: None,
+                schema_epoch: SUPPORTED_SCHEMA_EPOCH,
+                prompt_pack_version: PROMPT_PACK_VERSION.0,
+                verb_grammar_version: [1, 0, 0],
+                l3_dialect_version: [1, 0, 0],
+                codec: String::from(CODEC),
+                created_at: None,
+            }),
+        )
+        .expect("header")
+    }
+
+    fn event_record(seq: u64) -> Record {
+        Record::new(
+            seq,
+            RecordKind::EmittedEvent,
+            None,
+            TurnEpoch(0),
+            RecordPayload::EmittedEvent(Event::ShuttingDown),
+        )
+        .expect("event record")
+    }
+
+    fn write_records(path: &Path, records: &[Record]) {
+        let text = records
+            .iter()
+            .map(|record| serde_json::to_string(record).expect("serialize"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(path, text).expect("seed log");
+    }
+
+    #[test]
+    fn open_error_from_io_preserves_the_error() {
+        let error = OpenError::from(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        assert!(matches!(
+            error,
+            OpenError::Io(inner) if inner.kind() == std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[test]
+    fn writer_lock_io_and_scan_errors_are_distinct() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_parent = dir.path().join("missing/session.jsonl");
+        assert!(matches!(
+            Appender::open(&missing_parent, Some(header(1))),
+            Err(OpenError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound
+        ));
+
+        let corrupt = dir.path().join("mid-log-corruption.jsonl");
+        let head = serde_json::to_string(&header(2)).expect("serialize header");
+        let tail = serde_json::to_string(&event_record(1)).expect("serialize event");
+        std::fs::write(&corrupt, format!("{head}\n{{torn\n{tail}\n")).expect("seed corrupt log");
+        assert!(matches!(
+            Appender::open(&corrupt, None),
+            Err(OpenError::Scan(_))
+        ));
+    }
+
+    #[test]
+    fn fresh_header_rejections_are_table_driven_and_release_the_lock() {
+        let mut bad_checksum = header(10);
+        bad_checksum.checksum = Checksum(bad_checksum.checksum.0 ^ 1);
+
+        let mut wrong_sequence = header(11);
+        wrong_sequence.seq = 1;
+        wrong_sequence.checksum = wrong_sequence.computed_checksum();
+
+        let mut wrong_kind = header(12);
+        wrong_kind.kind = RecordKind::EmittedEvent;
+        wrong_kind.checksum = wrong_kind.computed_checksum();
+
+        let mut non_header_payload = header(13);
+        non_header_payload.payload = RecordPayload::EmittedEvent(Event::ShuttingDown);
+        non_header_payload.checksum = non_header_payload.computed_checksum();
+
+        let mut future_epoch = header(14);
+        if let RecordPayload::Header(header) = &mut future_epoch.payload {
+            header.schema_epoch = SUPPORTED_SCHEMA_EPOCH + 1;
+        }
+        future_epoch.checksum = future_epoch.computed_checksum();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cases = [
+            ("missing", None),
+            ("checksum", Some(bad_checksum)),
+            ("sequence", Some(wrong_sequence)),
+            ("kind", Some(wrong_kind)),
+            ("payload", Some(non_header_payload)),
+            ("epoch", Some(future_epoch)),
+        ];
+        for (name, candidate) in cases {
+            let path = dir.path().join(format!("{name}.jsonl"));
+            assert!(matches!(
+                Appender::open(&path, candidate),
+                Err(OpenError::BadFreshHeader)
+            ));
+            assert!(!path.with_extension("jsonl.lock").exists());
+        }
+    }
+
+    #[test]
+    fn line_decoder_and_header_epoch_cover_every_outcome() {
+        let head = header(20);
+        assert_eq!(header_schema_epoch(&head), Some(SUPPORTED_SCHEMA_EPOCH));
+        assert_eq!(header_schema_epoch(&event_record(1)), None);
+
+        let good = serde_json::to_string(&head).expect("serialize");
+        assert!(matches!(decode_line(&good), DecodeOutcome::Good(_)));
+
+        let mut corrupt = head;
+        corrupt.checksum = Checksum(corrupt.checksum.0 ^ 1);
+        assert!(matches!(
+            decode_line(&serde_json::to_string(&corrupt).expect("serialize")),
+            DecodeOutcome::Tail(TailFault::ChecksumMismatch)
+        ));
+        assert!(matches!(
+            decode_line("{not-json"),
+            DecodeOutcome::Tail(TailFault::Torn)
+        ));
+    }
+
+    #[test]
+    fn blank_lines_stay_in_the_valid_prefix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("blank-lines.jsonl");
+        let head = serde_json::to_string(&header(21)).expect("serialize");
+        std::fs::write(&path, format!("{head}\n\n   \n")).expect("seed log");
+        let (appender, replay) = Appender::open(&path, None).expect("blank lines are ignored");
+        assert_eq!(replay.len(), 1);
+        assert_eq!(appender.persisted(), 0);
+    }
+
+    #[test]
+    fn repair_append_failure_is_classified_and_releases_the_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fail-repair-append.jsonl");
+        let started = Record::new(
+            1,
+            RecordKind::StreamStarted,
+            Some(EffectId(7)),
+            TurnEpoch(1),
+            RecordPayload::StreamStarted(Vec::new()),
+        )
+        .expect("stream start");
+        write_records(&path, &[header(22), started]);
+
+        assert!(matches!(
+            Appender::open(&path, None),
+            Err(OpenError::RepairAppend(error)) if error.to_string().contains("injected")
+        ));
+        assert!(!path.with_extension("jsonl.lock").exists());
+    }
+
+    #[test]
+    fn append_empty_io_failure_and_sequence_exhaustion_are_reported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("append.jsonl");
+        let (mut appender, _) = Appender::open(&path, Some(header(23))).expect("open");
+        assert_eq!(appender.append(&[]).expect("empty append"), 0);
+        assert_eq!(appender.persisted(), 0);
+
+        appender.inject_write_failure();
+        let error = appender
+            .append(&[event_record(1)])
+            .expect_err("read-only handle");
+        assert_eq!(error.0, 1);
+        assert_ne!(error.1.kind(), std::io::ErrorKind::InvalidInput);
+
+        let exhausted_path = dir.path().join("append-exhausted.jsonl");
+        let lock = WriterLock::acquire(&exhausted_path).expect("lock");
+        let file = OpenOptions::new()
+            .create_new(true)
+            .append(true)
+            .open(&exhausted_path)
+            .expect("file");
+        let mut exhausted = Appender {
+            file,
+            path: exhausted_path,
+            next_seq: u64::MAX,
+            persisted: u64::MAX - 1,
+            _writer_lock: lock,
+        };
+        let error = exhausted
+            .append(&[event_record(u64::MAX)])
+            .expect_err("namespace exhausted");
+        assert_eq!(error.0, u64::MAX);
+        assert!(error.1.to_string().contains("namespace exhausted"));
     }
 }

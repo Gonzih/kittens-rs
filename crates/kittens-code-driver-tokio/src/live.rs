@@ -873,7 +873,18 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kittens_code_core::caps::Capped;
     use kittens_code_protocol::ids::EffectId;
+
+    fn live_config() -> LiveConfig {
+        LiveConfig {
+            endpoint_base_url: String::from("https://example.invalid/base/"),
+            api_key: String::from("secret"),
+            model: String::from("model-test"),
+            max_output_tokens: 512,
+            retry: retry_config(),
+        }
+    }
 
     fn retry_config() -> RetryConfig {
         RetryConfig {
@@ -884,6 +895,17 @@ mod tests {
             breaker_failure_threshold: 3,
             breaker_cooldown: Duration::from_secs(5),
         }
+    }
+
+    fn response(status: StatusCode, body: &str, retry_after: Option<&str>) -> reqwest::Response {
+        let mut builder = http::Response::builder().status(status);
+        if let Some(retry_after) = retry_after {
+            builder = builder.header(RETRY_AFTER, retry_after);
+        }
+        builder
+            .body(String::from(body))
+            .expect("test response")
+            .into()
     }
 
     #[test]
@@ -1046,5 +1068,541 @@ mod tests {
                 prompt_bytes: 1234,
             })
         );
+    }
+
+    #[test]
+    fn live_client_configuration_accepts_valid_input_and_rejects_each_invalid_bound() {
+        assert_eq!(RetryConfig::default().max_attempts, 4);
+        let client = LiveClient::new(live_config()).expect("valid live config");
+        assert_eq!(
+            client.endpoint.as_str(),
+            "https://example.invalid/base/v1/messages"
+        );
+        assert_eq!(client.model.as_ref(), "model-test");
+        assert_eq!(client.max_output_tokens, 512);
+        drop(
+            client.complete(
+                WindowLayout::new(
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::from("question"),
+                    Vec::new(),
+                    String::new(),
+                    Vec::new(),
+                )
+                .expect("window"),
+            ),
+        );
+
+        let mut cases = Vec::new();
+        let mut config = live_config();
+        config.endpoint_base_url = String::from("   ");
+        cases.push(config);
+        let mut config = live_config();
+        config.api_key.clear();
+        cases.push(config);
+        let mut config = live_config();
+        config.model = String::from("  ");
+        cases.push(config);
+        let mut config = live_config();
+        config.max_output_tokens = 0;
+        cases.push(config);
+        let mut config = live_config();
+        config.retry.max_attempts = 0;
+        cases.push(config);
+        let mut config = live_config();
+        config.retry.breaker_failure_threshold = 0;
+        cases.push(config);
+        let mut config = live_config();
+        config.retry.base_delay = Duration::from_secs(3);
+        config.retry.max_delay = Duration::from_secs(2);
+        cases.push(config);
+        for config in cases {
+            assert!(matches!(
+                LiveClient::new(config),
+                Err((ErrorCode::ConfigInvalid, _))
+            ));
+        }
+
+        let mut invalid_url = live_config();
+        invalid_url.endpoint_base_url = String::from("://bad");
+        assert!(matches!(
+            LiveClient::new(invalid_url),
+            Err((ErrorCode::ConfigInvalid, message)) if message.contains("invalid model endpoint")
+        ));
+        let mut invalid_scheme = live_config();
+        invalid_scheme.endpoint_base_url = String::from("ftp://example.invalid");
+        assert!(matches!(
+            LiveClient::new(invalid_scheme),
+            Err((ErrorCode::ConfigInvalid, message)) if message.contains("http or https")
+        ));
+        let mut invalid_header = live_config();
+        invalid_header.api_key = String::from("bad\nkey");
+        assert!(matches!(
+            LiveClient::new(invalid_header),
+            Err((ErrorCode::ConfigInvalid, message)) if message.contains("API-key header")
+        ));
+    }
+
+    #[tokio::test]
+    async fn live_completion_fails_fast_when_the_breaker_is_open() {
+        let mut config = live_config();
+        config.retry.breaker_failure_threshold = 1;
+        let client = LiveClient::new(config).expect("client");
+        client.breaker.record_failure(
+            Instant::now(),
+            &(ErrorCode::ModelOverloaded, String::from("busy")),
+        );
+        let result = client
+            .complete(
+                WindowLayout::new(
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::from("question"),
+                    Vec::new(),
+                    String::new(),
+                    Vec::new(),
+                )
+                .expect("window"),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err((ErrorCode::ModelOverloaded, message)) if message.contains("circuit is open")
+        ));
+    }
+
+    #[test]
+    fn retry_policy_covers_transport_elapsed_cap_and_delay_saturation() {
+        let config = retry_config();
+        let transport = AttemptFailure::transport("socket reset");
+        assert_eq!(transport.code, ErrorCode::ModelTransport);
+        assert_eq!(
+            retry_decision(
+                &config,
+                1,
+                &transport,
+                Duration::from_millis(50),
+                Duration::from_millis(25),
+            ),
+            RetryDecision::Retry(Duration::from_millis(225))
+        );
+        assert_eq!(
+            retry_decision(&config, 0, &transport, config.max_elapsed, Duration::ZERO,),
+            RetryDecision::GiveUp
+        );
+        assert_eq!(
+            exponential_delay(Duration::from_secs(1), 31, Duration::from_secs(7)),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            exponential_delay(Duration::MAX, 1, Duration::MAX),
+            Duration::MAX
+        );
+        assert_eq!(
+            AttemptFailure::terminal(ErrorCode::ModelAuth, "auth").into_model_error(),
+            (ErrorCode::ModelAuth, String::from("auth"))
+        );
+        assert_eq!(
+            retry_decision(
+                &config,
+                0,
+                &AttemptFailure::terminal(ErrorCode::ModelTransport, "bad request"),
+                Duration::ZERO,
+                Duration::ZERO,
+            ),
+            RetryDecision::GiveUp
+        );
+    }
+
+    #[tokio::test]
+    async fn http_failure_classifies_status_provider_type_and_retry_after() {
+        let cases = [
+            (
+                StatusCode::UNAUTHORIZED,
+                r#"{"error":{"message":"bad key"}}"#,
+                None,
+                ErrorCode::ModelAuth,
+                FailureClass::NonRetryable,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"type":"permission_error","message":"denied"}}"#,
+                None,
+                ErrorCode::ModelAuth,
+                FailureClass::NonRetryable,
+            ),
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "too large",
+                None,
+                ErrorCode::ModelContextLength,
+                FailureClass::NonRetryable,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"message":"context window exceeded"}}"#,
+                None,
+                ErrorCode::ModelContextLength,
+                FailureClass::NonRetryable,
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "limited",
+                Some("9"),
+                ErrorCode::ModelOverloaded,
+                FailureClass::Retryable,
+            ),
+            (
+                StatusCode::from_u16(529).expect("529"),
+                "overloaded",
+                None,
+                ErrorCode::ModelOverloaded,
+                FailureClass::Retryable,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":{"type":"overloaded_error","message":"busy"}}"#,
+                None,
+                ErrorCode::ModelOverloaded,
+                FailureClass::Retryable,
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "down",
+                Some("2"),
+                ErrorCode::ModelTransport,
+                FailureClass::Retryable,
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "ordinary bad request",
+                None,
+                ErrorCode::ModelTransport,
+                FailureClass::NonRetryable,
+            ),
+        ];
+        for (status, body, retry_after, code, class) in cases {
+            let failure = http_failure(response(status, body, retry_after)).await;
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.class, class);
+            if retry_after.is_some() {
+                assert!(failure.retry_after.is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn response_stream_adapter_parses_a_complete_canned_sse_body() {
+        let wire = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":3}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+        let outcome = parse_stream(response(StatusCode::OK, wire, None), 41)
+            .await
+            .expect("canned response parses");
+        assert_eq!(outcome.text, "hello");
+        assert_eq!(
+            outcome.usage,
+            Some(Usage {
+                prompt_tokens: 3,
+                prompt_bytes: 41,
+            })
+        );
+    }
+
+    #[test]
+    fn retry_after_parses_seconds_http_dates_and_invalid_values() {
+        assert_eq!(
+            parse_retry_after(Some(&HeaderValue::from_static("17"))),
+            Some(Duration::from_secs(17))
+        );
+        let future = SystemTime::now() + Duration::from_secs(30);
+        let value = HeaderValue::from_str(&httpdate::fmt_http_date(future)).expect("date header");
+        let parsed = parse_retry_after(Some(&value)).expect("future date");
+        assert!(parsed <= Duration::from_secs(30));
+        assert!(parsed >= Duration::from_secs(28));
+
+        let past = HeaderValue::from_str(&httpdate::fmt_http_date(
+            SystemTime::now() - Duration::from_secs(30),
+        ))
+        .expect("past date");
+        assert_eq!(parse_retry_after(Some(&past)), Some(Duration::ZERO));
+        assert_eq!(
+            parse_retry_after(Some(&HeaderValue::from_static("not-a-date"))),
+            None
+        );
+        assert_eq!(parse_retry_after(None), None);
+    }
+
+    #[test]
+    fn provider_error_context_detection_and_truncation_are_pure() {
+        assert_eq!(
+            provider_error(r#"{"error":{"type":"authentication_error","message":"bad key"}}"#),
+            (
+                Some(String::from("authentication_error")),
+                Some(String::from("bad key"))
+            )
+        );
+        assert_eq!(
+            provider_error(r#"{"type":"overloaded_error","message":"busy"}"#),
+            (
+                Some(String::from("overloaded_error")),
+                Some(String::from("busy"))
+            )
+        );
+        assert_eq!(provider_error("not-json"), (None, None));
+
+        assert!(is_context_error(Some("request_too_large"), "anything"));
+        for message in [
+            "context window exceeded",
+            "CONTEXT LENGTH too large",
+            "prompt is too long",
+            "too many input tokens",
+            "maximum context reached",
+        ] {
+            assert!(is_context_error(None, message));
+        }
+        assert!(!is_context_error(None, "ordinary bad request"));
+
+        let long = "é".repeat(MAX_ERROR_MESSAGE_CHARS + 10);
+        assert_eq!(
+            truncate_message(&long).chars().count(),
+            MAX_ERROR_MESSAGE_CHARS
+        );
+    }
+
+    #[test]
+    fn request_helpers_cover_fallback_tool_rendering_and_message_coalescing() {
+        assert!(parse_rendered_tool_call("missing-space").is_none());
+        assert!(parse_rendered_tool_call(" {\"x\":1}").is_none());
+        assert!(parse_rendered_tool_call("read not-json").is_none());
+        assert!(parse_rendered_tool_call("read []").is_none());
+        assert_eq!(wire_tool_id(99), "kc0_effect_99");
+
+        let mut messages = Vec::new();
+        push_content(
+            &mut messages,
+            "assistant",
+            json!({"type":"text","text":"one"}),
+        );
+        push_content(
+            &mut messages,
+            "assistant",
+            json!({"type":"text","text":"two"}),
+        );
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["content"].as_array().expect("content").len(), 2);
+        messages.push(json!({"role":"assistant","content":"not-an-array"}));
+        push_content(
+            &mut messages,
+            "assistant",
+            json!({"type":"text","text":"three"}),
+        );
+        assert_eq!(messages.len(), 3);
+
+        let window = WindowLayout::new(
+            String::new(),
+            String::new(),
+            String::new(),
+            String::from("question"),
+            vec![
+                TailItem::Message(String::from("untagged assistant")),
+                TailItem::ToolCall {
+                    call: EffectId(5),
+                    text: String::from("malformed"),
+                },
+                TailItem::ToolResult {
+                    call: EffectId(5),
+                    text: Capped::head("failed", 64, None),
+                },
+            ],
+            String::new(),
+            Vec::new(),
+        )
+        .expect("paired tail");
+        let request: Value = serde_json::from_slice(
+            &build_request_body(&window, "model", 10).expect("request body"),
+        )
+        .expect("request JSON");
+        assert_eq!(request["system"], "");
+        assert!(
+            request["messages"][1]["content"][1]["text"]
+                .as_str()
+                .expect("fallback text")
+                .contains("[tool_call 5] malformed")
+        );
+    }
+
+    #[test]
+    fn sse_decoder_handles_protocol_noise_finish_and_invalid_utf8() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder
+            .push(b": keepalive\r\nevent: ignored\r\ndata: first\r\ndata: second\r\n\r\n")
+            .expect("decode");
+        assert_eq!(events, vec![String::from("first\nsecond")]);
+        assert!(decoder.push(b"data: final").expect("pending").is_empty());
+        assert_eq!(
+            decoder.finish().expect("finish"),
+            vec![String::from("final")]
+        );
+
+        let mut invalid = SseDecoder::default();
+        assert!(
+            invalid
+                .push(&[b'd', b'a', b't', b'a', b':', b' ', 0xff, b'\n'])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stream_state_rejects_each_malformed_sequence() {
+        let mut state = StreamState::default();
+        assert!(state.accept("not-json").is_err());
+        assert!(state.accept(r#"{"type":"content_block_start"}"#).is_err());
+        assert!(
+            state
+                .accept(r#"{"type":"content_block_start","index":0}"#)
+                .is_err()
+        );
+        assert!(state
+            .accept(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use"}}"#)
+            .is_err());
+
+        state
+            .accept(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"read","input":{"path":"initial"}}}"#)
+            .expect("tool start");
+        assert!(state
+            .accept(r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"read"}}"#)
+            .is_err());
+        assert!(state.accept(r#"{"type":"content_block_delta"}"#).is_err());
+        assert!(
+            state
+                .accept(r#"{"type":"content_block_delta","delta":{"type":"input_json_delta"}}"#)
+                .is_err()
+        );
+        assert!(state
+            .accept(r#"{"type":"content_block_delta","index":99,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#)
+            .is_err());
+        assert!(state.accept(r#"{"type":"content_block_stop"}"#).is_err());
+        state
+            .accept(r#"{"type":"content_block_stop","index":99}"#)
+            .expect("unknown stop is additive");
+
+        let mut malformed_tool = StreamState::default();
+        malformed_tool
+            .accept(r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","name":"read"}}"#)
+            .expect("tool start");
+        malformed_tool
+            .accept(r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{"}}"#)
+            .expect("partial JSON is buffered");
+        assert!(
+            malformed_tool
+                .accept(r#"{"type":"content_block_stop","index":2}"#)
+                .is_err()
+        );
+
+        assert!(StreamState::default().finish(0).is_err());
+        assert!(
+            state.finish(0).is_err(),
+            "open tool makes the stream incomplete"
+        );
+    }
+
+    #[test]
+    fn stream_state_initial_tool_input_and_sse_error_classes_are_preserved() {
+        let mut state = StreamState::default();
+        for event in [
+            r#"{"type":"message_start","message":{"usage":{}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"prefix"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta"}}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"grep","input":{"pattern":"x"}}}"#,
+            r#"{"type":"content_block_delta","index":1,"delta":{"type":"future_delta"}}"#,
+            r#"{"type":"content_block_stop","index":1}"#,
+            r#"{"type":"message_stop"}"#,
+        ] {
+            state.accept(event).expect("valid additive event");
+        }
+        let outcome = state.finish(3).expect("complete stream");
+        assert_eq!(outcome.text, "prefix");
+        assert_eq!(outcome.tool_calls[0].name, "grep");
+        assert_eq!(outcome.tool_calls[0].args_json, "{\"pattern\":\"x\"}");
+        assert_eq!(outcome.usage, None);
+
+        for (provider_type, code, class) in [
+            (
+                "overloaded_error",
+                ErrorCode::ModelOverloaded,
+                FailureClass::Retryable,
+            ),
+            (
+                "rate_limit_error",
+                ErrorCode::ModelOverloaded,
+                FailureClass::Retryable,
+            ),
+            (
+                "authentication_error",
+                ErrorCode::ModelAuth,
+                FailureClass::NonRetryable,
+            ),
+            (
+                "permission_error",
+                ErrorCode::ModelAuth,
+                FailureClass::NonRetryable,
+            ),
+            (
+                "request_too_large",
+                ErrorCode::ModelContextLength,
+                FailureClass::NonRetryable,
+            ),
+            (
+                "invalid_request_error",
+                ErrorCode::ModelTransport,
+                FailureClass::NonRetryable,
+            ),
+            (
+                "unknown",
+                ErrorCode::ModelTransport,
+                FailureClass::Retryable,
+            ),
+        ] {
+            let event = json!({"type":"error", "error":{"type":provider_type,"message":"problem"}});
+            let failure = stream_error(&event);
+            assert_eq!(failure.code, code);
+            assert_eq!(failure.class, class);
+        }
+        let fallback = stream_error(&json!({"type":"error","error":{}}));
+        assert_eq!(fallback.message, "provider returned an SSE error");
+    }
+
+    #[test]
+    fn jitter_breaker_default_error_and_poison_recovery_are_bounded() {
+        let jitter = Jitter::new(0x1234_5678);
+        assert_eq!(jitter.next(Duration::ZERO), Duration::ZERO);
+        assert!(jitter.next(Duration::from_millis(10)) <= Duration::from_millis(10));
+        let _ = jitter.next(Duration::MAX);
+
+        let breaker = CircuitBreaker::new(1, Duration::from_secs(2));
+        let now = Instant::now();
+        {
+            let mut state = lock_unpoisoned(&breaker.state);
+            state.open_until = Some(now + Duration::from_secs(1));
+        }
+        let error = breaker.before_call(now).expect("open breaker");
+        assert_eq!(error.0, ErrorCode::ModelTransport);
+        assert!(error.1.contains("model circuit is open"));
+
+        let mutex = Arc::new(Mutex::new(0_u8));
+        let poison = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _guard = poison.lock().expect("lock");
+            panic!("poison test mutex");
+        })
+        .join();
+        *lock_unpoisoned(&mutex) = 1;
+        assert_eq!(*lock_unpoisoned(&mutex), 1);
     }
 }

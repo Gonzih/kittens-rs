@@ -564,6 +564,7 @@ dependencies = [
 name = "kittens-code-driver-tokio"
 version = "0.1.1"
 dependencies = [
+ "http",
  "httpdate",
  "kittens",
  "kittens-code-core",
