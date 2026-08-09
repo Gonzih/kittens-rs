@@ -74,8 +74,9 @@ optional draw-target integration. It additionally records the scoped Xtensa
 compile/link result and the reviewed waker/critical-section boundary. This
 section is **normative** for the K2R-0 host slice, superseding revision 2's
 provisional candidates. Revision 9 specifies the kernel-admitted completion
-source below. Its implementation and evidence remain K2R-0A open item 3 until
-the section-8 reactor and portable-link oracles pass.
+source below. The section-8 real-reactor and portable-link oracles now close
+K2R-0A item 3 with host + portable-link scope; target execution and silicon
+behavior remain outside that closure.
 
 ### 6.1 Geometry and identity
 
@@ -373,9 +374,10 @@ transfer behavior, the kernel-admitted `reactor!` path, or the blocking
 
 Revision 9 selects the remaining kernel carrier shape:
 `OptionalInlineOneShot<InFlight<...>>`, with the future stored inline under the
-already-demonstrated outer-`Unpin` bounds. This specification change does not
-close open item 3. Closure requires the section-8 real-`reactor!` traces and an
-external no-std consumer linked on both required portable targets.
+already-demonstrated outer-`Unpin` bounds. The section-8 real-`reactor!` traces
+and external no-std consumer links on both required portable targets have now
+run, closing item 3 with host + portable-link scope. The manual Xtensa probe
+does not extend that result to target-side reactor execution or silicon.
 
 **Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
 
