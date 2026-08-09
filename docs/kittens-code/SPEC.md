@@ -28,6 +28,10 @@
   crates.io publication, plus deferred KC0 scope (#7 evidence gates, #8–#13).
   Freezing pins the interface so those fixes proceed against a stable contract
   rather than a moving one — "we can always improve, but stop re-speccing."
+  **v0.8 correctness clarification (review input 20 findings #8/#13):**
+  Q5 now pins the executor-to-engine cap/update seam and the compiled
+  aggregate-meter ceilings; K2 pins same-directory atomic replacement for
+  driver-tokio writes/edits plus its explicitly bounded residual TOCTOU.
 - Controlling evidence slice: section 14 (KC0) with its **exhaustive import
   ledger** (input 15 F14 — no more ranges). Everything not imported there is
   candidate design retained for lineage, per the root SPEC §37 discipline.
@@ -422,7 +426,25 @@ its `TurnEpoch` (R4 — including `TimerFired`).
   events. Meter charging split (input 16 N5): **value caps truncate** with
   metadata (`Capped<…>`) and never error; **aggregate/query meters error**
   (`verb_error{cause: budget}` in-script; `budget_exhausted` at query/turn
-  level). P8's disambiguation rule says exactly this (updated with it).
+  level). P8's disambiguation rule says exactly this (updated with it). The
+  only model-visible rendering of a completed executor line or final answer
+  is `Capped<VerbOutput>`; `Bound::Digest` and every `AskJoin`/digest-list
+  slot retain `Capped<AskDigest>`, never a raw answer `String`. Record/chunk
+  bindings may remain uncapped internally because later verbs need their
+  complete selections, but they are continuation state, not a root-window
+  insertion path. Every material meter change is drained as a typed executor
+  update at the executor→engine seam, where core publishes
+  `Event::BudgetUpdate { kind, used, limit }`.
+
+  Aggregate runtime limits are clamped on executor admission to these KC0
+  compiled maxima (value-cap maxima remain the `CapKind::HARD_CEILING`
+  constants): verb count 4,096; recursion depth 8; total subcalls 1,024;
+  parallel subcalls 64; partition count 4,096; selected bytes 64 MiB;
+  scanned pages/page effects 65,536 each; scanned bytes 1 GiB; suspended
+  queries 64; continuation memory 64 MiB; per-ask wall clock 3,600,000 ms;
+  per-ask tokens 1,048,576. Clamping is a private-runtime-state admission
+  check; callers may declare larger wire values but cannot enlarge the
+  executor's effective limits. Gate G3/G3b.
 - Q6. L3 search: `grep` over store search-page effects; the exact pattern
   dialect is **versioned and recorded in the S6 header** (`l3_dialect_version`
   — input 16 N7). KC0 pins dialect 1.0.0 = `regex` crate v1.x with default
@@ -463,6 +485,20 @@ its `TurnEpoch` (R4 — including `TimerFired`).
   take argv (never a shell string), cwd, bounded env + stdin, deliver
   sequenced stdout/stderr progress records, exit status terminal, deadline,
   cancellation. Gate G7e (contract conformance tests per driver).
+  For KC0 driver-tokio, `write` and `edit` create a fresh temp file in the
+  target's canonicalized parent, fully write and sync it, re-check the leaf,
+  then rename over the target on the same filesystem. A crash can therefore
+  leave the old target, the complete new target, and at worst an unreferenced
+  temp file, but never a half-written target. Temp creation is create-new
+  (final-component no-follow), and target-leaf symlink swaps are refused or
+  atomically replaced as directory entries, never followed. The driver
+  repeats component symlink/containment checks after directory creation and
+  canonicalizes the parent immediately before temp creation. **Known KC0
+  limitation / negative control:** without handle-relative `openat`-family
+  operations, an attacker concurrently replacing an ancestor after that last
+  canonicalization can still win a residual check-to-use race; multi-process
+  hostile workspace mutation is not claimed safe. G7e carries leaf-swap,
+  interrupted-write, and interrupted-edit adversarial fixtures.
 - K3. `SessionCapabilities` (F11): drivers declare at startup which effect
   families exist (exec: no on web/MCU); tool schemas are advertised to the
   model ONLY for capable families — a data variant compiling is not a
@@ -760,6 +796,10 @@ Inline errors bind to `%N` + query trace record, no top-level ErrorEvent
   now fix `recall`'s JSON argument, query/child effect identity, singleton
   sub-model child effects, and existing tool-result/cap/ledger reuse. This
   closes review input 19 finding #6 without changing protocol wire shapes.
+- 2026-08-09: v0.8 correctness clarification — review input 20 findings
+  #8/#13 pin branded RLM surface outputs, typed aggregate meter updates and
+  maxima, plus driver-tokio same-directory atomic replacement and its honest
+  residual ancestor-swap TOCTOU boundary.
 - Next: close D2/D4 exact shapes; operator review; freeze KC0 sections.
   The Codex review cycle is concluded at input 17 — remaining items are
   drafting (D2/D4) and human judgment, not review findings. Implementation
