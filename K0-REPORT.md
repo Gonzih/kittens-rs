@@ -45,6 +45,27 @@ waiters, and arbitrary retained one-shot futures. Mpsc and the no-std sources do
 not add adapter allocations. Expansion inspection found no arbitration box or
 other generated allocation.
 
+### Post-K0 profile-driven source extension (2026-08-09)
+
+**Fact:** root SPEC section 37.6.1 now admits one portable,
+allocation-free `OptionalInlineOneShot<F>` for `F: Future + Unpin`. The sealed
+source owns `Option<F>` inline, is locally armed only, yields an owned output,
+becomes dormant before its handler, and implements neither drain nor backlog.
+The existing heap-pinned Tokio one-shot adapters are unchanged.
+
+**Observation:** deterministic kernel tests cover dormant polling, rejected
+replacement, waker replacement, completion, drop, and rearm. The render
+profile adds real generated-reactor traces for both selection-loss positions,
+and its external consumer links the same-carrier rearm and graceful-drain path
+without allocation on Thumb and wasm.
+
+**Recommendation:** treat this as a bounded post-K0 adapter admission, not K0
+closure. The carrier establishes persistent storage and source admission; the
+inner future still owns producer latching, wake, cancellation, and drop truth.
+Direct polling/await, `future_mut` replacement, arbitrary broken futures, and
+whole-source drop remain compiling escapes. The three formal K0 gates in the
+Decision section remain open and unchanged.
+
 ## Expansion and scaling evidence
 
 Measurements used `rustc 1.96.0 (ac68faa20 2026-05-25)` and

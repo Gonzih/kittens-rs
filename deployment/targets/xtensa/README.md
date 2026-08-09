@@ -117,14 +117,36 @@ TE timing, or visual output — those are board-HIL gates listed in
 `crates/kittens-render/TRACE-MANIFEST.md` and the K2R-1 checklist in
 `crates/kittens-render/SPEC.md`. Do not claim them from a build log.
 
-## 5. CI status
+## 5. CI link gate (Fact — configured 2026-08-09)
 
-The Xtensa build is **not yet a CI gate** (Fact as of 2026-08-09): GitHub
-Actions would need espup installation + toolchain caching. Deferred with
-gate: add a workflow job running the section-2 command for
-`fixtures/render-xtensa-probe` once cache strategy is decided. Until then
-the gate is run locally before merging changes to any Xtensa fixture or to
-`crates/kittens-render`'s transfer surface.
+The `xtensa-link` GitHub Actions job runs the section-2 release build for
+`fixtures/render-xtensa-probe` on every push and pull request. Its enforcement
+layer is the CI workflow plus explicit artifact inspection: the job runs
+`cargo +esp build --release --locked --target xtensa-esp32s3-none-elf`, then
+requires `file` and the Xtensa `readelf` to identify the result as a linked
+Tensilica Xtensa executable. `cargo check` is not a substitute.
+
+The job pins `esp-rs/xtensa-toolchain` v1.7.0 by commit SHA, selects Xtensa Rust
+1.95.0.0, limits the installed GCC targets to ESP32-S3, and asserts the full
+observed GCC mapping (`15.2.0_20250920`) before building. The action itself
+downloads the current espup release; espup is **not** version-pinned by the
+action. An espup mapping epoch in the cache key plus the exact compiler/GCC
+assertions make any changed mapping fail loudly, but do not turn that upstream
+download into a reproducible pin. The cache strategy has two deliberately
+separate parts:
+
+- cache the named `esp` toolchain under an espup-mapping/compiler/GCC key, while
+  still running espup on a cache hit so its version/path checks reuse the
+  matching Rust, GCC, and LLVM components and regenerate the environment
+  export;
+- cache Cargo registry and git downloads under the fixture lockfile key, but
+  **do not cache the fixture target directory**, so every job links the current
+  source rather than accepting a previously linked ELF.
+
+The build shell copies the action's export to `$HOME/export-esp.sh` and sources
+that canonical path before invoking Cargo. A green job closes only the repeatable
+CI compile/link gate described in section 4; it does not close any board-HIL or
+silicon-behavior gate.
 
 ## 6. Troubleshooting (Fact — each observed in this repo)
 

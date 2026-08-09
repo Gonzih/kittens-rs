@@ -30,17 +30,21 @@ the outer spare, and starts a second transfer with the recovered driver.
 
 **Observation:** a successful link closes only the HAL API, vector-binding,
 Rust ownership, no-allocation, and no-self-reference feasibility question.
-It does not establish behavior on silicon.
+This fixture manually polls `InFlight`; it does not establish target-side
+generated-reactor execution or behavior on silicon.
 
-**Observation:** SPEC revision 8 changed waker registration after the prior
-linked artifact. The replacement command output and artifact metadata are
-**PENDING REBUILD EVIDENCE** in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`.
+**Fact:** the post-revision-8 replacement command output and linked artifact
+metadata are recorded in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`. The
+`xtensa-link` CI job repeats the release link from an uncached target directory
+and inspects the resulting Xtensa executable; it does not substitute
+`cargo check` for linking.
 
 **Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
 visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
 
-**Gap: a kernel-admitted completion source and real `kittens::reactor!`
-fixture remain a separate open gate (no data exists).**
+**Fact:** the separate kernel-admitted completion-source gate is closed with
+host + portable-link scope by the real-reactor host oracles and the Thumb/wasm
+downstream fixture. This Xtensa probe is an explicit non-control for that row.
 
 **Gap: the blocking `write_region` transport integration remains gated; this
 probe compiles the raw SH8601 pixel phase and does not claim a complete display

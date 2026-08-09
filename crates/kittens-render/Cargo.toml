@@ -19,6 +19,8 @@ embedded-graphics = ["dep:embedded-graphics"]
 embedded-graphics = { workspace = true, optional = true }
 
 [dev-dependencies]
+kittens.workspace = true
+tokio.workspace = true
 trybuild.workspace = true
 
 [lints]

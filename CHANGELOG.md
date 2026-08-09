@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Admit the portable, allocation-free `OptionalInlineOneShot` source for
+  `Future + Unpin` and drive render `InFlight` completion through a real
+  generated reactor. Deterministic tests cover both selection-loss positions,
+  same-carrier stripe rearm, graceful drain/settlement, and post-exit disarm;
+  the external consumer executes the lifecycle on host and links it for Thumb
+  and wasm. The carrier proves retained storage, not arbitrary-future honesty,
+  owning-sweep delivery, mutable-handler replacement safety, target execution,
+  or silicon behavior; the three formal K0 gates remain open.
 - Make `kittens-code` the public website's flagship demo with its complete
   four-crate map, JSONL-to-effect turn flow, transcript/context/RLM/budget
   laws, DISPLAY/ORCHESTRATION/COGNITION layering, deterministic offline quick
@@ -10,6 +18,13 @@
   The adjacent status boundary states that source is not yet on `main` and
   that full reactor wiring, E1 evaluation, MCU drivers, and stable APIs remain
   open rather than allowing flagship placement to overstate the evidence.
+- Promote the standalone ESP32-S3 render probe into CI as a real linked-ELF
+  gate: select the exact Xtensa Rust compiler and expected GCC mapping, cache
+  the installed toolchain and Cargo downloads (not the target directory), run
+  the locked release build, and inspect the output with both `file` and Xtensa
+  `readelf`. Repair stale post-revision-8 evidence wording while retaining board
+  HIL, silicon wake, kernel admission, and physical display behavior as open
+  gates.
 - Launch the public Kittens website on GitHub Pages: an evidence-led,
   accessible, dependency-free introduction to the coverage thesis, shipped
   kernel/TUI/render surfaces, lean reactor grammar, honest non-guarantees, and

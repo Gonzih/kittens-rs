@@ -14,7 +14,7 @@
     {
       "id": "source",
       "term": "persistent source",
-      "public_items": ["kittens::source::ReactorSource", "kittens::source::Latched", "kittens::source::FixedQueue"],
+      "public_items": ["kittens::source::ReactorSource", "kittens::source::Latched", "kittens::source::FixedQueue", "kittens::source::OptionalInlineOneShot"],
       "canonical_example": "crates/kittens/examples/minimal.rs",
       "anti_pattern": "crates/kittens/tests/ui/temporary_source.rs",
       "diagnostics": ["KTR006", "KTR009", "KTR010", "KTR015", "SRC001"],

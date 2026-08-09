@@ -1,15 +1,19 @@
-#![cfg_attr(target_os = "none", no_std)]
-#![cfg_attr(target_os = "none", no_main)]
+#![cfg_attr(any(target_os = "none", target_arch = "wasm32"), no_std)]
+#![cfg_attr(any(target_os = "none", target_arch = "wasm32"), no_main)]
 
-#[cfg(target_os = "none")]
+use core::convert::Infallible;
+use core::future::Future;
+#[cfg(any(target_os = "none", target_arch = "wasm32"))]
 use core::panic::PanicInfo;
 use core::task::{Context, Poll, Waker};
 
+use kittens::reactor::Control;
+use kittens::source::OptionalInlineOneShot;
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
-use kittens_render::sweep::SweepPlan;
+use kittens_render::sweep::{Sweep, SweepPlan};
 use kittens_render::transfer::{
-    FlightStarter, OwnedTransfer, Recovered, StartPermit, TransferOutcome,
+    FlightStarter, InFlight, OwnedTransfer, Recovered, Settled, StartPermit, TransferOutcome,
 };
 
 #[derive(Debug)]
@@ -89,124 +93,216 @@ impl FlightStarter for ProbeStart {
     }
 }
 
-/// Exercises the public render proof chain from a separate crate so the
-/// bare-metal gate links real downstream use rather than only building the
-/// profile rlib.
-fn linked_render_path(stripe_height: u16) -> bool {
-    let Ok(plan) = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, stripe_height) else {
-        return false;
-    };
+type ProbeFlight = InFlight<ProbeTransfer, [u8; 1]>;
+type ProbeSettlement = Settled<ProbeTransport, [u8; 1], [u8; 1]>;
 
-    let mut demand = FrameDemand::new(0, plan);
-    demand.request();
-    let Some(mut sweep) = demand.begin_sweep(Tick(0), 0xa5_u8) else {
-        return false;
-    };
-    let Some(target) = sweep.next_target() else {
-        return false;
-    };
-    let expected_region = target.region();
-
-    let transport = ProbeTransport {
-        sequence: 0,
-        written_region: None,
-    };
-    let Ok(mut in_flight) = target.start_flight(
-        [0xc3],
-        ProbeStart {
-            transport,
-            buffer: [0x5a],
-        },
-    ) else {
-        return false;
-    };
-    let mut cx = Context::from_waker(Waker::noop());
-    let Poll::Ready(settled) = in_flight.poll_complete(&mut cx) else {
-        return false;
-    };
-    if settled.region() != expected_region {
-        return false;
-    }
-
-    let (transport, sent, spare, stripe_settlement) = settled.into_parts();
-    if sweep.settle(stripe_settlement) != Ok(TransferOutcome::Completed) {
-        return false;
-    }
-    let Ok((written_sweep, snapshot)) = sweep.finish() else {
-        return false;
-    };
-    let Ok(disposition) = demand.finish_written(written_sweep, Tick(1)) else {
-        return false;
-    };
-
-    if disposition != WrittenDisposition::Effective
-        || demand.is_dirty()
-        || demand.sweeping().is_some()
-        || transport.sequence != 1
-        || transport.written_region != Some(expected_region)
-        || sent != [0x5a]
-        || spare != [0xc3]
-        || snapshot != 0xa5
-    {
-        return false;
-    }
-
-    // Shutdown after acceptance must drive the transfer to a real cancelled
-    // settlement before the poisoned sweep may abort. Rotate the resources
-    // recovered above so the fixture proves both buffers return again.
-    demand.request();
-    let Some(mut shutdown_sweep) = demand.begin_sweep(Tick(1), 0x3c_u8) else {
-        return false;
-    };
-    let Some(shutdown_target) = shutdown_sweep.next_target() else {
-        return false;
-    };
-    let shutdown_region = shutdown_target.region();
-    let Ok(mut shutdown_flight) = shutdown_target.start_flight(
-        sent,
-        ProbeStart {
-            transport,
-            buffer: spare,
-        },
-    ) else {
-        return false;
-    };
-
-    shutdown_flight.begin_drain();
-    if !shutdown_flight.is_draining() {
-        return false;
-    }
-    let Poll::Ready(cancelled) = shutdown_flight.poll_complete(&mut cx) else {
-        return false;
-    };
-    if cancelled.outcome() != TransferOutcome::Cancelled || cancelled.region() != shutdown_region {
-        return false;
-    }
-
-    let (transport, cancelled_sent, cancelled_spare, settlement) = cancelled.into_parts();
-    if shutdown_sweep.settle(settlement) != Ok(TransferOutcome::Cancelled)
-        || !shutdown_sweep.is_poisoned()
-    {
-        return false;
-    }
-    let Ok((aborted, shutdown_snapshot)) = shutdown_sweep.abort() else {
-        return false;
-    };
-    if demand.finish_failed(aborted, Tick(1)).is_err() {
-        return false;
-    }
-
-    demand.is_dirty()
-        && demand.sweeping().is_none()
-        && demand.full_repaint_required()
-        && transport.sequence == 2
-        && transport.written_region == Some(shutdown_region)
-        && cancelled_sent == [0xc3]
-        && cancelled_spare == [0x5a]
-        && shutdown_snapshot == 0x3c
+struct Sources {
+    completion: OptionalInlineOneShot<ProbeFlight>,
 }
 
-#[cfg(target_os = "none")]
+struct RenderRun {
+    demand: FrameDemand,
+    sweep: Option<Sweep<u8>>,
+    successful_stripes: u16,
+    shutdown_phase: bool,
+    drain_requested: bool,
+    invalid: bool,
+}
+
+impl RenderRun {
+    fn start() -> Option<(Self, Sources)> {
+        // Two stripes force the successful path to rearm the same carrier
+        // before the later shutdown flight exercises its borrowed drain hook.
+        let plan = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, 224).ok()?;
+        let mut demand = FrameDemand::new(0, plan);
+        demand.request();
+        let mut sweep = demand.begin_sweep(Tick(0), 0xa5_u8)?;
+        let target = sweep.next_target()?;
+        let flight = target
+            .start_flight(
+                [0xc3],
+                ProbeStart {
+                    transport: ProbeTransport {
+                        sequence: 0,
+                        written_region: None,
+                    },
+                    buffer: [0x5a],
+                },
+            )
+            .ok()?;
+
+        Some((
+            Self {
+                demand,
+                sweep: Some(sweep),
+                successful_stripes: 0,
+                shutdown_phase: false,
+                drain_requested: false,
+                invalid: false,
+            },
+            Sources {
+                completion: OptionalInlineOneShot::from_future(flight),
+            },
+        ))
+    }
+
+    fn handle_settlement(
+        &mut self,
+        completion: &mut OptionalInlineOneShot<ProbeFlight>,
+        settled: ProbeSettlement,
+    ) -> Control<bool> {
+        // The carrier removes the completed future before this handler gets
+        // its owned settlement, which is what makes immediate rearm sound.
+        if self.invalid || !completion.is_dormant() {
+            return Control::Stop(false);
+        }
+        let region = settled.region();
+        let outcome = settled.outcome();
+        let (transport, sent, spare, settlement) = settled.into_parts();
+        let Some(mut sweep) = self.sweep.take() else {
+            return Control::Stop(false);
+        };
+
+        if transport.written_region != Some(region) || sweep.settle(settlement) != Ok(outcome) {
+            return Control::Stop(false);
+        }
+
+        if self.shutdown_phase {
+            if !self.drain_requested
+                || outcome != TransferOutcome::Cancelled
+                || !sweep.is_poisoned()
+            {
+                return Control::Stop(false);
+            }
+            let Ok((aborted, snapshot)) = sweep.abort() else {
+                return Control::Stop(false);
+            };
+            if self.demand.finish_failed(aborted, Tick(1)).is_err() {
+                return Control::Stop(false);
+            }
+
+            return Control::Stop(
+                snapshot == 0x3c
+                    && self.demand.is_dirty()
+                    && self.demand.sweeping().is_none()
+                    && self.demand.full_repaint_required()
+                    && transport.sequence == 3
+                    && sent == [0x5a]
+                    && spare == [0xc3],
+            );
+        }
+
+        if outcome != TransferOutcome::Completed {
+            return Control::Stop(false);
+        }
+        self.successful_stripes += 1;
+
+        if let Some(target) = sweep.next_target() {
+            let Ok(flight) = target.start_flight(
+                sent,
+                ProbeStart {
+                    transport,
+                    buffer: spare,
+                },
+            ) else {
+                return Control::Stop(false);
+            };
+            self.sweep = Some(sweep);
+            return match completion.arm(flight) {
+                Ok(()) => Control::Continue,
+                Err(_) => Control::Stop(false),
+            };
+        }
+
+        let Ok((written, snapshot)) = sweep.finish() else {
+            return Control::Stop(false);
+        };
+        if self.demand.finish_written(written, Tick(1)) != Ok(WrittenDisposition::Effective)
+            || snapshot != 0xa5
+            || self.successful_stripes != 2
+            || self.demand.is_dirty()
+            || self.demand.sweeping().is_some()
+            || transport.sequence != 2
+        {
+            return Control::Stop(false);
+        }
+
+        // Shutdown owns a real accepted flight. It rearms the same carrier;
+        // `before_poll` below requests cancellation through `future_mut`, and
+        // the reactor must still deliver the cancelled settlement before stop.
+        self.demand.request();
+        let Some(mut shutdown_sweep) = self.demand.begin_sweep(Tick(1), 0x3c_u8) else {
+            return Control::Stop(false);
+        };
+        let Some(target) = shutdown_sweep.next_target() else {
+            return Control::Stop(false);
+        };
+        let Ok(flight) = target.start_flight(
+            sent,
+            ProbeStart {
+                transport,
+                buffer: spare,
+            },
+        ) else {
+            return Control::Stop(false);
+        };
+        self.sweep = Some(shutdown_sweep);
+        self.shutdown_phase = true;
+        match completion.arm(flight) {
+            Ok(()) => Control::Continue,
+            Err(_) => Control::Stop(false),
+        }
+    }
+}
+
+/// Exercises the public render proof chain from a separate crate through a
+/// generated reactor so the portable gates link real source admission,
+/// successful settlement/rearm, and graceful shutdown drain.
+async fn reactor_render_path(
+    state: &mut RenderRun,
+    sources: &mut Sources,
+) -> Result<bool, Infallible> {
+    kittens::reactor! {
+        policy {
+            selection: biased;
+            required_phases: [before_poll];
+        }
+
+        /// Once shutdown owns an accepted flight, cancellation must borrow
+        /// that exact retained future and still settle through the source arm.
+        before_poll {
+            if state.shutdown_phase && !state.drain_requested {
+                if let Some(flight) = sources.completion.future_mut() {
+                    flight.begin_drain();
+                    state.drain_requested = true;
+                } else {
+                    state.invalid = true;
+                }
+            }
+            Ok(())
+        }
+
+        /// Completion owns every resource, so the handler can settle its
+        /// sweep before rearming the same dormant carrier with the next flight.
+        #[source(completion)]
+        #[readiness(quiescent)]
+        settled = sources.completion => {
+            Ok(state.handle_settlement(&mut sources.completion, settled))
+        }
+    }
+}
+
+fn linked_render_path() -> bool {
+    let Some((mut state, mut sources)) = RenderRun::start() else {
+        return false;
+    };
+    let future = reactor_render_path(&mut state, &mut sources);
+    let mut future = core::pin::pin!(future);
+    let mut cx = Context::from_waker(Waker::noop());
+    matches!(future.as_mut().poll(&mut cx), Poll::Ready(Ok(true)))
+}
+
+#[cfg(any(target_os = "none", target_arch = "wasm32"))]
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     loop {
@@ -214,13 +310,13 @@ fn panic(_info: &PanicInfo<'_>) -> ! {
     }
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", target_arch = "wasm32"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     // Keep the linked downstream proof-chain path live in the optimized
     // binary; this fixture is evidence about a consumer link, not only type
     // checking.
-    let linked = linked_render_path(core::hint::black_box(448));
+    let linked = linked_render_path();
     core::hint::black_box(linked);
 
     loop {
@@ -228,7 +324,7 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(any(target_os = "none", target_arch = "wasm32")))]
 fn main() {
-    assert!(linked_render_path(448));
+    assert!(linked_render_path());
 }

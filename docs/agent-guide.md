@@ -39,6 +39,18 @@ reviewed Kittens adapter. For a cancellation-awkward producer, give an ordinary
 owned task/thread the operation and expose its output through an admitted mpsc
 source. K0 has no hidden spawn, scope helper, or unchecked escape.
 
+For a portable, no-allocation one-shot operation whose future is `Unpin`, use
+`source::OptionalInlineOneShot<F>`. It is locally armed only: create it dormant
+with `new`, install work with `arm`, and rearm from a handler or phase whose
+successful continuation begins the next arbitration. `future_mut` gives
+optional borrowed access for an operation-specific drain request. Because it
+returns ordinary `&mut F`, replacing the installed future is a compiling raw
+escape; the canonical render path uses the borrow only for `begin_drain`. The
+carrier does not schedule a wake when armed, validate the inner future's
+producer semantics, or return resources when the source/reactor is dropped.
+The heap-pinned Tokio `OptionalOneShot` remains the spelling for retained
+`!Unpin` host futures.
+
 The source borrow ends before each handler. `after_event` runs once only after a
 whole service window whose handlers all return `Ok(Control::Continue)`. It does
 not run after `Stop`, `Err`, or panic. Priority never preempts a handler or

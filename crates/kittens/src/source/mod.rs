@@ -5,6 +5,8 @@
 //! promised by its adapter. It does not promise rollback, repeat safety, async
 //! cleanup, or event delivery after the whole source/reactor is dropped.
 
+use core::future::Future;
+use core::pin::Pin;
 use core::task::{Context, Poll};
 
 mod sealed {
@@ -171,6 +173,98 @@ impl<T> AlreadyArmed<T> {
     /// Returns the item that was not installed.
     pub fn into_inner(self) -> T {
         self.item
+    }
+}
+
+/// A locally armed, allocation-free carrier for one inline future.
+///
+/// The carrier begins dormant, retains one installed future across reactor
+/// arbitrations, and becomes dormant before yielding that future's owned
+/// output. [`Self::arm`] requires exclusive access and does not wake the
+/// reactor, so supported rearming happens before reactor entry or inside a
+/// handler or phase whose successful continuation starts another arbitration.
+/// Arming from another execution context after a pending poll is unsupported.
+///
+/// Admission of this carrier does not establish the inner future's producer
+/// latching, wake registration, cancellation, or drop behavior. Dropping the
+/// carrier synchronously drops an installed future and returns no resources.
+pub struct OptionalInlineOneShot<F: Future + Unpin> {
+    future: Option<F>,
+}
+
+// The contract keeps `new` as the single canonical dormant constructor;
+// `Default::default` would add a second spelling for the same operation.
+#[allow(clippy::new_without_default)]
+impl<F> OptionalInlineOneShot<F>
+where
+    F: Future + Unpin,
+{
+    /// Creates a dormant carrier.
+    pub const fn new() -> Self {
+        Self { future: None }
+    }
+
+    /// Creates a carrier armed with `future`.
+    pub const fn from_future(future: F) -> Self {
+        Self {
+            future: Some(future),
+        }
+    }
+
+    /// Installs one future without replacing live work.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlreadyArmed`] containing `future` when another future is
+    /// already installed.
+    pub fn arm(&mut self, future: F) -> Result<(), AlreadyArmed<F>> {
+        if self.future.is_some() {
+            Err(AlreadyArmed { item: future })
+        } else {
+            self.future = Some(future);
+            Ok(())
+        }
+    }
+
+    /// Borrows the installed future for operation-specific control.
+    ///
+    /// This mutable-borrow API is an explicit escape surface: ordinary Rust
+    /// permits callers to replace `F` through [`core::mem::replace`]. Once
+    /// callers do so, the carrier cannot establish that the originally armed
+    /// future was the one retained. This method cannot make the carrier's
+    /// `Option` dormant; successful completion remains the only supported
+    /// in-place removal path, while dropping the carrier drops the future.
+    pub fn future_mut(&mut self) -> Option<&mut F> {
+        self.future.as_mut()
+    }
+
+    /// Reports whether no future is installed.
+    pub const fn is_dormant(&self) -> bool {
+        self.future.is_none()
+    }
+}
+
+impl<F> sealed::Sealed for OptionalInlineOneShot<F> where F: Future + Unpin {}
+
+impl<F> ReactorSource for OptionalInlineOneShot<F>
+where
+    F: Future + Unpin,
+{
+    type Item = F::Output;
+    type Readiness = readiness::Quiescent;
+
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Self::Item> {
+        let Some(future) = self.future.as_mut() else {
+            return Poll::Pending;
+        };
+
+        match Pin::new(future).poll(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(output) => {
+                self.future = None;
+                Poll::Ready(output)
+            }
+        }
     }
 }
 

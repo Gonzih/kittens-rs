@@ -23,6 +23,7 @@ help: the trait `ReactorSource` is not implemented for `VendorWaiter`
              Mpsc<T, C>
              OneShot<F>
              OptionalDeadline
+             OptionalInlineOneShot<F>
              OptionalMpsc<T, C>
              OptionalOneShot<F>
 note: required by a bound in `kittens::__private::assert_SRC001_reactor_source_is_admitted__repair_use_retained_or_channel`

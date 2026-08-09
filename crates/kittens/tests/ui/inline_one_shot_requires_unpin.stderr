@@ -1,0 +1,40 @@
+error[E0277]: `PhantomPinned` cannot be unpinned
+  --> tests/ui/inline_one_shot_requires_unpin.rs:21:13
+   |
+21 |     let _ = OptionalInlineOneShot::from_future(PinnedFuture {
+   |             ^^^^^^^^^^^^^^^^^^^^^ within `PinnedFuture`, the trait `Unpin` is not implemented for `PhantomPinned`
+   |
+   = note: consider using the `pin!` macro
+           consider using `Box::pin` if you need to access the pinned value outside of the current scope
+note: required because it appears within the type `PinnedFuture`
+  --> tests/ui/inline_one_shot_requires_unpin.rs:8:8
+   |
+ 8 | struct PinnedFuture {
+   |        ^^^^^^^^^^^^
+note: required by a bound in `OptionalInlineOneShot`
+  --> src/source/mod.rs
+   |
+   | pub struct OptionalInlineOneShot<F: Future + Unpin> {
+   |                                              ^^^^^ required by this bound in `OptionalInlineOneShot`
+
+error[E0277]: `PhantomPinned` cannot be unpinned
+  --> tests/ui/inline_one_shot_requires_unpin.rs:21:13
+   |
+21 |       let _ = OptionalInlineOneShot::from_future(PinnedFuture {
+   |  _____________^
+22 | |         _pin: PhantomPinned,
+23 | |     });
+   | |______^ within `PinnedFuture`, the trait `Unpin` is not implemented for `PhantomPinned`
+   |
+   = note: consider using the `pin!` macro
+           consider using `Box::pin` if you need to access the pinned value outside of the current scope
+note: required because it appears within the type `PinnedFuture`
+  --> tests/ui/inline_one_shot_requires_unpin.rs:8:8
+   |
+ 8 | struct PinnedFuture {
+   |        ^^^^^^^^^^^^
+note: required by a bound in `OptionalInlineOneShot`
+  --> src/source/mod.rs
+   |
+   | pub struct OptionalInlineOneShot<F: Future + Unpin> {
+   |                                              ^^^^^ required by this bound in `OptionalInlineOneShot`

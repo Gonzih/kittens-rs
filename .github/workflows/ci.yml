@@ -15,7 +15,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: clippy,rustfmt
-          targets: thumbv7em-none-eabi
+          targets: thumbv7em-none-eabi,wasm32-unknown-unknown
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-targets --all-features
@@ -27,6 +27,7 @@ jobs:
       - run: cargo build -p kittens-render --no-default-features --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render --no-default-features --features embedded-graphics --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render-no-std-fixture --target thumbv7em-none-eabi --release
+      - run: cargo build -p kittens-render-no-std-fixture --target wasm32-unknown-unknown --release
 
   website:
     runs-on: ubuntu-latest
@@ -37,6 +38,55 @@ jobs:
           node website/scripts/build.mjs
           node website/scripts/check.mjs website/dist
           node website/scripts/repro.mjs
+
+  xtensa-link:
+    name: Xtensa linked ELF
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ESP_RUST_VERSION: "1.95.0.0"
+      ESP_GCC_VERSION: "15.2.0_20250920"
+      ESPUP_MAPPING_EPOCH: "0.17.1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore the pinned Xtensa toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.rustup/toolchains/esp
+          key: xtensa-toolchain-${{ runner.os }}-${{ runner.arch }}-espup-${{ env.ESPUP_MAPPING_EPOCH }}-rust-${{ env.ESP_RUST_VERSION }}-gcc-${{ env.ESP_GCC_VERSION }}
+      - name: Install the pinned Xtensa toolchain
+        uses: esp-rs/xtensa-toolchain@ec6d36527049a7f4fb2cb0c1a644668c1bb8a2a4 # v1.7.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          buildtargets: esp32s3
+          version: ${{ env.ESP_RUST_VERSION }}
+          ldproxy: false
+          default: false
+          override: false
+          export: true
+      - name: Cache Cargo downloads for the standalone fixture
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: xtensa-cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.ESP_RUST_VERSION }}-${{ hashFiles('fixtures/render-xtensa-probe/Cargo.lock') }}
+      - name: Build and verify the linked Xtensa ELF
+        shell: bash
+        working-directory: fixtures/render-xtensa-probe
+        run: |
+          cp "$HOME/exports" "$HOME/export-esp.sh"
+          . "$HOME/export-esp.sh"
+          rustc +esp --version --verbose | grep -F "($ESP_RUST_VERSION)"
+          xtensa-esp32s3-elf-gcc --version | grep -F "$ESP_GCC_VERSION"
+          cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
+          artifact=target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
+          test -f "$artifact"
+          file "$artifact" | grep -E 'ELF 32-bit LSB executable, Tensilica Xtensa.*statically linked'
+          xtensa-esp32s3-elf-readelf -h "$artifact" | grep -E 'Type:[[:space:]]+EXEC'
+          xtensa-esp32s3-elf-readelf -h "$artifact" | grep -E 'Machine:[[:space:]]+Tensilica Xtensa Processor'
 
   coverage:
     runs-on: ubuntu-latest
