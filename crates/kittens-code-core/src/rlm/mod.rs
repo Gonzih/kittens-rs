@@ -10,3 +10,4 @@ pub use ir::{
     RangeUnit, Records, Ref, Sel, VerbError,
 };
 pub use lower::{lower_script, lower_script_with_verb_limit};
+pub mod exec;
