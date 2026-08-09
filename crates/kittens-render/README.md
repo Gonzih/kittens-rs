@@ -10,11 +10,11 @@ status. Reviews are retained under [`reviews/`](reviews/).
 
 **Stage:** experimental 0.1.x evidence release of the K2R-0 host slice;
 protocols are not frozen. The linked Xtensa compile/link feasibility probe is
-**CLOSED WITH SCOPE**; replacement artifact metadata after revision 8's waker
-correction is explicitly pending in the trace manifest. Board HIL and silicon
-interrupt delivery, K2R-1 measurements, the kernel-admitted `reactor!`
-fixture, bilateral seam co-sign with `kittens-code`, blocking `write_region`,
-and capability sealing remain open gates.
+**CLOSED WITH SCOPE**; post-revision-8 artifact metadata is recorded in the
+trace manifest, and CI repeats the linked-ELF gate. Board HIL and silicon
+interrupt delivery, K2R-1 measurements, the kernel-admitted `reactor!` fixture,
+bilateral seam co-sign with `kittens-code`, blocking `write_region`, and
+capability sealing remain open gates.
 
 ## What each guarantee rests on
 

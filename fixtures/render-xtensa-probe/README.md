@@ -32,9 +32,11 @@ the outer spare, and starts a second transfer with the recovered driver.
 Rust ownership, no-allocation, and no-self-reference feasibility question.
 It does not establish behavior on silicon.
 
-**Observation:** SPEC revision 8 changed waker registration after the prior
-linked artifact. The replacement command output and artifact metadata are
-**PENDING REBUILD EVIDENCE** in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`.
+**Fact:** the post-revision-8 replacement command output and linked artifact
+metadata are recorded in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`. The
+`xtensa-link` CI job repeats the release link from an uncached target directory
+and inspects the resulting Xtensa executable; it does not substitute
+`cargo check` for linking.
 
 **Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
 visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
