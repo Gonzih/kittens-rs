@@ -127,3 +127,88 @@ impl ErrorEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::String;
+    use alloc::vec;
+
+    use super::*;
+
+    #[test]
+    fn every_error_code_has_the_declared_class() {
+        let cases = vec![
+            (ErrorCode::ModelTransport, ErrorClass::Retryable),
+            (ErrorCode::ModelOverloaded, ErrorClass::Retryable),
+            (ErrorCode::ModelContextLength, ErrorClass::Retryable),
+            (ErrorCode::ModelAuth, ErrorClass::UserActionable),
+            (ErrorCode::ToolDenied, ErrorClass::UserActionable),
+            (ErrorCode::ToolFailed, ErrorClass::Retryable),
+            (ErrorCode::ToolTimeout, ErrorClass::Retryable),
+            (
+                ErrorCode::BudgetExhausted {
+                    budget_kind: BudgetKind::TurnTokens,
+                },
+                ErrorClass::Retryable,
+            ),
+            (
+                ErrorCode::VerbError {
+                    verb: String::from("grep"),
+                    cause: VerbErrorCause::BadRef,
+                },
+                ErrorClass::Retryable,
+            ),
+            (ErrorCode::SchemaIncompatible, ErrorClass::Fatal),
+            (ErrorCode::StoreIo, ErrorClass::Fatal),
+            (ErrorCode::ConfigInvalid, ErrorClass::UserActionable),
+            (ErrorCode::Cancelled, ErrorClass::Retryable),
+            (ErrorCode::Internal, ErrorClass::Fatal),
+        ];
+
+        for (code, expected) in cases {
+            assert_eq!(code.class(), expected, "wrong class for {code:?}");
+            let encoded = serde_json::to_vec(&code).expect("code serializes");
+            let decoded: ErrorCode = serde_json::from_slice(&encoded).expect("code deserializes");
+            assert_eq!(decoded, code);
+        }
+    }
+
+    #[test]
+    fn error_event_derives_class_and_round_trips_with_optional_correlation() {
+        let correlated = ErrorEvent::new(
+            ErrorCode::ConfigInvalid,
+            String::from("bad patch"),
+            Some(SubmissionId(42)),
+        );
+        assert_eq!(correlated.class, ErrorClass::UserActionable);
+        assert_eq!(correlated.correlates, Some(SubmissionId(42)));
+
+        let encoded = serde_json::to_vec(&correlated).expect("event serializes");
+        let decoded: ErrorEvent = serde_json::from_slice(&encoded).expect("event deserializes");
+        assert_eq!(decoded, correlated);
+
+        let uncorrelated =
+            ErrorEvent::new(ErrorCode::StoreIo, String::from("disk unavailable"), None);
+        assert_eq!(uncorrelated.class, ErrorClass::Fatal);
+        assert_eq!(uncorrelated.correlates, None);
+    }
+
+    #[test]
+    fn every_verb_error_cause_round_trips() {
+        for cause in [
+            VerbErrorCause::BadRef,
+            VerbErrorCause::BadRange,
+            VerbErrorCause::BadFlag,
+            VerbErrorCause::Parse,
+            VerbErrorCause::Budget,
+        ] {
+            let code = ErrorCode::VerbError {
+                verb: String::from("verb"),
+                cause,
+            };
+            let encoded = serde_json::to_vec(&code).expect("code serializes");
+            let decoded: ErrorCode = serde_json::from_slice(&encoded).expect("code deserializes");
+            assert_eq!(decoded, code);
+        }
+    }
+}
