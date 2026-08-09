@@ -13,8 +13,12 @@
   stdin/stdout protocol loop, deterministic jail scenarios by default,
   feature-gated live model bootstrap, and resumable session-log opening.
 - Add `Engine::resume` replay construction for kittens-code KC0, restoring
-  logged configuration and seeding turn, record, effect, and request counters
-  above every persisted value without re-emitting replayed work.
+  logged configuration and reconstructable conversation/window state while
+  seeding turn, record, effect, and request counters above every persisted
+  value without re-emitting replayed work.
+- Harden kittens-code publication boundaries with checked monotonic allocation,
+  exclusive per-log writer locks, exact window tool-call/result lifecycle
+  validation, and branded capped tool-result tail entries.
 - Add the feature-gated Tokio `LiveClient` for Anthropic Messages SSE,
   including typed window lowering, streamed text/tool-use collection,
   provider usage, bounded jittered retries with `Retry-After`, and a

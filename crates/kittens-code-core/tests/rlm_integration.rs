@@ -87,7 +87,7 @@ fn recall_pages_resolve_as_a_capped_tool_result_then_resample() {
     assert!(window.verbatim_tail.iter().any(|item| matches!(
         item,
         kittens_code_core::window::TailItem::ToolResult { text, .. }
-            if text.contains("record with x")
+            if text.as_str().contains("record with x")
     )));
     assert!(actions.iter().any(|action| matches!(
         action,
@@ -160,7 +160,7 @@ fn recall_ask_runs_as_a_child_effect_and_returns_its_answer() {
     assert!(window.verbatim_tail.iter().any(|item| matches!(
         item,
         kittens_code_core::window::TailItem::ToolResult { text, .. }
-            if text == "digest answer"
+            if text.as_str() == "digest answer"
     )));
 }
 
@@ -246,7 +246,8 @@ fn recall_ask_each_waits_for_already_started_child_effects() {
     };
     assert!(window.verbatim_tail.iter().any(|item| matches!(
         item,
-        kittens_code_core::window::TailItem::ToolResult { text, .. } if text == "A\nB"
+        kittens_code_core::window::TailItem::ToolResult { text, .. }
+            if text.as_str() == "A\nB"
     )));
 }
 

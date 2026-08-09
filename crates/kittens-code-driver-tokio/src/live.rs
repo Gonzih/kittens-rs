@@ -313,7 +313,7 @@ fn build_request_body(
                 json!({
                     "type": "tool_result",
                     "tool_use_id": wire_tool_id(call.0),
-                    "content": text,
+                    "content": text.as_str(),
                 }),
             ),
             _ => {}
@@ -972,7 +972,7 @@ mod tests {
                 },
                 TailItem::ToolResult {
                     call: EffectId(7),
-                    text: String::from("contents"),
+                    text: kittens_code_core::caps::Capped::head("contents", 1_024, None),
                 },
                 TailItem::Message(String::from("[user] continue")),
             ],

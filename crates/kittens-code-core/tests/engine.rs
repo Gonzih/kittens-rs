@@ -346,8 +346,11 @@ fn tool_output_is_capped_with_log_pointer() {
                 _ => None,
             })
             .expect("tool result in tail");
-        assert!(result_text.len() < 10_000, "window copy was not capped");
-        assert!(result_text.contains("full output at log seq"));
+        assert!(
+            result_text.as_str().len() < 10_000,
+            "window copy was not capped"
+        );
+        assert!(result_text.as_str().contains("full output at log seq"));
     } else {
         panic!("expected resample");
     }

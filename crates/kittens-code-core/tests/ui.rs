@@ -6,4 +6,5 @@ fn cap_bypass_is_a_compile_error() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/cap_struct_literal_bypass.rs");
     t.compile_fail("tests/ui/cap_field_mutation_bypass.rs");
+    t.compile_fail("tests/ui/window_raw_tool_result.rs");
 }

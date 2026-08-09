@@ -10,6 +10,7 @@
 //! not an extension point. Each kind carries a compile-time hard ceiling;
 //! runtime limits from `SessionConfig` are clamped to it.
 
+use alloc::format;
 use alloc::string::String;
 use core::marker::PhantomData;
 
@@ -28,10 +29,13 @@ pub trait CapKind: sealed::Sealed {
 }
 
 /// Per-verb RLM output surfaced to the root window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerbOutput {}
 /// Per-tool-result output surfaced to the root window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolResult {}
 /// Per-`ask` sub-model digest surfaced to the root window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AskDigest {}
 
 impl sealed::Sealed for VerbOutput {}
@@ -183,6 +187,39 @@ impl<K: CapKind> Capped<K> {
     }
 }
 
+impl Capped<ToolResult> {
+    /// Builds the canonical reversible-offload tool result.
+    ///
+    /// Values that exceed `runtime_limit` retain head and tail context plus
+    /// a log pointer, with the annotation itself included inside the branded
+    /// cap. This keeps the `TailItem` type boundary honest: no uncapped
+    /// annotation is appended after construction.
+    #[must_use]
+    pub fn tool_result(value: &str, runtime_limit: u32, log_seq: u64) -> Self {
+        let limit = Self::effective_limit(runtime_limit);
+        if value.len() <= limit {
+            return Self::head_tail(value, runtime_limit, Some(log_seq));
+        }
+
+        let annotation = format!(
+            "\n[truncated from {} bytes; full output at log seq {log_seq}]",
+            value.len()
+        );
+        let excerpt_limit = limit.saturating_sub(annotation.len());
+        let excerpt_limit = u32::try_from(excerpt_limit).unwrap_or(u32::MAX);
+        let excerpt = Self::head_tail(value, excerpt_limit, Some(log_seq));
+        let mut text = excerpt.text;
+        let annotation_end = floor_char_boundary(&annotation, limit.saturating_sub(text.len()));
+        text.push_str(&annotation[..annotation_end]);
+        Self {
+            text,
+            applied_limit: runtime_limit,
+            truncation: excerpt.truncation,
+            _kind: PhantomData,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +261,15 @@ mod tests {
         let c = Capped::<VerbOutput>::head(&big, u32::MAX, None);
         assert_eq!(c.as_str().len(), 65_536);
         assert!(c.truncation().is_some());
+    }
+
+    #[test]
+    fn tool_result_annotation_stays_inside_brand() {
+        let value = "x".repeat(1_000);
+        let capped = Capped::<ToolResult>::tool_result(&value, 96, 42);
+        assert!(capped.as_str().len() <= 96);
+        assert!(capped.as_str().contains("full output at log seq 42"));
+        assert_eq!(capped.applied_limit(), 96);
+        assert_eq!(capped.truncation().unwrap().original_bytes, 1_000);
     }
 }

@@ -13,6 +13,8 @@ use alloc::vec::Vec;
 
 use kittens_code_protocol::ids::EffectId;
 
+use crate::caps::{Capped, ToolResult};
+
 /// Semantic region labels (SPEC section 5.1 serving co-design).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -47,12 +49,12 @@ pub enum TailItem {
         /// Rendered call content.
         text: String,
     },
-    /// A tool result (already budget-truncated upstream).
+    /// A tool result branded with the cap applied by core.
     ToolResult {
         /// The call this result answers.
         call: EffectId,
-        /// Rendered (capped) result content.
-        text: String,
+        /// Rendered result content, unforgeably capped at construction.
+        text: Capped<ToolResult>,
     },
 }
 
@@ -63,6 +65,12 @@ pub enum LayoutError {
     /// A tail tool result appears without its call earlier in the tail —
     /// the compaction boundary split an atomic pair (SPEC P5/S3 law).
     TailSplitsToolPair,
+    /// A tool call has no later terminal in the tail.
+    UnmatchedToolCall,
+    /// The same tool-call identity is declared more than once.
+    DuplicateToolCallId,
+    /// A tool call has more than one terminal result.
+    DuplicateToolTerminal,
 }
 
 /// The typed window recipe.
@@ -85,12 +93,13 @@ pub struct WindowLayout {
 }
 
 impl WindowLayout {
-    /// Builds a layout, enforcing tail atomicity.
+    /// Builds a layout, enforcing a one-call/one-terminal tail lifecycle.
     ///
     /// # Errors
     ///
-    /// [`LayoutError::TailSplitsToolPair`] when any `ToolResult` in the
-    /// tail lacks its `ToolCall` earlier in the same tail.
+    /// Returns the corresponding [`LayoutError`] when a result is orphaned,
+    /// a call identity is duplicated, a call has duplicate terminals, or a
+    /// call has no later terminal.
     pub fn new(
         system: String,
         user_info: String,
@@ -100,17 +109,30 @@ impl WindowLayout {
         summary: String,
         reminders: Vec<String>,
     ) -> Result<Self, LayoutError> {
-        let mut seen_calls: Vec<EffectId> = Vec::new();
+        let mut calls: Vec<(EffectId, bool)> = Vec::new();
         for item in &verbatim_tail {
             match item {
-                TailItem::ToolCall { call, .. } => seen_calls.push(*call),
-                TailItem::ToolResult { call, .. } => {
-                    if !seen_calls.contains(call) {
-                        return Err(LayoutError::TailSplitsToolPair);
+                TailItem::ToolCall { call, .. } => {
+                    if calls.iter().any(|(seen, _)| seen == call) {
+                        return Err(LayoutError::DuplicateToolCallId);
                     }
+                    calls.push((*call, false));
+                }
+                TailItem::ToolResult { call, .. } => {
+                    let Some((_, terminal)) = calls.iter_mut().find(|(seen, _)| seen == call)
+                    else {
+                        return Err(LayoutError::TailSplitsToolPair);
+                    };
+                    if *terminal {
+                        return Err(LayoutError::DuplicateToolTerminal);
+                    }
+                    *terminal = true;
                 }
                 TailItem::Message(_) => {}
             }
+        }
+        if calls.iter().any(|(_, terminal)| !terminal) {
+            return Err(LayoutError::UnmatchedToolCall);
         }
         Ok(Self {
             system,
@@ -148,6 +170,10 @@ mod tests {
         String::from(v)
     }
 
+    fn result(v: &str) -> Capped<ToolResult> {
+        Capped::head(v, 1_024, None)
+    }
+
     #[test]
     fn paired_tail_is_accepted() {
         let tail = vec![
@@ -158,7 +184,7 @@ mod tests {
             },
             TailItem::ToolResult {
                 call: EffectId(1),
-                text: s("contents"),
+                text: result("contents"),
             },
         ];
         assert!(WindowLayout::new(s("sys"), s("env"), s(""), s("q"), tail, s(""), vec![]).is_ok());
@@ -168,11 +194,63 @@ mod tests {
     fn orphan_result_is_refused() {
         let tail = vec![TailItem::ToolResult {
             call: EffectId(9),
-            text: s("orphaned"),
+            text: result("orphaned"),
         }];
         assert_eq!(
             WindowLayout::new(s("sys"), s("env"), s(""), s("q"), tail, s(""), vec![]).unwrap_err(),
             LayoutError::TailSplitsToolPair
+        );
+    }
+
+    #[test]
+    fn unmatched_call_is_refused() {
+        let tail = vec![TailItem::ToolCall {
+            call: EffectId(1),
+            text: s("read foo.rs"),
+        }];
+        assert_eq!(
+            WindowLayout::new(s("sys"), s("env"), s(""), s("q"), tail, s(""), vec![]).unwrap_err(),
+            LayoutError::UnmatchedToolCall
+        );
+    }
+
+    #[test]
+    fn duplicate_call_id_is_refused() {
+        let tail = vec![
+            TailItem::ToolCall {
+                call: EffectId(1),
+                text: s("first"),
+            },
+            TailItem::ToolCall {
+                call: EffectId(1),
+                text: s("second"),
+            },
+        ];
+        assert_eq!(
+            WindowLayout::new(s("sys"), s("env"), s(""), s("q"), tail, s(""), vec![]).unwrap_err(),
+            LayoutError::DuplicateToolCallId
+        );
+    }
+
+    #[test]
+    fn duplicate_terminal_is_refused() {
+        let tail = vec![
+            TailItem::ToolCall {
+                call: EffectId(1),
+                text: s("read foo.rs"),
+            },
+            TailItem::ToolResult {
+                call: EffectId(1),
+                text: result("first"),
+            },
+            TailItem::ToolResult {
+                call: EffectId(1),
+                text: result("second"),
+            },
+        ];
+        assert_eq!(
+            WindowLayout::new(s("sys"), s("env"), s(""), s("q"), tail, s(""), vec![]).unwrap_err(),
+            LayoutError::DuplicateToolTerminal
         );
     }
 }

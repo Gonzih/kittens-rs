@@ -38,10 +38,6 @@ use crate::window::{TailItem, WindowLayout};
 /// is `O(MAX_TOOL_CALLS_PER_TURN)`.
 pub const MAX_TOOL_CALLS_PER_TURN: usize = 32;
 
-/// Bytes reserved within the tool-result budget for the truncation
-/// annotation, so the surfaced value never exceeds the declared cap.
-const ANNOTATION_RESERVE: u32 = 96;
-
 /// A tool call proposed by the model.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProposedToolCall {
@@ -388,10 +384,22 @@ impl Engine {
 
     /// Reconstructs an idle engine from a validated, durably persisted log.
     ///
-    /// Configuration patches are applied in record order, while sequence,
-    /// effect, request/submission, and turn-epoch namespaces are seeded above
-    /// every observable persisted value. Opaque effect-outcome payloads expose
-    /// identity only through their record's `txn` field.
+    /// Configuration patches and reconstructable window records are applied
+    /// in record order, while sequence, effect, request/submission, and turn-
+    /// epoch namespaces are seeded above every observable persisted value.
+    /// Accepted input, authoritative model deltas, tool proposals, tool output
+    /// bytes, tool terminals, and compaction boundaries rebuild the same
+    /// derived tail shapes used by the live path.
+    ///
+    /// Replay is intentionally honest about the current record model's lossy
+    /// fields. A live model terminal does not persist its provider-usage tuple
+    /// or its final assistant text unless that text also exists as authoritative
+    /// `ModelDelta` records, so those values cannot be recovered by decoding
+    /// opaque `EffectOutcome` bytes. `CompactionApplied` identifies a boundary
+    /// but carries neither the generated summary nor the retained-tail cut, so
+    /// replay clears pre-boundary window state and token history but must leave
+    /// the summary empty. Driver-layer tool failures that emit only an
+    /// uncorrelated error likewise cannot recover their synthetic result text.
     ///
     /// KC0 deliberately resumes between turns: replay does not reconstruct a
     /// half-finished turn, publish replayed events, or commit replayed records.
@@ -404,6 +412,7 @@ impl Engine {
     /// or its kind/payload is not a header. Returns another [`ResumeError`]
     /// when a persisted maximum cannot be incremented without reusing or
     /// wrapping an identifier.
+    #[allow(clippy::too_many_lines)] // The ordered record fold is intentionally exhaustive at one audit site.
     pub fn resume(mut base_config: SessionConfig, records: &[Record]) -> Result<Self, ResumeError> {
         if !matches!(
             records.first(),
@@ -417,12 +426,191 @@ impl Engine {
         }
 
         let mut maxima = ReplayMaxima::default();
+        let mut engine = Self::new(base_config.clone(), 1);
+        let mut pending_user = None;
+        let mut assistant_epoch = None;
+        let mut assistant_text = String::new();
+        let mut tool_outputs: Vec<(EffectId, u64, Vec<u8>)> = Vec::new();
+        let mut tool_calls = Vec::new();
+        let mut completed_calls = Vec::new();
+        let mut approval_calls: Vec<(SubmissionId, EffectId)> = Vec::new();
+        let mut operator_denials = Vec::new();
+        let mut policy_denials = Vec::new();
+
         for record in records {
             maxima.observe_record(record);
-            if let RecordPayload::ConfigPatch(patch) = &record.payload {
-                base_config.apply(patch.clone());
+            match &record.payload {
+                RecordPayload::AcceptedOp(submission) => {
+                    Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                    match &submission.op {
+                        Op::UserInput { text } => {
+                            engine.last_user_query.clone_from(text);
+                            engine
+                                .tail
+                                .push(TailItem::Message(format!("[user] {text}")));
+                            pending_user = Some(text.clone());
+                        }
+                        Op::Interject { text } => {
+                            engine
+                                .tail
+                                .push(TailItem::Message(format!("[user] {text}")));
+                            pending_user = None;
+                        }
+                        Op::Approve { request, verdict } => {
+                            if *verdict != ApprovalVerdict::Approve
+                                && let Some((_, call)) =
+                                    approval_calls.iter().find(|(id, _)| id == request)
+                            {
+                                operator_denials.push(*call);
+                            }
+                            pending_user = None;
+                        }
+                        _ => pending_user = None,
+                    }
+                }
+                RecordPayload::ConfigPatch(patch) => {
+                    base_config.apply(patch.clone());
+                    engine.config.apply(patch.clone());
+                    engine.compaction.reset_breaker();
+                }
+                RecordPayload::EffectOutcome(bytes) => {
+                    if let Some(call) = record.txn {
+                        tool_outputs.push((call, record.seq, bytes.clone()));
+                    }
+                }
+                RecordPayload::EmittedEvent(event) => match event {
+                    Event::TurnStarted { epoch, .. } => {
+                        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        assistant_epoch = None;
+                        if let Some(text) = pending_user.take() {
+                            let rendered = format!("[user] {text}");
+                            if matches!(engine.tail.last(), Some(TailItem::Message(last)) if last == &rendered)
+                            {
+                                engine.tail.pop();
+                            }
+                        }
+                        engine.epoch = *epoch;
+                    }
+                    Event::ModelDelta {
+                        epoch,
+                        preview: false,
+                        text,
+                        ..
+                    } => {
+                        if assistant_epoch.is_some_and(|seen| seen != *epoch) {
+                            Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        }
+                        assistant_epoch = Some(*epoch);
+                        assistant_text.push_str(text);
+                    }
+                    Event::ToolProposed {
+                        call,
+                        name,
+                        args_json,
+                    } => {
+                        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        assistant_epoch = None;
+                        tool_calls.push(*call);
+                        if engine
+                            .config
+                            .approval_defaults
+                            .get(name)
+                            .copied()
+                            .unwrap_or(ApprovalPolicy::Auto)
+                            == ApprovalPolicy::Deny
+                        {
+                            policy_denials.push(*call);
+                        }
+                        engine.tail.push(TailItem::ToolCall {
+                            call: *call,
+                            text: format!("{name} {args_json}"),
+                        });
+                    }
+                    Event::ApprovalRequested { request, call, .. } => {
+                        approval_calls.push((*request, *call));
+                    }
+                    Event::ToolTerminal { call, outcome } => {
+                        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        let text = if matches!(outcome, ToolOutcome::Denied) {
+                            let marker = if policy_denials.contains(call) {
+                                "[denied by policy]"
+                            } else if operator_denials.contains(call) {
+                                "[denied by operator]"
+                            } else {
+                                "[denied]"
+                            };
+                            Capped::<ToolResultCap>::head(
+                                marker,
+                                engine.config.budgets.tool_result_bytes,
+                                None,
+                            )
+                        } else if let Some(index) = tool_outputs
+                            .iter()
+                            .rposition(|(output_call, _, _)| output_call == call)
+                        {
+                            let (_, seq, bytes) = tool_outputs.remove(index);
+                            match String::from_utf8(bytes) {
+                                Ok(output) => Capped::<ToolResultCap>::tool_result(
+                                    &output,
+                                    engine.config.budgets.tool_result_bytes,
+                                    seq,
+                                ),
+                                Err(_) => Capped::<ToolResultCap>::head(
+                                    "[tool result was not valid UTF-8]",
+                                    engine.config.budgets.tool_result_bytes,
+                                    None,
+                                ),
+                            }
+                        } else {
+                            Capped::<ToolResultCap>::head(
+                                "[tool result unavailable after replay]",
+                                engine.config.budgets.tool_result_bytes,
+                                None,
+                            )
+                        };
+                        engine.tail.push(TailItem::ToolResult { call: *call, text });
+                        completed_calls.push(*call);
+                    }
+                    Event::CompactionApplied { .. } => {
+                        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        engine.tail.clear();
+                        engine.summary.clear();
+                        engine.tokens.reset_history(0);
+                        engine.compaction.summary_applied();
+                        tool_calls.clear();
+                        completed_calls.clear();
+                    }
+                    Event::TurnEnded { .. } => {
+                        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+                        assistant_epoch = None;
+                        pending_user = None;
+                    }
+                    _ => {}
+                },
+                RecordPayload::RepairTerminal { .. } => {
+                    if let Some(call) = record.txn
+                        && tool_calls.contains(&call)
+                        && !completed_calls.contains(&call)
+                    {
+                        engine.tail.push(TailItem::ToolResult {
+                            call,
+                            text: Capped::<ToolResultCap>::head(
+                                "[aborted by crash]",
+                                engine.config.budgets.tool_result_bytes,
+                                None,
+                            ),
+                        });
+                        completed_calls.push(call);
+                    }
+                }
+                _ => {}
             }
         }
+        Self::flush_replayed_assistant(&mut engine.tail, &mut assistant_text);
+        engine.tail.retain(|item| match item {
+            TailItem::ToolCall { call, .. } => completed_calls.contains(call),
+            _ => true,
+        });
 
         let next_seq = maxima
             .seq
@@ -440,12 +628,20 @@ impl Engine {
             return Err(ResumeError::TurnEpochExhausted);
         }
 
-        let mut engine = Self::new(base_config, next_seq);
+        engine.config = base_config;
+        engine.next_seq = next_seq;
         engine.epoch = TurnEpoch(maxima.epoch);
         engine.next_effect = next_effect;
         engine.next_request = next_request;
         engine.persisted = maxima.seq;
         Ok(engine)
+    }
+
+    fn flush_replayed_assistant(tail: &mut Vec<TailItem>, text: &mut String) {
+        if !text.is_empty() {
+            tail.push(TailItem::Message(format!("[assistant] {text}")));
+            text.clear();
+        }
     }
 
     /// Handles one input, returning the bounded action batch.
@@ -499,12 +695,14 @@ impl Engine {
         if matches!(self.phase, Phase::Failed) {
             return;
         }
-        self.commit(
+        if !self.commit(
             RecordKind::AcceptedOp,
             None,
             RecordPayload::AcceptedOp(submission.clone()),
             t,
-        );
+        ) {
+            return;
+        }
         match submission.op {
             Op::UserInput { text } => self.on_user_input(text, Some(submission.id), t),
             Op::Interject { text } => {
@@ -546,7 +744,10 @@ impl Engine {
             self.tail.push(TailItem::Message(format!("[user] {text}")));
             return;
         }
-        self.epoch = TurnEpoch(self.epoch.0 + 1);
+        let Some(epoch) = self.advance_epoch(t) else {
+            return;
+        };
+        self.epoch = epoch;
         self.finished.clear();
         self.identical_run = 0;
         self.last_call_shape = None;
@@ -610,7 +811,11 @@ impl Engine {
             );
             self.tail.push(TailItem::ToolResult {
                 call: id,
-                text: String::from("[denied by operator]"),
+                text: Capped::<ToolResultCap>::head(
+                    "[denied by operator]",
+                    self.config.budgets.tool_result_bytes,
+                    None,
+                ),
             });
             self.maybe_resample(t);
         }
@@ -686,7 +891,11 @@ impl Engine {
                     slot.done = true;
                     self.tail.push(TailItem::ToolResult {
                         call: id,
-                        text: String::from("[tool failed]"),
+                        text: Capped::<ToolResultCap>::head(
+                            "[tool failed]",
+                            self.config.budgets.tool_result_bytes,
+                            None,
+                        ),
                     });
                     self.maybe_resample(t);
                 }
@@ -759,7 +968,9 @@ impl Engine {
             );
         }
         for call in calls {
-            let call_id = self.fresh_effect();
+            let Some(call_id) = self.fresh_effect(t) else {
+                return;
+            };
             self.tail.push(TailItem::ToolCall {
                 call: call_id,
                 text: format!("{} {}", call.name, call.args_json),
@@ -810,13 +1021,18 @@ impl Engine {
                     );
                     self.tail.push(TailItem::ToolResult {
                         call: call_id,
-                        text: String::from("[denied by policy]"),
+                        text: Capped::<ToolResultCap>::head(
+                            "[denied by policy]",
+                            self.config.budgets.tool_result_bytes,
+                            None,
+                        ),
                     });
                 }
                 // Ask, and any unknown future policy, fail toward asking.
                 _ => {
-                    let request = SubmissionId(self.next_request);
-                    self.next_request += 1;
+                    let Some(request) = self.fresh_request(t) else {
+                        return;
+                    };
                     self.calls.push(CallSlot {
                         id: call_id,
                         call: call.clone(),
@@ -867,28 +1083,11 @@ impl Engine {
             RecordPayload::EffectOutcome(Vec::from(output.as_bytes())),
             t,
         );
-        // Reserve room for the truncation annotation so the total surfaced
-        // value stays within the declared tool-result budget (review input
-        // 19 #14): the excerpt is capped to budget minus the annotation's
-        // maximum length.
-        let excerpt_budget = self
-            .config
-            .budgets
-            .tool_result_bytes
-            .saturating_sub(ANNOTATION_RESERVE);
-        let capped = Capped::<ToolResultCap>::head_tail(output, excerpt_budget, Some(full_seq));
-        let mut text = String::from(capped.as_str());
-        if let Some(trunc) = capped.truncation() {
-            use core::fmt::Write as _;
-            let shown = text.len();
-            let _ = write!(
-                text,
-                "\n[truncated: {shown} of {} bytes; full output at log seq {full_seq}]",
-                trunc.original_bytes
-            );
-        }
-        // Never exceed the declared budget, annotation included.
-        debug_assert!(text.len() <= self.config.budgets.tool_result_bytes as usize);
+        let text = Capped::<ToolResultCap>::tool_result(
+            output,
+            self.config.budgets.tool_result_bytes,
+            full_seq,
+        );
         self.calls[index].done = true;
         self.tail.push(TailItem::ToolResult { call: id, text });
         self.publish(Event::ToolTerminal { call: id, outcome }, t);
@@ -1014,7 +1213,9 @@ impl Engine {
         loop {
             match outcome {
                 StepOutcome::NeedPages(request) => {
-                    let child = self.fresh_effect();
+                    let Some(child) = self.fresh_effect(t) else {
+                        return;
+                    };
                     query.pending.push(RecallPending {
                         id: child,
                         wait: RecallWait::Pages,
@@ -1038,7 +1239,9 @@ impl Engine {
                         continue;
                     }
                     for request in requests {
-                        let child = self.fresh_effect();
+                        let Some(child) = self.fresh_effect(t) else {
+                            return;
+                        };
                         query.pending.push(RecallPending {
                             id: child,
                             wait: RecallWait::Ask,
@@ -1127,7 +1330,9 @@ impl Engine {
     }
 
     fn start_model_call(&mut self, t: &mut Transition) {
-        let id = self.fresh_effect();
+        let Some(id) = self.fresh_effect(t) else {
+            return;
+        };
         self.phase = Phase::AwaitingModel(id);
         let window = self.assemble_window();
         self.start_effect(id, EffectSpec::ModelCall(window), t);
@@ -1255,10 +1460,46 @@ impl Engine {
         })
     }
 
-    fn fresh_effect(&mut self) -> EffectId {
-        let id = EffectId(self.next_effect);
-        self.next_effect += 1;
-        id
+    fn fresh_effect(&mut self, t: &mut Transition) -> Option<EffectId> {
+        let Some(id) = Self::take_counter(&mut self.next_effect) else {
+            self.latch_identifier_exhaustion("effect id", t);
+            return None;
+        };
+        Some(EffectId(id))
+    }
+
+    fn fresh_request(&mut self, t: &mut Transition) -> Option<SubmissionId> {
+        let Some(id) = Self::take_counter(&mut self.next_request) else {
+            self.latch_identifier_exhaustion("request/submission id", t);
+            return None;
+        };
+        Some(SubmissionId(id))
+    }
+
+    fn advance_epoch(&mut self, t: &mut Transition) -> Option<TurnEpoch> {
+        let Some(epoch) = self.epoch.0.checked_add(1) else {
+            self.latch_identifier_exhaustion("turn epoch", t);
+            return None;
+        };
+        Some(TurnEpoch(epoch))
+    }
+
+    fn take_counter(counter: &mut u64) -> Option<u64> {
+        let current = *counter;
+        *counter = current.checked_add(1)?;
+        Some(current)
+    }
+
+    fn latch_identifier_exhaustion(&mut self, namespace: &str, t: &mut Transition) {
+        self.phase = Phase::Failed;
+        self.publish(
+            Event::Error(ErrorEvent::new(
+                ErrorCode::Internal,
+                format!("{namespace} namespace exhausted"),
+                None,
+            )),
+            t,
+        );
     }
 
     /// Dispatches an effect through the single choke point: it commits a
@@ -1268,12 +1509,14 @@ impl Engine {
     /// scanner repairs into an `aborted_by_crash` terminal (SPEC S3; review
     /// input 19 #3). Every model/tool/RLM effect starts here.
     fn start_effect(&mut self, id: EffectId, spec: EffectSpec, t: &mut Transition) {
-        self.commit(
+        if !self.commit(
             RecordKind::StreamStarted,
             Some(id),
             RecordPayload::StreamStarted(Vec::new()),
             t,
-        );
+        ) {
+            return;
+        }
         t.actions.push(CoreAction::StartEffect {
             id,
             epoch: self.epoch,
@@ -1296,13 +1539,14 @@ impl Engine {
     }
 
     fn publish(&mut self, event: Event, t: &mut Transition) {
-        self.commit(
+        if self.commit(
             RecordKind::EmittedEvent,
             None,
             RecordPayload::EmittedEvent(event.clone()),
             t,
-        );
-        t.actions.push(CoreAction::Publish(event));
+        ) {
+            t.actions.push(CoreAction::Publish(event));
+        }
     }
 
     fn commit(
@@ -1311,19 +1555,25 @@ impl Engine {
         txn: Option<EffectId>,
         payload: RecordPayload,
         t: &mut Transition,
-    ) {
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        match Record::new(seq, kind, txn, self.epoch, payload) {
-            Ok(record) => match t.actions.last_mut() {
+    ) -> bool {
+        let Some(seq) = Self::take_counter(&mut self.next_seq) else {
+            // No record can durably carry an exhaustion event once the log
+            // namespace itself is full. Latch the fatal state and emit
+            // nothing uncommitted; subsequent inputs are inert.
+            self.phase = Phase::Failed;
+            return false;
+        };
+        if let Ok(record) = Record::new(seq, kind, txn, self.epoch, payload) {
+            match t.actions.last_mut() {
                 Some(CoreAction::Commit(records)) => records.push(record),
                 _ => t.actions.push(CoreAction::Commit(alloc::vec![record])),
-            },
-            Err(_) => {
-                // Kind/payload mismatch is a bug, not a runtime condition.
-                debug_assert!(false, "record kind/payload mismatch");
             }
+        } else {
+            // Kind/payload mismatch is a bug, not a runtime condition.
+            debug_assert!(false, "record kind/payload mismatch");
+            return false;
         }
+        true
     }
 }
 
@@ -1346,5 +1596,54 @@ fn bound_name(bound: &Bound) -> &'static str {
         Bound::Digest(_) => "digest",
         Bound::DigestList(_) => "digest_list",
         Bound::Error(_) => "verb_error",
+    }
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+
+    fn engine() -> Engine {
+        Engine::new(SessionConfig::default(), 1)
+    }
+
+    #[test]
+    fn near_max_identifiers_latch_fatal_without_wrapping() {
+        let mut effect_engine = engine();
+        effect_engine.next_effect = u64::MAX;
+        let mut transition = Transition::default();
+        assert!(effect_engine.fresh_effect(&mut transition).is_none());
+        assert_eq!(effect_engine.next_effect, u64::MAX);
+        assert!(matches!(effect_engine.phase, Phase::Failed));
+
+        let mut request_engine = engine();
+        request_engine.next_request = u64::MAX;
+        let mut transition = Transition::default();
+        assert!(request_engine.fresh_request(&mut transition).is_none());
+        assert_eq!(request_engine.next_request, u64::MAX);
+        assert!(matches!(request_engine.phase, Phase::Failed));
+
+        let mut epoch_engine = engine();
+        epoch_engine.epoch = TurnEpoch(u64::MAX);
+        let mut transition = Transition::default();
+        assert!(epoch_engine.advance_epoch(&mut transition).is_none());
+        assert_eq!(epoch_engine.epoch, TurnEpoch(u64::MAX));
+        assert!(matches!(epoch_engine.phase, Phase::Failed));
+    }
+
+    #[test]
+    fn near_max_sequence_latches_fatal_without_an_uncommitted_event() {
+        let mut engine = engine();
+        engine.next_seq = u64::MAX;
+        let mut transition = Transition::default();
+        assert!(!engine.commit(
+            RecordKind::EmittedEvent,
+            None,
+            RecordPayload::EmittedEvent(Event::ShuttingDown),
+            &mut transition,
+        ));
+        assert_eq!(engine.next_seq, u64::MAX);
+        assert!(matches!(engine.phase, Phase::Failed));
+        assert!(transition.actions.is_empty());
     }
 }
