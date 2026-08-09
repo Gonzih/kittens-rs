@@ -2,6 +2,7 @@
 members = [
     "crates/kittens",
     "crates/kittens-code-core",
+    "crates/kittens-code-driver-tokio",
     "crates/kittens-code-protocol",
     "crates/kittens-macros",
     "crates/kittens-tui",
@@ -21,6 +22,7 @@ version = "0.1.1"
 [workspace.dependencies]
 crossterm = "0.29"
 kittens = { path = "crates/kittens", version = "0.1.1" }
+kittens-code-core = { path = "crates/kittens-code-core", version = "0.1.1" }
 kittens-code-protocol = { path = "crates/kittens-code-protocol", version = "0.1.1" }
 serde = { version = "1.0", default-features = false, features = [
     "derive",
