@@ -4,7 +4,7 @@
 
 use kittens_code_core::rlm::exec::{AskResult, Bound, Executor, Page, PageRecord, StepOutcome};
 use kittens_code_core::rlm::ir::{Binding, BoundValue, FinalValue, Instr, Ref, Sel};
-use kittens_code_protocol::budgets::Budgets;
+use kittens_code_protocol::budgets::{BudgetKind, Budgets};
 
 fn rec(seq: u64, text: &str) -> PageRecord {
     PageRecord {
@@ -69,7 +69,7 @@ fn grep_walks_multiple_pages_then_binds_matches() {
         records: vec![rec(3, "fn b()")],
         next_cursor: None,
     });
-    let StepOutcome::Line { slot, bound } = outcome else {
+    let StepOutcome::Line { slot, bound, .. } = outcome else {
         panic!("expected the grep line to bind");
     };
     assert_eq!(slot, 1);
@@ -83,7 +83,7 @@ fn grep_walks_multiple_pages_then_binds_matches() {
     let StepOutcome::Done { answer } = done else {
         panic!("expected done");
     };
-    assert!(answer.contains("fn a()") && answer.contains("fn b()"));
+    assert!(answer.as_str().contains("fn a()") && answer.as_str().contains("fn b()"));
 }
 
 #[test]
@@ -184,14 +184,19 @@ fn ask_each_windows_parallel_subcalls_and_rejoins_out_of_order() {
     let done = exec.provide_ask(vec![ask_result(2, "C")]);
     outstanding.retain(|index| *index != 2);
     assert!(outstanding.is_empty());
-    let StepOutcome::Line { slot: 2, bound } = done else {
+    let StepOutcome::Line { slot: 2, bound, .. } = done else {
         panic!("ask-each should bind once all results arrive");
     };
     let Bound::DigestList(list) = bound else {
         panic!("ask-each binds a digest list");
     };
     // Rejoined in partition-index order despite out-of-order arrival.
-    assert_eq!(list, vec!["A", "B", "C", "D", "E"]);
+    assert_eq!(
+        list.iter()
+            .map(kittens_code_core::caps::Capped::as_str)
+            .collect::<Vec<_>>(),
+        vec!["A", "B", "C", "D", "E"]
+    );
 }
 
 #[test]
@@ -223,7 +228,7 @@ fn scanned_bytes_exhaustion_binds_inline_error_and_continues() {
         records: vec![rec(1, "way too many bytes here")],
         next_cursor: None,
     });
-    let StepOutcome::Line { slot: 1, bound } = outcome else {
+    let StepOutcome::Line { slot: 1, bound, .. } = outcome else {
         panic!("expected the grep line to bind an error");
     };
     assert!(
@@ -237,7 +242,7 @@ fn scanned_bytes_exhaustion_binds_inline_error_and_continues() {
     let StepOutcome::Done { answer } = exec.step() else {
         panic!("query should continue past the inline error");
     };
-    assert_eq!(answer, "recovered");
+    assert_eq!(answer.as_str(), "recovered");
 }
 
 #[test]
@@ -264,7 +269,7 @@ fn ask_digest_is_capped() {
     let StepOutcome::NeedAsk(_) = exec.step() else {
         panic!("ask requests a sub-model call");
     };
-    let StepOutcome::Line { bound, .. } = exec.provide_ask(vec![AskResult {
+    let StepOutcome::Line { bound, output, .. } = exec.provide_ask(vec![AskResult {
         index: 0,
         answer: String::from("this is far too long"),
         wall_clock_ms: 0,
@@ -275,7 +280,177 @@ fn ask_digest_is_capped() {
     let Bound::Digest(d) = bound else {
         panic!("ask binds a digest");
     };
-    assert_eq!(d.len(), 4, "digest capped to the ask_digest_bytes budget");
+    assert_eq!(
+        d.as_str().len(),
+        4,
+        "digest is branded and capped before entering Bound"
+    );
+    assert_eq!(output.as_str(), "this");
+    let StepOutcome::Done { answer } = exec.step() else {
+        panic!("final should surface the branded digest");
+    };
+    assert_eq!(answer.as_str(), "this");
+}
+
+#[test]
+fn verb_line_and_final_outputs_are_capped_but_internal_selection_is_complete() {
+    let mut budgets = Budgets::default();
+    budgets.verb_output_bytes = 5;
+    let query = vec![
+        instr_line(1, Instr::Slice { sel: Sel::Whole }),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Ref(Ref::new(1)),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let StepOutcome::Line { bound, output, .. } = exec.provide_pages(Page {
+        records: vec![rec(1, "abcdefgh")],
+        next_cursor: None,
+    }) else {
+        panic!("slice should bind");
+    };
+    let Bound::Records(records) = bound else {
+        panic!("slice keeps an internal record selection");
+    };
+    assert_eq!(records[0].text, "abcdefgh");
+    assert_eq!(output.as_str(), "abcde");
+    assert_eq!(output.truncation().unwrap().original_bytes, 9);
+
+    let StepOutcome::Done { answer } = exec.step() else {
+        panic!("final should complete");
+    };
+    assert_eq!(answer.as_str(), "abcde");
+    assert_eq!(answer.truncation().unwrap().original_bytes, 9);
+    let StepOutcome::Done { answer } = exec.step() else {
+        panic!("a finished executor stays done");
+    };
+    assert_eq!(answer.as_str(), "");
+}
+
+#[test]
+fn count_output_uses_the_verb_cap() {
+    let mut budgets = Budgets::default();
+    budgets.verb_output_bytes = 1;
+    let query = vec![
+        instr_line(
+            1,
+            Instr::Count {
+                pattern: None,
+                sel: Sel::Whole,
+            },
+        ),
+        instr_line(
+            2,
+            Instr::Final {
+                value: FinalValue::Ref(Ref::new(1)),
+            },
+        ),
+    ];
+    let mut exec = Executor::new(query, budgets);
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let StepOutcome::Line { bound, output, .. } = exec.provide_pages(Page {
+        records: (0..12).map(|seq| rec(seq, "x")).collect(),
+        next_cursor: None,
+    }) else {
+        panic!("count should bind");
+    };
+    assert!(matches!(bound, Bound::Count(12)));
+    assert_eq!(output.as_str(), "1");
+    assert_eq!(output.truncation().unwrap().original_bytes, 2);
+    let StepOutcome::Done { answer } = exec.step() else {
+        panic!("final count should complete");
+    };
+    assert_eq!(answer.as_str(), "1");
+}
+
+#[test]
+fn empty_ask_answer_is_still_branded_before_binding() {
+    let query = vec![instr_line(
+        1,
+        Instr::Ask {
+            sel: Sel::Whole,
+            question: String::from("q"),
+            sample_k: None,
+        },
+    )];
+    let mut exec = Executor::new(query, Budgets::default());
+    assert!(matches!(exec.step(), StepOutcome::NeedAsk(_)));
+    let StepOutcome::Line { bound, output, .. } = exec.provide_ask(Vec::new()) else {
+        panic!("an empty driver answer should bind an empty digest");
+    };
+    let Bound::Digest(digest) = bound else {
+        panic!("ask binds a branded digest");
+    };
+    assert_eq!(digest.as_str(), "");
+    assert_eq!(output.as_str(), "");
+}
+
+#[test]
+fn starting_a_later_ask_node_reports_per_node_meter_resets() {
+    let ask = || Instr::Ask {
+        sel: Sel::Whole,
+        question: String::from("q"),
+        sample_k: None,
+    };
+    let query = vec![instr_line(1, ask()), instr_line(2, ask())];
+    let mut exec = Executor::new(query, Budgets::default());
+
+    assert!(matches!(exec.step(), StepOutcome::NeedAsk(_)));
+    let _ = exec.take_budget_updates();
+    assert!(matches!(
+        exec.provide_ask(vec![AskResult {
+            index: 0,
+            answer: String::from("one"),
+            wall_clock_ms: 2,
+            tokens: 3,
+        }]),
+        StepOutcome::Line { .. }
+    ));
+    let _ = exec.take_budget_updates();
+    assert!(matches!(exec.step(), StepOutcome::NeedAsk(_)));
+    let resets = exec.take_budget_updates();
+    assert!(
+        resets
+            .iter()
+            .any(|update| update.kind == BudgetKind::AskWallClock && update.used == 0)
+    );
+    assert!(
+        resets
+            .iter()
+            .any(|update| update.kind == BudgetKind::AskTokens && update.used == 0)
+    );
+}
+
+#[test]
+fn aggregate_budget_limit_is_clamped_and_meter_changes_are_drained() {
+    let mut budgets = Budgets::default();
+    budgets.verb_count = u16::MAX;
+    budgets.scanned_pages = u32::MAX;
+    let query = vec![instr_line(1, Instr::Slice { sel: Sel::Whole })];
+    let mut exec = Executor::new(query, budgets);
+
+    assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
+    let entry_updates = exec.take_budget_updates();
+    assert!(entry_updates.iter().any(|update| {
+        update.kind == BudgetKind::VerbCount && update.used == 1 && update.limit == 4_096
+    }));
+
+    assert!(matches!(
+        exec.provide_pages(Page {
+            records: vec![rec(1, "x")],
+            next_cursor: Some(1),
+        }),
+        StepOutcome::NeedPages(_)
+    ));
+    let page_updates = exec.take_budget_updates();
+    assert!(page_updates.iter().any(|update| {
+        update.kind == BudgetKind::ScannedPages && update.used == 1 && update.limit == 65_536
+    }));
 }
 
 #[test]
@@ -294,7 +469,7 @@ fn continuation_memory_exhaustion_binds_inline_error() {
     let mut exec = Executor::new(query, budgets);
 
     assert!(matches!(exec.step(), StepOutcome::NeedPages(_)));
-    let StepOutcome::Line { slot: 1, bound } = exec.provide_pages(Page {
+    let StepOutcome::Line { slot: 1, bound, .. } = exec.provide_pages(Page {
         records: vec![rec(1, "four")],
         next_cursor: None,
     }) else {
@@ -307,7 +482,7 @@ fn continuation_memory_exhaustion_binds_inline_error() {
     let StepOutcome::Done { answer } = exec.step() else {
         panic!("the script should continue after an inline memory error");
     };
-    assert_eq!(answer, "continued");
+    assert_eq!(answer.as_str(), "continued");
 }
 
 #[test]
@@ -416,7 +591,7 @@ fn prelowered_error_line_surfaces_and_script_continues() {
         ),
     ];
     let mut exec = Executor::new(query, Budgets::default());
-    let StepOutcome::Line { slot: 1, bound } = exec.step() else {
+    let StepOutcome::Line { slot: 1, bound, .. } = exec.step() else {
         panic!("the pre-lowered error surfaces as a line");
     };
     assert!(matches!(
@@ -426,7 +601,7 @@ fn prelowered_error_line_surfaces_and_script_continues() {
     let StepOutcome::Done { answer } = exec.step() else {
         panic!("script continues to final");
     };
-    assert_eq!(answer, "ok");
+    assert_eq!(answer.as_str(), "ok");
 }
 
 #[test]
