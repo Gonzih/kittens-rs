@@ -123,6 +123,12 @@ pub enum StepOutcome {
         /// The final answer.
         answer: String,
     },
+    /// A partial `ask-each` batch was accepted; more results are still
+    /// outstanding. The driver keeps calling [`Executor::provide_ask`] with
+    /// the remaining answers — no new requests are dispatched. Distinct from
+    /// an empty [`StepOutcome::NeedAsk`], which would ambiguously read as
+    /// "dispatch nothing."
+    AwaitingMore,
     /// The query terminated on a query-level budget or structural error.
     Failed {
         /// Which budget or condition ended it.
@@ -409,7 +415,7 @@ impl Executor {
                     self.bind(Bound::DigestList(digests))
                 } else {
                     self.pending = Pending::AskEach(join);
-                    StepOutcome::NeedAsk(Vec::new())
+                    StepOutcome::AwaitingMore
                 }
             }
             _ => StepOutcome::Failed {
@@ -419,11 +425,8 @@ impl Executor {
     }
 
     fn begin_instruction(&mut self, instr: &Instr) -> StepOutcome {
-        if self.meters.charge(BudgetKind::VerbCount, 0).is_err() {
-            return StepOutcome::Failed {
-                cause: VerbErrorCause::Budget,
-            };
-        }
+        // Verb-count is a query-level meter (SPEC Q5): exceeding it
+        // terminates the whole query rather than binding an inline error.
         self.meters.verbs = self.meters.verbs.saturating_add(1);
         if self.meters.verbs > self.meters.budgets.verb_count {
             return StepOutcome::Failed {
@@ -431,12 +434,15 @@ impl Executor {
             };
         }
         match instr {
+            // Every record-reading and partitioning verb begins by walking
+            // the store pages for its selection; the transform is applied
+            // once the walk finishes (`finish_page_instruction`).
             Instr::Grep { sel, .. }
             | Instr::Slice { sel }
             | Instr::Head { sel, .. }
             | Instr::Tail { sel, .. }
-            | Instr::Count { sel, .. } => self.start_page_walk(sel.clone()),
-            Instr::Partition { sel, .. } => self.start_page_walk(sel.clone()),
+            | Instr::Count { sel, .. }
+            | Instr::Partition { sel, .. } => self.start_page_walk(sel.clone()),
             Instr::Ask {
                 sel,
                 question,

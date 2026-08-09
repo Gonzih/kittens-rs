@@ -126,12 +126,12 @@ fn ask_each_rejoins_out_of_order_results() {
         index: 2,
         answer: String::from("C"),
     }]);
-    assert!(matches!(mid, StepOutcome::NeedAsk(_)));
+    assert!(matches!(mid, StepOutcome::AwaitingMore));
     let mid = exec.provide_ask(vec![AskResult {
         index: 0,
         answer: String::from("A"),
     }]);
-    assert!(matches!(mid, StepOutcome::NeedAsk(_)));
+    assert!(matches!(mid, StepOutcome::AwaitingMore));
     let done = exec.provide_ask(vec![AskResult {
         index: 1,
         answer: String::from("B"),

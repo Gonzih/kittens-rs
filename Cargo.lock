@@ -207,6 +207,7 @@ dependencies = [
  "kittens-code-protocol",
  "serde",
  "serde_json",
+ "trybuild",
 ]
 
 [[package]]

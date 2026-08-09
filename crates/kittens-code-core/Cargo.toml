@@ -13,6 +13,7 @@ serde = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+trybuild = { workspace = true }
 
 [features]
 # Removable feature gates (SPEC v0.8 rule T7); both OFF in KC0 builds.

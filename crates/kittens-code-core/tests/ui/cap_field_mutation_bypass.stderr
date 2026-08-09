@@ -1,0 +1,5 @@
+error[E0616]: field `text` of struct `Capped` is private
+ --> tests/ui/cap_field_mutation_bypass.rs:9:12
+  |
+9 |     capped.text = String::from("now far larger than the applied limit allowed");
+  |            ^^^^ private field

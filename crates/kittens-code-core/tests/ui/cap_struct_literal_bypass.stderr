@@ -1,0 +1,29 @@
+error: cannot construct `Capped<_>` with struct literal syntax due to private fields
+  --> tests/ui/cap_struct_literal_bypass.rs:9:39
+   |
+ 9 |     let _forged: Capped<VerbOutput> = Capped {
+   |                                       ^^^^^^
+10 |         text: String::from("this bypasses the truncating constructor"),
+   |         -------------------------------------------------------------- private field
+11 |         applied_limit: 8,
+   |         ---------------- private field
+12 |         truncation: None,
+   |         ---------------- private field
+   |
+   = note: ...and other private field `_kind` that was not provided
+help: you might have meant to use an associated function to build this type
+   |
+ 9 -     let _forged: Capped<VerbOutput> = Capped {
+10 -         text: String::from("this bypasses the truncating constructor"),
+11 -         applied_limit: 8,
+12 -         truncation: None,
+13 -     };
+ 9 +     let _forged: Capped<VerbOutput> = Capped::head(_, _, _);
+   |
+ 9 -     let _forged: Capped<VerbOutput> = Capped {
+10 -         text: String::from("this bypasses the truncating constructor"),
+11 -         applied_limit: 8,
+12 -         truncation: None,
+13 -     };
+ 9 +     let _forged: Capped<VerbOutput> = Capped::head_tail(_, _, _);
+   |
