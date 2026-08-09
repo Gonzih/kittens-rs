@@ -321,6 +321,9 @@ impl FrameDemand {
     /// another forced full repaint remains due. Settlement delivery to the
     /// owning sweep is a cooperative contract; this state machine cannot make
     /// Rust values linear.
+    /// **Drop the old `Sweep` value** (and settle or drop its flights) when
+    /// calling this; a retained old sweep's witnesses are terminally
+    /// rejected, but only dropping it ends its ability to start new work.
     pub fn abandon_active(&mut self) {
         if self.sweeping.take().is_some() {
             self.invalidation = InvalidationState::Clear;

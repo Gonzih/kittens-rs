@@ -41,7 +41,7 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 
 ## 6. Normative K2R-0 surface (amended through exit-review round 5)
 
-Revision 5 retains the mechanism selected by the K2R-0A experiment (C
+Revision 6 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
 restructuring, with round-3 batch-6, round-4 batch-7, and round-5 batch-8
 repairs to the target/start/settlement/sweep lifecycle. This section is **normative** for the K2R-0 host slice,
@@ -279,7 +279,7 @@ Negative controls published beside them, as always.
 
 As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-backend peak memory/bandwidth budgets with zero-allocation-after-init), with finding 7's sharpening: the `write_region` decision is a **K2R-0A-adjacent gate** — the blocking capability freezes only with a compiled no-alloc adapter against an exact SHA.
 
-## 10. The bilateral seam (merge with the harness workstream)
+## 10. The bilateral seam (merge with the harness workstream) — gates full K2R-0 acceptance, not this host slice
 
 This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. Acceptance of either spec's slice is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. Until co-signed, neither spec claims the merge.
 

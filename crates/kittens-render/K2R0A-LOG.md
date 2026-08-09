@@ -329,3 +329,21 @@ shutdown. Both `kittens-render` and the downstream
 `kittens-render-no-std-fixture` built for `thumbv7em-none-eabi --release`. No
 Xtensa, board-HIL, kernel-admission, capability-sealing, or bilateral-seam gate
 is claimed by these host/ARM results.
+
+## Exit review round 6 (2026-08-09): PASS
+
+Full text: `reviews/2026-08-09-exit-review-6-codex.md`. **Verdict: PASS.**
+All five round-5 must-fixes verified ADDRESSED with evidence; no batch-8
+regressions; "the slice is ready for the branch PR." Three non-blocking
+advisories were issued and all three applied before the PR: the
+`StartPermit` struct-literal privacy pin (new E0451 fixture), the
+revision-number/manifest-legend/attribution drift repairs, and the
+explicit drop-the-old-Sweep guidance on `abandon_active` plus the SPEC
+section-10 clarification that the seam gates full K2R-0 acceptance, not
+this host slice. Loop exit condition met: the codebase is done for the
+host slice, the reviewer passed it, and the author agrees with every
+outstanding proposal. Open beyond this slice, unchanged and honestly
+labeled: pixel equivalence (draw-target slice), bilateral seam co-sign,
+Xtensa probe (espup gate), board HIL (hardware in transit), kernel
+source admission, capability sealing at freeze, and the write_region
+transport gate.

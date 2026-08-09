@@ -1,0 +1,5 @@
+error[E0451]: field `_key` of struct `StartPermit` is private
+ --> tests/ui/start_permit_struct_literal_is_private.rs:6:19
+  |
+6 |     StartPermit { _key: key }
+  |                   ^^^^ private field
