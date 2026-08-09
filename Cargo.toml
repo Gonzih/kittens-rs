@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/kittens",
+    "crates/kc0-slice",
     "crates/kittens-code-protocol",
     "crates/kittens-macros",
     "crates/kittens-tui",
