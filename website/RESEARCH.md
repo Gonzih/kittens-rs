@@ -156,7 +156,66 @@ controls its own semantics.
   `main`, publish deterministic output to a new `gh-pages` root, configure the
   source explicitly through the API, and verify the live provenance marker.
 
-## 7. Gaps and decisions deliberately not invented
+## 7. kittens-code flagship audit
+
+- **Fact —** The operator designated `kittens-code` as Kittens' main demo on
+  2026-08-09. The website therefore treats flagship status as product priority,
+  not as a new semantic guarantee.
+- **Fact —** The family has four published crates at unyanked version `0.0.1`:
+  `kittens-code-protocol`, `kittens-code-core`,
+  `kittens-code-driver-tokio`, and `kittens-code-cli`. The crates.io API was
+  checked directly on 2026-08-09; each corresponding docs.rs page returned
+  HTTP 200.
+- **Fact —** The exact published repository state is branch `kc0` at
+  `2a2fb0d63e817515bc17514c197260af14046a16`. It is not an ancestor of the
+  deployed `main`: both branches carry unique work after merge base
+  `185d009f79f2e97a3b58c7150c2d87cdf14c7661`. Website links therefore name
+  `kc0` explicitly instead of constructing broken `main` links.
+- **Fact —** The frozen KC0 contract names a four-layer crate path: serde-only
+  no_std wire data; a no_std + alloc sans-IO engine; a Tokio effect driver; and
+  the `kittens-code` JSONL composition-root binary. The CLI's indexed call
+  graph confirms that its protocol loop submits typed Ops through `Runner`,
+  drives to quiescence, and writes newly published Events exactly once.
+- **Fact —** The core contract is `handle(CoreInput) -> Transition`, with one
+  bounded owned action batch. The appender is the sole write path; authoritative
+  Events follow durability. Model, store-page, VFS, timer, and sub-model work
+  remain driver effects correlated by `EffectId` and `TurnEpoch`.
+- **Fact —** KC0 implements an append-only checksummed JSONL transcript,
+  physical torn-tail truncation before later appends, persisted crash repair,
+  exclusive per-log writer locking, resume-as-replay, checked monotonic ids,
+  and an ownership/epoch terminal ledger. These were explicit release-review
+  blockers and the release changelog records their closure before publication.
+- **Fact —** The context engine keeps the full transcript queryable while the
+  live model window compacts. The RLM executor lowers `grep`, `slice`, `head`,
+  `tail`, `count`, `partition`, `ask`, `ask-each`, and `final` into a typed,
+  budgeted continuation; a successful `recall` returns through the ordinary
+  capped tool-result path.
+- **Fact —** Core law includes branded caps for model-visible values, compiled
+  aggregate-meter ceilings, budget update Events, checked/saturating integer
+  behavior, exactly-once effect terminals, and deterministic replay oracles.
+- **Fact —** The default `JailClient` is scripted and offline. The optional
+  `live` feature admits an Anthropic-dialect SSE client with bounded retry,
+  `Retry-After`, cancellation, and a circuit breaker. Default builds do not
+  pull the HTTP/TLS tree.
+- **Fact —** `kittens-code-protocol` and `kittens-code-core` were release-gated
+  on both `thumbv7em-none-eabi` and `wasm32-unknown-unknown`. This proves the
+  center links under those targets; it does not prove a working MCU/Web driver
+  or an on-silicon agent.
+- **Fact —** The current driver README says the full `kittens::reactor!`
+  topology and E1 evaluation rig remain deferred KC0 scope. The website must
+  not transform the architectural target in the SPEC/FRONTMATTER note into a
+  shipped-current-runner claim.
+- **Observation —** `kittens-code` is the clearest public explanation of why
+  the kernel exists: one application forces streaming, interrupt/shutdown,
+  effect completion, persistence, context pressure, tools, budgets, and
+  frontmatter to share an inspectable vocabulary.
+- **Recommendation —** Put the flagship immediately after the hero; show the
+  three-layer agent decomposition, end-to-end turn flow, four crate boundaries,
+  six enforcement laws, deterministic quick start, RLM example, shipped/open
+  ledger, and the complete evidence library before returning to the foundation
+  crates on `main`.
+
+## 8. Gaps and decisions deliberately not invented
 
 - **Gap: no visitor research, search-query data, or analytics baseline exists
   for Kittens (no data exists).** W0 uses the audiences already named in the
