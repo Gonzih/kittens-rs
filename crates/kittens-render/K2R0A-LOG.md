@@ -114,8 +114,9 @@ slow-successful-sweep/clamp, duplicate/replay, and unchanged-state rejection
 oracles; liveness-critical `#[must_use]` annotations; SPEC §5.2/§6.2
 sealing language reconciled; stale stage prose in lib.rs/geometry/Cargo.toml
 fixed; board-HIL and sealing manifest rows added; probes README/CHANGELOG
-now distinguish the historical and corrected source blueprints without
-claiming either is built (the corrected file remains Xtensa-gated). Batch 5
+attempted to distinguish the historical and corrected blueprints without
+claiming either built; round 3 later found that the "corrected" file was only
+pseudocode, and batch 6 records the honest relabel below. Batch 5
 (author: the reviewing engineer): canonical runnable host lifecycle;
 trybuild UI failures for private/move-only proof boundaries with compiling
 escape-surface controls; a separate external no-std consumer/link fixture;
@@ -142,13 +143,50 @@ externally gated rows are not the cause; six host-core findings are, and
 the reviewer's sharpest observation is that our own external no-std
 fixture was the counterexample for finding 1 (a preclassified transfer
 minting coverage it never wrote). Disposition: **all six accepted**, plus
-the three advisories. Batch 6 (delegated to the reviewing engineer, with
-the author's agreed shapes): (1) structural target/start coupling — the
-only public path into flight starts the transfer FROM the target's
-region; (2) failure/cancellation poisons the sweep via a mandatory
-settlement witness (written-or-failed), only abort leaves a poisoned
-sweep; (3) single-outstanding target per position, settlement clears it;
-(4) blueprint relabeled as pseudocode delta; (5) manifest repairs +
-run-the-example CI step + missing rejection/state-unchanged oracles;
-(6) checked epoch increment, checked eligibility arithmetic, clone
-compile-fail controls, spare-aliasing escape documented. Round 4 follows.
+the three advisories. Batch 6 was delegated to the reviewing engineer with
+the author's agreed shapes; its landed form is recorded below. Round 4
+follows.
+
+## Exit-review batch 6 landed (2026-08-08)
+
+SPEC revision 4 records the implemented host contract. Public
+`InFlight::new` is gone: the consuming `StripeTarget::start_flight` supplies
+the exact target region to the starter, and `StartFlightError` returns the
+starter error, untouched spare, and same target when no transfer was accepted.
+That is structural identity/start coupling; whether the admitted adapter
+really writes the supplied region remains the explicitly sealed-integration
+obligation.
+
+Settlement is now mandatory on resource recovery:
+`Settled::into_parts` returns transport, sent buffer, spare, and exactly one
+move-only `StripeSettlement`. `Written(StripeWritten)` is the sole coverage
+path; `Unwritten(StripeUnwritten)` preserves the real cancelled/failed outcome
+and irreversibly poisons its owning sweep. `Sweep::next_target(&mut self)`
+admits only one outstanding target per plan position, and `Sweep::settle`
+alone clears it. A poisoned sweep cannot mint or finish; only the
+always-available `abort` remains.
+
+Abort is intentionally bookkeeping-terminal rather than physical revocation:
+an outstanding transfer may still write after a replacement starts. Accepting
+the abort retains a forced full repaint; draining closes the window when
+possible, and `FrameDemand::invalidate()` prevents an overlapped replacement
+from clearing the obligation. Epochs 0 through `u64::MAX` are minted once with
+a sticky, profile-independent exhaustion boundary; throttle eligibility uses
+checked addition and reports the finite `Tick::MAX` horizon rather than
+saturating. Explicit clone failures cover the move-only proof carriers, and
+the safe shared/interior-mutable backing alias between sent and spare buffers
+is published as a compiling, documentation-enforced escape.
+
+The evidence repair runs the canonical host lifecycle in CI rather than only
+building its zero-test harness, adds the missing foreign `finish_failed` and
+cross-demand stripe-settlement rejections, and asserts all observable state on
+every rejection path. `TRACE-MANIFEST.md` now records those oracles, the
+normative exact-SHA/no-allocation `write_region` gate, and an explicit adjacent
+negative control or an honest reason none exists for each row; sweep coverage
+is marked closed only against the repaired target/start/settlement lifecycle.
+
+The probe's `adapter-blueprint.rs` is now labeled accurately: it is a
+non-compile-ready pseudocode delta over the retained `VERDICT.md`, not
+shape-complete or compile-ready adapter source. The real pinned-SHA Xtensa
+adapter/link gate, board HIL, kernel admission, sealing, and bilateral seam
+remain open; batch 6 does not claim any of them closed.

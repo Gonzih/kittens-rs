@@ -1,8 +1,8 @@
-use kittens_render::sweep::{StripeWritten, Sweep};
+use kittens_render::sweep::{StripeSettlement, StripeWritten, Sweep};
 
 fn replay<S>(sweep: &mut Sweep<S>, witness: StripeWritten) {
-    let _first = sweep.mark_written(witness);
-    let _second = sweep.mark_written(witness);
+    let _first = sweep.settle(StripeSettlement::Written(witness));
+    let _second = sweep.settle(StripeSettlement::Written(witness));
 }
 
 fn main() {}

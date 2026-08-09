@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 
 use kittens_render::geometry::{PanelGeometry, Region};
-use kittens_render::sweep::StripeTarget;
+use kittens_render::sweep::{StripeSettlement, StripeTarget};
 use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
 
 /// Targets are unforgeable; the transfer suite mints them through a
@@ -20,7 +20,7 @@ fn target() -> StripeTarget {
     let plan = kittens_render::sweep::SweepPlan::for_panel(geometry, 4).expect("plan");
     let mut demand = kittens_render::demand::FrameDemand::new(0, plan);
     demand.request();
-    let sweep = demand
+    let mut sweep = demand
         .begin_sweep(kittens_render::demand::Tick(0), ())
         .expect("mint");
     let target = sweep.next_target().expect("first stripe");
@@ -101,8 +101,11 @@ impl SharedSlot {
     }
 }
 
+#[derive(Debug)]
 struct ModelTransport(&'static str);
+#[derive(Debug)]
 struct ModelBuffer(&'static str);
+#[derive(Debug)]
 struct ModelSpare(&'static str);
 
 /// One model transfer over the shared slot. Arms the slot on start;
@@ -119,6 +122,7 @@ fn start_on(
     slot: &Arc<SharedSlot>,
     transport: ModelTransport,
     buffer: ModelBuffer,
+    _region: Region,
 ) -> ModelTransfer {
     {
         let mut state = slot.state.lock().expect("slot lock");
@@ -240,11 +244,73 @@ impl Drop for ModelTransfer {
 }
 
 fn flight_on(slot: &Arc<SharedSlot>) -> InFlight<ModelTransfer, ModelSpare> {
-    InFlight::new(
-        start_on(slot, ModelTransport("qspi"), ModelBuffer("buf-a")),
+    target()
+        .start_flight(ModelSpare("spare-0"), |region| {
+            Ok::<_, core::convert::Infallible>(start_on(
+                slot,
+                ModelTransport("qspi"),
+                ModelBuffer("buf-a"),
+                region,
+            ))
+        })
+        .expect("infallible model start")
+}
+
+#[test]
+fn starter_error_returns_target_spare_and_error_for_retry() {
+    let geometry = PanelGeometry::custom_unvalidated_panel(REGION_FULL);
+    let plan = kittens_render::sweep::SweepPlan::for_panel(geometry, 4).expect("plan");
+    let mut demand = kittens_render::demand::FrameDemand::new(0, plan);
+    demand.request();
+    let mut sweep = demand
+        .begin_sweep(kittens_render::demand::Tick(0), ())
+        .expect("sweep");
+    let target = sweep.next_target().expect("one stripe");
+    let expected = target.region();
+
+    let rejected = target.start_flight(
         ModelSpare("spare-0"),
-        target(),
-    )
+        |region| -> Result<ModelTransfer, (ModelTransport, ModelBuffer)> {
+            assert_eq!(region, expected, "target supplies the starter region");
+            Err((ModelTransport("qspi"), ModelBuffer("buf-a")))
+        },
+    );
+    let Err(rejected) = rejected else {
+        panic!("the injected start rejection must return ownership")
+    };
+    let ((transport, buffer), spare, target) = rejected.into_parts();
+    assert_eq!(transport.0, "qspi");
+    assert_eq!(buffer.0, "buf-a");
+    assert_eq!(spare.0, "spare-0");
+    assert_eq!(target.region(), expected);
+    assert!(
+        sweep.next_target().is_none(),
+        "the returned target remains the sole outstanding target"
+    );
+
+    let slot = Arc::new(SharedSlot::default());
+    let mut flight = target
+        .start_flight(spare, |region| {
+            Ok::<_, core::convert::Infallible>(start_on(&slot, transport, buffer, region))
+        })
+        .expect("retry accepts the same target");
+    slot.complete();
+    let (_counter, waker) = counting_waker();
+    let settled = match flight.poll_complete(&mut Context::from_waker(&waker)) {
+        Poll::Ready(settled) => settled,
+        Poll::Pending => panic!("completed retry settles"),
+    };
+    let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+    assert_eq!(
+        sweep.settle(settlement),
+        Ok(TransferOutcome::Completed),
+        "settlement clears outstanding and advances once"
+    );
+    assert!(sweep.is_complete());
+    let (written, ()) = sweep.finish().expect("single stripe written");
+    demand
+        .finish_written(written, kittens_render::demand::Tick(1))
+        .expect("active witness");
 }
 
 #[test]
@@ -265,16 +331,10 @@ fn polled_then_lost_arbitration_gets_exactly_one_wake() {
     );
 
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(mut settled) => {
+        Poll::Ready(settled) => {
             assert_eq!(settled.outcome(), TransferOutcome::Completed);
-            let witness = settled.stripe_written();
-            assert!(witness.is_some(), "completed mints a witness");
-            let _ = witness;
-            assert!(
-                settled.stripe_written().is_none(),
-                "the mint is single-use: a second call returns None"
-            );
-            let (transport, buffer, spare) = settled.into_resources();
+            let (transport, buffer, spare, settlement) = settled.into_parts();
+            assert!(matches!(settlement, StripeSettlement::Written(_)));
             assert_eq!(transport.0, "qspi");
             assert_eq!(buffer.0, "buf-a");
             assert_eq!(spare.0, "spare-0");
@@ -331,15 +391,17 @@ fn cancel_then_late_completion_stays_cancelled() {
     slot.complete();
 
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(mut settled) => {
+        Poll::Ready(settled) => {
             assert_eq!(
                 settled.outcome(),
                 TransferOutcome::Cancelled,
                 "late completion cannot rewrite a cancelled settlement"
             );
+            let (_transport, _buffer, _spare, settlement) = settled.into_parts();
             assert!(
-                settled.stripe_written().is_none(),
-                "a cancelled stripe mints no coverage witness"
+                matches!(settlement, StripeSettlement::Unwritten(ref unwritten)
+                    if unwritten.outcome() == TransferOutcome::Cancelled),
+                "cancellation mints the mandatory poison witness"
             );
         }
         Poll::Pending => panic!("a drained transfer must settle"),
@@ -356,13 +418,17 @@ fn drain_racing_prior_completion_reports_completed() {
     let (_counter, waker) = counting_waker();
     let mut cx = Context::from_waker(&waker);
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(settled) => assert_eq!(settled.outcome(), TransferOutcome::Completed),
+        Poll::Ready(settled) => {
+            assert_eq!(settled.outcome(), TransferOutcome::Completed);
+            let (_transport, _buffer, _spare, settlement) = settled.into_parts();
+            assert!(matches!(settlement, StripeSettlement::Written(_)));
+        }
         Poll::Pending => panic!("settled transfer must recover"),
     }
 }
 
 #[test]
-fn failure_settles_returns_resources_and_mints_no_witness() {
+fn failure_settles_returns_resources_and_mints_unwritten_witness() {
     let slot = Arc::new(SharedSlot::default());
     let mut flight = flight_on(&slot);
     let (_counter, waker) = counting_waker();
@@ -371,10 +437,14 @@ fn failure_settles_returns_resources_and_mints_no_witness() {
 
     slot.fail();
     match flight.poll_complete(&mut cx) {
-        Poll::Ready(mut settled) => {
+        Poll::Ready(settled) => {
             assert_eq!(settled.outcome(), TransferOutcome::Failed);
-            assert!(settled.stripe_written().is_none());
-            let (_transport, buffer, _spare) = settled.into_resources();
+            let (_transport, buffer, _spare, settlement) = settled.into_parts();
+            assert!(matches!(
+                settlement,
+                StripeSettlement::Unwritten(ref unwritten)
+                    if unwritten.outcome() == TransferOutcome::Failed
+            ));
             assert_eq!(buffer.0, "buf-a", "buffer recovered");
         }
         Poll::Pending => panic!("failed transfer must settle"),
@@ -468,15 +538,25 @@ fn sequential_transfers_reuse_the_same_slot() {
     assert!(slot.is_disarmed());
 
     // Second transfer on the SAME slot with the recovered transport.
-    let (transport, _buffer, spare) = settled.into_resources();
-    let second_transfer = start_on(&slot, transport, ModelBuffer("buf-b"));
-    let mut second = InFlight::new(second_transfer, spare, target());
+    let (transport, _buffer, spare, first_settlement) = settled.into_parts();
+    assert!(matches!(first_settlement, StripeSettlement::Written(_)));
+    let mut second = target()
+        .start_flight(spare, |region| {
+            Ok::<_, core::convert::Infallible>(start_on(
+                &slot,
+                transport,
+                ModelBuffer("buf-b"),
+                region,
+            ))
+        })
+        .expect("infallible second start");
     assert!(second.poll_complete(&mut cx).is_pending());
     slot.complete();
     match second.poll_complete(&mut cx) {
         Poll::Ready(s) => {
             assert_eq!(s.outcome(), TransferOutcome::Completed);
-            let (transport, _b, spare) = s.into_resources();
+            let (transport, _b, spare, settlement) = s.into_parts();
+            assert!(matches!(settlement, StripeSettlement::Written(_)));
             assert_eq!(transport.0, "qspi", "same transport identity");
             assert_eq!(spare.0, "spare-0", "same spare identity");
         }

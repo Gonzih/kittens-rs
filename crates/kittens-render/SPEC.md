@@ -1,6 +1,6 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 3, 2026-08-08 (section 6 amended into the normative K2R-0 surface per the K2R-0A outcome and exit-review round 1; revision 2 recorded the review adoption). Revision 1 was reviewed by the same external reviewer as the research (Codex `gpt-5.6-sol`, ultra effort): 12 blocking, 5 important, 1 minor finding; verdict — *K2R-0A may start only as a non-freezing feasibility experiment; K2R-0 must not start yet.* Revision 2 adopted that verdict and all findings (disposition log in section 12) and made section 6 provisional; the K2R-0A experiment then selected and demonstrated the shapes, and exit-review round 1's restructuring landed — so revision 3 amends section 6 into the normative surface, exactly the sequence the verdict required.
+- Status: revision 4, 2026-08-08 (batch 6 incorporates every accepted exit-review round-3 finding and advisory into the normative host surface: structural target/start coupling, mandatory settlement, poisoned sweeps, single-outstanding targets, checked provenance/time horizons, and corrected evidence labels). Revision 3 made section 6 normative after the K2R-0A outcome and exit-review round 1; earlier revision history remains in section 12.
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
@@ -34,27 +34,30 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 
 1. **Resource-carrying results.** Every driven success or failure settles through `Recovered`/`Settled` and returns the transport, sent buffer, and spare. Ordinary `drop` of an in-flight completion is a **documented non-returning boundary** — the HAL cancels and drops; nothing comes back through `Future::Output`. Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain transition that is driven to settlement (finding 3).
 2. **Sealed capabilities — a pre-freeze obligation.** The transport capability traits will be sealed to reviewed backend adapters before any freeze, because ownership alone cannot distinguish a blocking `start_region` from an honest one (finding 8). During the experiment they are deliberately open so probes and models can implement them (section 6.2); the open state is itself a recorded gate, not a contradiction. Raw backend access remains the documented compiling escape surface.
-3. **Epoch discipline.** One sweep-owned snapshot per sweep, exposed only through `&S`; every transmitted stripe is fully reconstructed from that logically immutable state. Ordinary ownership enforces the owned/shared-reference boundary, but unconstrained `S` can contain interior mutability or handles to shared external state: keeping those stable for the epoch is a documented caller obligation and compiling escape surface. Any failure terminates the current epoch and forces a full repaint. Sweep completion is decided **only** by a consuming progress token over a fixed, validated full-panel plan — never by caller assertion (finding 9).
+3. **Epoch discipline.** One sweep-owned snapshot per sweep, exposed only through `&S`; every transmitted stripe is fully reconstructed from that logically immutable state. Ordinary ownership enforces the owned/shared-reference boundary, but unconstrained `S` can contain interior mutability or handles to shared external state: keeping those stable for the epoch is a documented caller obligation and compiling escape surface. Every started transfer settles through its owning sweep. A failed or cancelled settlement poisons that sweep: it can mint no further target and can never finish, so only abort remains; abort forces the next epoch to repaint the full panel. Sweep completion is decided **only** by consuming in-order written settlements over a fixed, validated full-panel plan — never by caller assertion (finding 9; exit-review round-3 findings 2–3).
 4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
 6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
 
-## 6. Normative K2R-0 surface (amended per K2R-0A outcome and exit-review round 1)
+## 6. Normative K2R-0 surface (amended through exit-review round 3)
 
-Revision 3 amendment: the K2R-0A experiment selected its mechanism (C
+Revision 4 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
-restructured the composition; this section is now **normative** for the
-K2R-0 host slice, superseding revision 2's provisional candidates. The one
-still-open shape is the kernel-admitted source carrier (K2R-0A open item
-3): how these values appear as `reactor!` arms awaits the kernel admission
-slice and is explicitly not specified here.
+restructuring, with round-3 batch-6 repairs to the target/settlement/sweep
+lifecycle. This section is **normative** for the K2R-0 host slice,
+superseding revision 2's provisional candidates. The one still-open shape is
+the kernel-admitted source carrier (K2R-0A open item 3): how these values
+appear as `reactor!` arms awaits the kernel admission slice and is explicitly
+not specified here.
 
 ### 6.1 Geometry and identity
 
 `Region` — global panel coordinates, never stripe-local. `FrameEpoch` —
-scene-snapshot identity, monotonic within one demand machine's documented
-2^64-sweep operating horizon, minted only by `FrameDemand`; no public
-constructor.
+scene-snapshot identity, monotonic within one demand machine's exact
+2^64-minted-epoch operating horizon, minted only by `FrameDemand`; no
+public constructor. Epochs 0 through `u64::MAX` are each minted once. A
+further `begin_sweep` attempt panics with one build-profile-independent
+exhaustion message before mutating demand state.
 
 ### 6.2 Transfer boundary
 
@@ -69,23 +72,42 @@ stores the settlement at its completion-observation **linearization point**
 Recovered<T, B>` — the **sole outcome authority**.
 
 `StripeTarget` — non-`Clone`, private-field identity (demand, epoch, region),
-minted only by `Sweep::next_target` and consumed by `InFlight::new`; a
-transfer and the identity it claims cannot be paired independently.
+minted only by `Sweep::next_target`. Its consuming `start_flight(spare,
+starter)` is the **only public construction path** for `InFlight` and invokes
+`starter: FnOnce(Region) -> Result<X, E>` with exactly this target's region.
+On `Ok`, the returned already-started transfer, spare, and same target move
+into flight in one operation. On `Err`, no flight exists and a move-only
+start error returns `E`, the spare, and the unchanged target; `Err` therefore
+means the integration accepted no transfer and no later physical write can
+result from the attempt; a start that may still complete MUST return an
+`OwnedTransfer` in `Ok`. `E` is responsible for returning any transport/
+sent-buffer resources captured by the starter. The caller may retry that same
+target or abort. Whether a reviewed adapter really
+wrote the supplied region remains the sealed-integration obligation; the
+previous independent public pairing of an arbitrary started transfer with a
+target does not exist (exit-review round-3 finding 1).
 
 `InFlight<X, S>` — `&mut`-polled and **conditionally** `Unpin`: exactly
 `X: OwnedTransfer + Unpin` and `S: Unpin`; `X::Transport` and `X::Buffer`
 need no `Unpin` bound because they are not stored separately in flight. It
-owns the transfer, independently writable spare, and `StripeTarget`;
-`begin_drain`/`poll_complete` is the only resource-returning path; ordinary
-drop is the documented non-returning boundary (but integrations MUST disarm
-their completion slot on drop — no stale registrations).
+owns the transfer, spare, and `StripeTarget`; `begin_drain`/`poll_complete`
+is the only resource-returning path; ordinary drop is the documented
+non-returning boundary (but integrations MUST disarm their completion slot on
+drop — no stale registrations). “Spare is independently writable” describes
+the owned Rust value only: unconstrained sent-buffer and spare types may share
+safe interior-mutable backing storage, so disjoint physical storage remains a
+reviewed-integration/caller obligation and a published compiling escape.
 
-`Settled<T, B, S>` — private resources, outcome, and single-use target;
-safe external code cannot construct one or rewrite its proof-bearing state.
-`Settled::stripe_written(&mut self)` is the **only mint** for a
-`StripeWritten` witness, consumes the target at most once, and succeeds only
-for `Completed` settlements: marking a cancelled, failed, never-started, or
-already-witnessed stripe is unrepresentable.
+`Settled<T, B, S>` — private resources, outcome, and target; safe external
+code cannot construct one or rewrite its proof-bearing state.
+`Settled::into_parts(self)` is the only resource extraction path and returns
+the transport, sent buffer, spare, and exactly one move-only
+`StripeSettlement`. That settlement is either `Written(StripeWritten)` for a
+real `Completed` recovery or `Unwritten(StripeUnwritten)` carrying the real
+`Cancelled`/`Failed` outcome. Both inner witnesses have private
+demand/epoch/region fields and are non-`Clone`; neither can be forged,
+rewritten, duplicated, or minted twice. A never-started transfer cannot
+produce `Settled` at all (exit-review round-3 finding 2).
 
 ### 6.3 Sweep
 
@@ -97,24 +119,47 @@ compiling escape for hosts and unadmitted hardware.
 rejected) over a `PanelGeometry`, fixed at `FrameDemand` construction;
 sweeps cannot substitute another. `Sweep<S>` — crate-owned, minted only by
 `begin_sweep`; owns the snapshot (shared-reference access only), the plan,
-the repaint-obligation state, and the provenance-branded epoch. Ordinary
-borrowing does not freeze interior mutable or externally shared state inside
-`S`; callers MUST keep that state logically immutable for the epoch.
-`mark_written(StripeWritten)` enforces demand provenance, epoch match, and
-plan order; `finish(self)` yields `(SweepWritten, S)` only at full coverage;
-`abort(self)` yields `(AbortedSweep, S)` at any point. Coverage is a
+the repaint-obligation state, the provenance-branded epoch, and one private
+position state (`Ready`/`Outstanding`/`Poisoned`). Ordinary borrowing does
+not freeze interior mutable or externally shared state inside `S`; callers
+MUST keep that state logically immutable for the epoch.
+
+`next_target(&mut self)` mints at most one target for the current plan
+position. While that target is outstanding it returns `None`; only accepting
+its matching `StripeSettlement` clears the outstanding state. `settle`
+rejects a foreign demand, epoch, region, non-outstanding target, or any
+settlement after poison without changing observable state. A matching
+`Written` settlement clears outstanding and advances coverage exactly once;
+a matching `Unwritten` settlement clears outstanding and irreversibly
+poisons the sweep. A poisoned sweep returns no target and `finish` always
+returns it unchanged. `finish(self)` yields `(SweepWritten, S)` only at full,
+healthy, fully-settled coverage; `abort(self)` remains always available for
+shutdown and yields `(AbortedSweep, S)` at any point.
+
+Aborting cannot revoke either an outstanding target or a physical transfer:
+the target can still be started and the transfer can still land after demand
+accepts the abort and a replacement epoch starts. Callers drop the target and
+drain the transfer before replacement whenever possible. The abort settlement
+forces a full repaint; callers also invoke
+`FrameDemand::invalidate()` when a late/stale write may have overlapped a
+replacement so that replacement cannot clear the obligation. Coverage is a
 construction, never a caller claim. Every K2R-0 plan covers the full panel;
 `full_repaint == false` means no outstanding forced-repaint obligation, not
-a partial sweep.
+a partial sweep (exit-review round-3 finding 3).
 
 ### 6.4 Demand
 
 `FrameDemand` — owns the plan and accepts caller-supplied `Tick` values from
 a trusted monotonic platform time source. Regressing written-settlement
 times are clamped, but arbitrary forward values are outside this type's
-validation. Demand provenance uses a thumbv7em-compatible `AtomicU32` with
-checked exhaustion, widened to `u64` in witnesses; epoch uniqueness is
-bounded by the documented 2^64-sweep lifetime of one demand machine.
+validation. Eligibility uses checked addition: when `last_written +
+min_interval` exceeds `Tick::MAX`, `begin_sweep` panics before mutating state
+rather than silently shortening the interval. Callers replace the demand
+machine only after settling/abandoning its active epoch when their platform
+time base reaches that documented horizon. Demand provenance uses a
+thumbv7em-compatible `AtomicU32` with checked exhaustion, widened to `u64` in
+witnesses; epoch uniqueness lasts exactly 2^64 successful sweeps as specified
+in section 6.1.
 `request` (the only kittens-tui-shared vocabulary), `begin_sweep(now,
 snapshot)` (sole eligibility acknowledgment; one active demand epoch),
 `eligible_at`, `finish_written(SweepWritten, now) ->
@@ -123,9 +168,10 @@ now)`, `abandon_active` (dropped-sweep recovery), `invalidate` (bool latch;
 a mid-sweep invalidation makes that sweep's settlement
 `DiscardedByInvalidation`: obligations retained, throttle unchanged).
 `abandon_active` is witness-terminal only: before beginning the replacement
-sweep, callers MUST drain or settle every transfer from the abandoned one,
-because a retained old `Sweep` can still drive physical writes. Foreign or
-stale witnesses are rejected **without mutation, in release builds**.
+sweep, callers MUST drop every unstarted old target and drain or settle every
+started transfer, because a retained old `Sweep` can mint another old target
+and live transfers can still drive physical writes. Foreign or stale
+witnesses are rejected **without mutation, in release builds**.
 Milestone vocabulary is written-only: `finish_written`, `last_written`,
 `SweepWritten` — nothing claims physical presentation.
 
@@ -167,7 +213,7 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
 
 - both selection-loss positions for completion; completion before first poll; completion during waker registration;
 - cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
-- sweep-plan coverage: the consuming progress token is the only path to `SweepWritten`; failure aborts the epoch; full-repaint obligation set and cleared per the state table;
+- sweep-plan coverage: target-consuming start is the only public flight construction; one target is outstanding per plan position; every transfer settlement is reconciled through `Sweep::settle`; written settlements are the only path to `SweepWritten`; failed/cancelled settlements poison and force abort; full-repaint obligation set and cleared per the state table;
 - demand-policy state table: request-during-sweep, stale/duplicate `finish`, slow-sweep throttling under paused time;
 - touch generation machine: IRQ before registration/during read/after flag sample; INT still asserted; I²C failure restoring pending state; bounded services per activation; startup with INT asserted; generation wrap;
 - Outcome-B-specific (if selected): receiver closure, task shutdown, resource-return backpressure;
@@ -193,3 +239,13 @@ This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15)
 ## 12. Review log
 
 Spec review, 2026-08-08: Codex `gpt-5.6-sol`, ultra effort, read-only; interrupted once and resumed in-session; 18 findings (12 blocking, 5 important, 1 minor), full text retained in session transcript and `/tmp/codex-spec-review-2.txt` at review time. Disposition: findings 1–14 and 16–18 adopted as restructured above (1→§6 provisional; 2→§7 compile probe + busy-poll rejection; 3→§5.1 cancel-and-drain; 4→§7 matrix/selection rule/∅; 5→§7 candidate B artifact; 6→§6 typestate caveats + §3 emittability; 7→§6/§9 blocking-capability gate; 8→§5.2 sealed capabilities; 9→§5.3 progress token, damage deferred; 10→§6 sweep token + finish; 11→§5.4 honest semantics; 12→§5.4 generation machine + §7 touch admission; 13→§8 runtime oracle; 14→§8 trace matrix; 16→§6 `Sweep<S>`; 17→§4/§5.5 milestone honesty; 18→§6 `on_eligible` removed). Finding 15 adopted as section 10's bilateral gate; the co-signing edit to `docs/kittens-code/SPEC.md` belongs to the sibling workstream and is recorded here as a pending cross-workstream ask, not performed unilaterally. Verdict accepted in full.
+
+Exit review round 3, 2026-08-08: six findings and three advisories, all
+accepted; full text is retained at
+`reviews/2026-08-08-exit-review-3-codex.md`, and the agreed batch-6 shapes are
+recorded in `K2R0A-LOG.md`. Revision 4 incorporates their controlling
+contract changes in sections 5, 6, and 8 before the batch-6 implementation:
+structural target/start coupling; written-or-unwritten mandatory settlement;
+poison-on-failure; single-outstanding issuance; honest pseudocode/evidence
+labels; checked epoch and eligibility horizons; move-only witness controls;
+and the shared-backing-store spare escape.

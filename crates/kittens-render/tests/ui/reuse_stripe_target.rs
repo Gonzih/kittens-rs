@@ -1,5 +1,5 @@
 use kittens_render::sweep::StripeTarget;
-use kittens_render::transfer::{InFlight, OwnedTransfer};
+use kittens_render::transfer::OwnedTransfer;
 
 fn reuse<X: OwnedTransfer, S>(
     first: X,
@@ -8,8 +8,8 @@ fn reuse<X: OwnedTransfer, S>(
     second_spare: S,
     target: StripeTarget,
 ) {
-    let _first = InFlight::new(first, first_spare, target);
-    let _second = InFlight::new(second, second_spare, target);
+    let _first = target.start_flight(first_spare, |_| Ok::<X, ()>(first));
+    let _second = target.start_flight(second_spare, |_| Ok::<X, ()>(second));
 }
 
 fn main() {}

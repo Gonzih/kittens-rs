@@ -3,10 +3,9 @@
 //! provenance-branded settlement, invalidation terminating the affected
 //! epoch, abandon recovery, written-milestone vocabulary).
 //!
-//! Stripes are "written" here by running a real model transfer per stripe —
-//! the only mint for a [`StripeWritten`] witness is a `Completed`
-//! settlement, so these oracles exercise the full transfer→sweep→demand
-//! composition (finding 4).
+//! Stripes are settled here by running a real model transfer per stripe.
+//! Target-driven start and the mandatory written-or-unwritten settlement
+//! exercise the full transfer→sweep→demand composition.
 
 #![allow(missing_docs)]
 
@@ -14,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use kittens_render::demand::{ForeignSweep, FrameDemand, Tick, WrittenDisposition};
-use kittens_render::geometry::{PanelGeometry, Region};
-use kittens_render::sweep::{InvalidPlan, Sweep, SweepPlan};
-use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::geometry::{FrameEpoch, PanelGeometry, Region};
+use kittens_render::sweep::{InvalidPlan, StripeSettlement, StripeTarget, Sweep, SweepPlan};
+use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
 
 const PANEL: Region = Region {
     x: 0,
@@ -31,6 +30,15 @@ fn plan() -> SweepPlan {
 
 fn demand() -> FrameDemand {
     FrameDemand::new(0, plan())
+}
+
+fn observable_demand_state(demand: &FrameDemand) -> (bool, Option<FrameEpoch>, bool, Option<Tick>) {
+    (
+        demand.is_dirty(),
+        demand.sweeping(),
+        demand.full_repaint_required(),
+        demand.eligible_at(),
+    )
 }
 
 // --- minimal model transfer for witness minting -------------------------
@@ -82,20 +90,24 @@ impl OwnedTransfer for ModelTransfer {
     }
 }
 
-/// Transfers one stripe of `sweep` through a model transfer with the given
-/// outcome, returning whether a witness could be minted and marked.
-fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> bool {
-    let target = sweep.next_target().expect("stripe remains");
+/// Drives one already-issued target to the requested model outcome and
+/// returns its mandatory move-only settlement witness.
+fn transfer_target(target: StripeTarget, outcome: TransferOutcome) -> StripeSettlement {
+    let expected_region = target.region();
     let hw = Arc::new(Hw {
         done: Mutex::new(false),
         fail: Mutex::new(false),
     });
-    let transfer = ModelTransfer {
-        hw: Arc::clone(&hw),
-        resources: Some(((), ())),
-        settled: None,
-    };
-    let mut flight = InFlight::new(transfer, (), target);
+    let mut flight = target
+        .start_flight((), |region| {
+            assert_eq!(region, expected_region, "target supplies the start region");
+            Ok::<_, core::convert::Infallible>(ModelTransfer {
+                hw: Arc::clone(&hw),
+                resources: Some(((), ())),
+                settled: None,
+            })
+        })
+        .expect("infallible model start");
     match outcome {
         TransferOutcome::Completed => *hw.done.lock().expect("hw") = true,
         TransferOutcome::Failed => {
@@ -106,23 +118,30 @@ fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> bo
     }
     let waker = Waker::noop().clone();
     let mut cx = Context::from_waker(&waker);
-    let mut settled = match flight.poll_complete(&mut cx) {
+    let settled = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => settled,
         Poll::Pending => panic!("model settles immediately"),
     };
-    match settled.stripe_written() {
-        Some(witness) => {
-            sweep.mark_written(witness).expect("in-order witness");
-            true
-        }
-        None => false,
-    }
+    assert_eq!(settled.region(), expected_region);
+    let ((), (), (), settlement) = settled.into_parts();
+    assert_eq!(settlement.outcome(), outcome);
+    settlement
+}
+
+/// Issues, transfers, and reconciles the next stripe.
+fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> TransferOutcome {
+    let target = sweep.next_target().expect("stripe remains");
+    let settlement = transfer_target(target, outcome);
+    sweep.settle(settlement).expect("matching settlement")
 }
 
 /// Fully writes a sweep through model transfers and finishes it.
 fn write_all<S>(mut sweep: Sweep<S>) -> (kittens_render::sweep::SweepWritten, S) {
     while !sweep.is_complete() {
-        assert!(transfer_next_stripe(&mut sweep, TransferOutcome::Completed));
+        assert_eq!(
+            transfer_next_stripe(&mut sweep, TransferOutcome::Completed),
+            TransferOutcome::Completed
+        );
     }
     sweep.finish().expect("fully covered")
 }
@@ -159,30 +178,55 @@ fn requests_coalesce_and_epochs_are_monotonic() {
     demand.finish_failed(aborted, Tick(1)).expect("active");
 }
 
-#[test]
-fn cancelled_and_failed_transfers_cannot_mark_coverage() {
+fn assert_unwritten_settlement_poisons(outcome: TransferOutcome) {
     let mut demand = demand();
     demand.request();
     let mut sweep = demand.begin_sweep(Tick(0), ()).expect("sweep");
 
+    assert_eq!(transfer_next_stripe(&mut sweep, outcome), outcome);
+    assert!(sweep.is_poisoned(), "unwritten settlement poisons");
     assert!(
-        !transfer_next_stripe(&mut sweep, TransferOutcome::Cancelled),
-        "a cancelled transfer mints no witness"
-    );
-    assert!(
-        !transfer_next_stripe(&mut sweep, TransferOutcome::Failed),
-        "a failed transfer mints no witness"
+        sweep.next_target().is_none(),
+        "poisoned sweep cannot mint a retry target"
     );
     assert!(!sweep.is_complete());
-    // No caller assertion can complete an uncovered sweep.
-    let Err(sweep) = sweep.finish() else {
-        panic!("uncovered sweep must not finish")
+    let before = (
+        sweep.epoch(),
+        sweep.next_region(),
+        sweep.full_repaint(),
+        sweep.is_complete(),
+        sweep.is_poisoned(),
+    );
+    let Err(mut sweep) = sweep.finish() else {
+        panic!("poisoned sweep must not finish")
     };
-    // The only paths out are more Completed transfers or abort.
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        before,
+        "failed finish returns the poisoned sweep unchanged"
+    );
+    assert!(sweep.next_target().is_none(), "only abort remains");
     let (aborted, ()) = sweep.abort();
     demand.finish_failed(aborted, Tick(1)).expect("active");
     assert!(demand.is_dirty());
+    assert!(demand.sweeping().is_none());
     assert!(demand.full_repaint_required());
+}
+
+#[test]
+fn cancelled_settlement_poisons_sweep() {
+    assert_unwritten_settlement_poisons(TransferOutcome::Cancelled);
+}
+
+#[test]
+fn failed_settlement_poisons_sweep() {
+    assert_unwritten_settlement_poisons(TransferOutcome::Failed);
 }
 
 #[test]
@@ -216,11 +260,16 @@ fn foreign_and_stale_settlement_is_rejected_without_mutation() {
 
     // Both minted epoch 0 — provenance branding, not epoch numbers, must
     // reject the swap (finding 6), in release builds, without mutation.
+    let before = observable_demand_state(&right);
     assert_eq!(
         right.finish_written(left_written, Tick(1)),
         Err(ForeignSweep)
     );
-    assert!(right.sweeping().is_some(), "no mutation on rejection");
+    assert_eq!(
+        observable_demand_state(&right),
+        before,
+        "every observable stays unchanged on foreign written rejection"
+    );
 
     // The rightful witnesses settle normally afterwards.
     assert_eq!(
@@ -231,6 +280,59 @@ fn foreign_and_stale_settlement_is_rejected_without_mutation() {
     // recover left via abandon (its sweep value is gone).
     left.abandon_active();
     assert!(left.is_dirty());
+}
+
+#[test]
+fn foreign_failed_settlement_is_rejected_without_mutation() {
+    let mut left = demand();
+    let mut right = demand();
+    left.request();
+    right.request();
+
+    let left_sweep = left.begin_sweep(Tick(0), ()).expect("left sweep");
+    let right_sweep = right.begin_sweep(Tick(0), ()).expect("right sweep");
+    let (left_aborted, ()) = left_sweep.abort();
+    let (right_aborted, ()) = right_sweep.abort();
+
+    let before = observable_demand_state(&right);
+    assert_eq!(
+        right.finish_failed(left_aborted, Tick(1)),
+        Err(ForeignSweep)
+    );
+    assert_eq!(
+        observable_demand_state(&right),
+        before,
+        "foreign abort cannot disturb the active demand state"
+    );
+    right
+        .finish_failed(right_aborted, Tick(1))
+        .expect("rightful abort still settles");
+    left.abandon_active();
+}
+
+#[test]
+fn stale_failed_settlement_is_rejected_without_mutation() {
+    let mut demand = demand();
+    demand.request();
+    let old = demand.begin_sweep(Tick(0), ()).expect("old");
+    let (old_aborted, ()) = old.abort();
+    demand.abandon_active();
+    let replacement = demand.begin_sweep(Tick(0), ()).expect("replacement");
+    let (replacement_aborted, ()) = replacement.abort();
+
+    let before = observable_demand_state(&demand);
+    assert_eq!(
+        demand.finish_failed(old_aborted, Tick(1)),
+        Err(ForeignSweep)
+    );
+    assert_eq!(
+        observable_demand_state(&demand),
+        before,
+        "stale abort rejection leaves all observable state unchanged"
+    );
+    demand
+        .finish_failed(replacement_aborted, Tick(1))
+        .expect("replacement abort remains valid");
 }
 
 #[test]
@@ -362,43 +464,138 @@ fn plan_tiles_the_panel_exactly_including_partial_last_stripe() {
 }
 
 #[test]
-fn out_of_order_witnesses_are_rejected() {
+fn only_one_target_is_outstanding_and_settlement_clears_it() {
     let mut demand = demand();
     demand.request();
     let mut sweep = demand.begin_sweep(Tick(0), ()).expect("sweep");
 
-    // Mint a duplicate target for stripe 0 BEFORE writing it (the only
-    // legal way to obtain a stale-position target), write stripe 0
-    // properly, then complete the duplicate: its witness is out of order
-    // and rejected — replay through a real transfer cannot double-count.
-    let duplicate = sweep.next_target().expect("stripe 0 duplicate");
-    assert!(transfer_next_stripe(&mut sweep, TransferOutcome::Completed));
-
-    let hw = Arc::new(Hw {
-        done: Mutex::new(true),
-        fail: Mutex::new(false),
-    });
-    let mut replay = InFlight::new(
-        ModelTransfer {
-            hw,
-            resources: Some(((), ())),
-            settled: None,
-        },
-        (),
-        duplicate,
+    let target = sweep.next_target().expect("first target");
+    let before = (
+        sweep.epoch(),
+        sweep.next_region(),
+        sweep.full_repaint(),
+        sweep.is_complete(),
+        sweep.is_poisoned(),
     );
-    let waker = Waker::noop().clone();
-    let mut cx = Context::from_waker(&waker);
-    let mut settled = match replay.poll_complete(&mut cx) {
-        Poll::Ready(settled) => settled,
-        Poll::Pending => panic!("model settles"),
+    assert!(
+        sweep.next_target().is_none(),
+        "a position cannot mint a duplicate target"
+    );
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        before,
+        "the refused duplicate mint changes no sweep state"
+    );
+    let Err(returned) = sweep.finish() else {
+        panic!("an outstanding target prevents finish")
     };
-    let witness = settled.stripe_written().expect("completed mints");
-    let error = sweep.mark_written(witness).expect_err("out of order");
-    assert_eq!(error.expected, plan().region_at(1));
+    sweep = returned;
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        before,
+        "outstanding-finish rejection returns the sweep unchanged"
+    );
+
+    let settlement = transfer_target(target, TransferOutcome::Completed);
+    assert_eq!(sweep.settle(settlement), Ok(TransferOutcome::Completed));
+    assert_eq!(sweep.next_region(), plan().region_at(1));
+    let incomplete = (
+        sweep.epoch(),
+        sweep.next_region(),
+        sweep.full_repaint(),
+        sweep.is_complete(),
+        sweep.is_poisoned(),
+    );
+    let Err(returned) = sweep.finish() else {
+        panic!("healthy but incomplete coverage prevents finish")
+    };
+    sweep = returned;
+    assert_eq!(
+        (
+            sweep.epoch(),
+            sweep.next_region(),
+            sweep.full_repaint(),
+            sweep.is_complete(),
+            sweep.is_poisoned(),
+        ),
+        incomplete,
+        "incomplete-finish rejection returns the sweep unchanged"
+    );
+    let _second = sweep
+        .next_target()
+        .expect("settlement cleared outstanding for the next position");
 
     let (aborted, ()) = sweep.abort();
     demand.finish_failed(aborted, Tick(1)).expect("active");
+}
+
+#[test]
+fn cross_demand_stripe_settlement_is_rejected_without_mutation() {
+    let mut left_demand = demand();
+    let mut right_demand = demand();
+    left_demand.request();
+    right_demand.request();
+    let mut left = left_demand.begin_sweep(Tick(0), ()).expect("left");
+    let mut right = right_demand.begin_sweep(Tick(0), ()).expect("right");
+
+    let left_target = left.next_target().expect("left target");
+    let right_target = right.next_target().expect("right target");
+    assert_eq!(left_target.region(), right_target.region());
+    let foreign = transfer_target(left_target, TransferOutcome::Completed);
+    let rightful = transfer_target(right_target, TransferOutcome::Completed);
+
+    let before = (
+        right.epoch(),
+        right.next_region(),
+        right.full_repaint(),
+        right.is_complete(),
+        right.is_poisoned(),
+    );
+    let error = right
+        .settle(foreign)
+        .expect_err("cross-demand written settlement is foreign");
+    assert_eq!(error.expected, before.1);
+    assert_eq!(
+        (
+            right.epoch(),
+            right.next_region(),
+            right.full_repaint(),
+            right.is_complete(),
+            right.is_poisoned(),
+        ),
+        before,
+        "foreign stripe rejection preserves progress, poison, and target state"
+    );
+    assert!(
+        right.next_target().is_none(),
+        "the rightful target remains outstanding after rejection"
+    );
+    assert_eq!(
+        right.settle(rightful),
+        Ok(TransferOutcome::Completed),
+        "the rightful settlement still advances"
+    );
+
+    let (left_aborted, ()) = left.abort();
+    left_demand
+        .finish_failed(left_aborted, Tick(1))
+        .expect("left abort");
+    let (right_written, ()) = write_all(right);
+    right_demand
+        .finish_written(right_written, Tick(1))
+        .expect("right completes");
 }
 
 #[test]
@@ -495,6 +692,34 @@ fn regressing_finish_time_is_clamped() {
 }
 
 #[test]
+fn tick_horizon_is_checked_without_state_mutation() {
+    let mut demand = FrameDemand::new(2, plan());
+    demand.request();
+    let sweep = demand.begin_sweep(Tick(0), ()).expect("first");
+    let (written, ()) = write_all(sweep);
+    demand
+        .finish_written(written, Tick(u64::MAX - 1))
+        .expect("active");
+    demand.request();
+
+    let before = observable_demand_state(&demand);
+    for _ in 0..2 {
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = demand.begin_sweep(Tick::MAX, ());
+            }))
+            .is_err(),
+            "an unrepresentable positive throttle interval panics"
+        );
+        assert_eq!(
+            observable_demand_state(&demand),
+            before,
+            "the checked Tick horizon rejects before state mutation"
+        );
+    }
+}
+
+#[test]
 fn abandoned_epochs_witnesses_are_terminally_rejected() {
     let mut demand = demand();
     demand.request();
@@ -508,15 +733,17 @@ fn abandoned_epochs_witnesses_are_terminally_rejected() {
     // documented caller obligation is to drain it; the machine's guarantee
     // is that its witness is terminally rejected without mutation.
     let (old_written, ()) = write_all(old_sweep);
+    let before = observable_demand_state(&demand);
     assert_eq!(
         demand.finish_written(old_written, Tick(1)),
         Err(ForeignSweep)
     );
     assert_eq!(
-        demand.sweeping(),
-        Some(new_sweep.epoch()),
-        "rejection did not disturb the live sweep"
+        observable_demand_state(&demand),
+        before,
+        "stale rejection did not disturb any observable live-sweep state"
     );
+    assert_eq!(demand.sweeping(), Some(new_sweep.epoch()));
 
     let (written, ()) = write_all(new_sweep);
     demand.finish_written(written, Tick(1)).expect("active");

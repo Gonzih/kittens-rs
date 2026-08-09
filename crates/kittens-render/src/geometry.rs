@@ -18,8 +18,9 @@ pub struct Region {
 
 /// Identity of one logically immutable scene snapshot.
 ///
-/// Monotonic within one demand machine's documented 2^64-sweep operating
-/// horizon; minted only by the frame-demand policy, never by transports.
+/// Monotonic within one demand machine's exact 2^64-minted-epoch operating
+/// horizon (0 through `u64::MAX`, each once); minted only by the frame-demand
+/// policy, never by transports.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct FrameEpoch(pub(crate) u64);
 

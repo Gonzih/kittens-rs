@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `StripeUnwritten` in the current scope
+ --> tests/ui/clone_stripe_unwritten.rs:4:42
+  |
+4 |     let _copy: StripeUnwritten = witness.clone();
+  |                                          ^^^^^ method not found in `StripeUnwritten`

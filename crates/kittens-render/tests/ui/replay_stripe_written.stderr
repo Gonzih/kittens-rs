@@ -1,9 +1,9 @@
 error[E0382]: use of moved value: `witness`
- --> tests/ui/replay_stripe_written.rs:5:38
+ --> tests/ui/replay_stripe_written.rs:5:58
   |
 3 | fn replay<S>(sweep: &mut Sweep<S>, witness: StripeWritten) {
   |                                    ------- move occurs because `witness` has type `StripeWritten`, which does not implement the `Copy` trait
-4 |     let _first = sweep.mark_written(witness);
-  |                                     ------- value moved here
-5 |     let _second = sweep.mark_written(witness);
-  |                                      ^^^^^^^ value used here after move
+4 |     let _first = sweep.settle(StripeSettlement::Written(witness));
+  |                                                         ------- value moved here
+5 |     let _second = sweep.settle(StripeSettlement::Written(witness));
+  |                                                          ^^^^^^^ value used here after move

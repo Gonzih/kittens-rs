@@ -13,9 +13,17 @@ use crate::sweep::{AbortedSweep, Sweep, SweepPlan, SweepWritten};
 
 /// A platform-supplied instant in platform-defined tick units. The time
 /// source is trusted to be monotonic; written-settlement regressions are
-/// clamped, but arbitrary forward values are outside this type's checks.
+/// clamped, but arbitrary forward values are outside this type's checks. The
+/// finite domain ends at [`Tick::MAX`]; throttle addition never saturates.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Tick(pub u64);
+
+impl Tick {
+    /// The final instant representable by this profile-independent tick
+    /// domain. A positive interval extending beyond it exhausts the demand
+    /// machine's documented time horizon rather than becoming shorter.
+    pub const MAX: Self = Self(u64::MAX);
+}
 
 /// A settlement witness carried provenance from a different `FrameDemand`
 /// instance or a non-active sweep. Nothing was mutated.
@@ -42,6 +50,10 @@ pub enum WrittenDisposition {
 // with the same documented exhaustion stance (2^64 sweeps).
 static DEMAND_IDS: AtomicU32 = AtomicU32::new(0);
 
+const EPOCH_EXHAUSTED: &str =
+    "FrameDemand epoch space exhausted (2^64 sweep epochs minted; create a new demand machine)";
+const TICK_HORIZON_EXHAUSTED: &str = "FrameDemand eligibility exceeds Tick::MAX (replace the demand machine after settling its epoch)";
+
 fn mint_demand_id(counter: &AtomicU32) -> Option<u64> {
     counter
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -52,6 +64,21 @@ fn mint_demand_id(counter: &AtomicU32) -> Option<u64> {
 fn mint_demand_id_or_panic(counter: &AtomicU32) -> u64 {
     mint_demand_id(counter)
         .expect("FrameDemand provenance-id space exhausted (2^32 - 1 successful constructions)")
+}
+
+fn mint_epoch_or_panic(next_epoch: &mut Option<u64>) -> FrameEpoch {
+    let raw = next_epoch.expect(EPOCH_EXHAUSTED);
+    *next_epoch = raw.checked_add(1);
+    FrameEpoch(raw)
+}
+
+fn eligibility_or_panic(last_written: Tick, min_interval: u64) -> Tick {
+    Tick(
+        last_written
+            .0
+            .checked_add(min_interval)
+            .expect(TICK_HORIZON_EXHAUSTED),
+    )
 }
 
 /// The demand policy state machine. Owns the fixed, validated panel plan;
@@ -83,7 +110,7 @@ pub struct FrameDemand {
     last_written: Option<Tick>,
     scheduled: Option<Tick>,
     min_interval: u64,
-    next_epoch: u64,
+    next_epoch: Option<u64>,
     full_repaint: bool,
 }
 
@@ -107,7 +134,7 @@ impl FrameDemand {
             last_written: None,
             scheduled: None,
             min_interval: min_interval_ticks,
-            next_epoch: 0,
+            next_epoch: Some(0),
             full_repaint: true, // the first-ever sweep paints everything
         }
     }
@@ -149,22 +176,28 @@ impl FrameDemand {
     /// epoch, throttle elapsed. Binds the caller-frozen snapshot, the fixed
     /// plan, the repaint mode, and the branded epoch. The throttled case
     /// records [`FrameDemand::eligible_at`]; calling this is also the sole
-    /// acknowledgment of elapsed eligibility. Epochs are unique while this
-    /// demand remains below its documented 2^64-sweep operating horizon;
-    /// continuing the same machine past that horizon is unsupported.
+    /// acknowledgment of elapsed eligibility. Epochs 0 through `u64::MAX`
+    /// are each minted once: exactly 2^64 successful sweeps.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if an eligible call would exceed the exact
+    /// 2^64-minted-epoch horizon, or if `last_written + min_interval` exceeds
+    /// [`Tick::MAX`]. Both are sticky finite-domain boundaries with fixed,
+    /// build-profile-independent messages; neither counter wraps or
+    /// saturates.
     pub fn begin_sweep<S>(&mut self, now: Tick, snapshot: S) -> Option<Sweep<S>> {
         if !self.dirty || self.sweeping.is_some() {
             return None;
         }
         if let Some(last) = self.last_written {
-            let eligible = Tick(last.0.saturating_add(self.min_interval));
+            let eligible = eligibility_or_panic(last, self.min_interval);
             if now < eligible {
                 self.scheduled = Some(eligible);
                 return None;
             }
         }
-        let epoch = FrameEpoch(self.next_epoch);
-        self.next_epoch += 1;
+        let epoch = mint_epoch_or_panic(&mut self.next_epoch);
         self.dirty = false;
         self.scheduled = None;
         self.sweeping = Some(epoch);
@@ -229,7 +262,11 @@ impl FrameDemand {
     }
 
     /// Settles the active sweep as failed/aborted: demand retained, the
-    /// full-repaint obligation recorded, the throttle not advanced.
+    /// full-repaint obligation recorded, the throttle not advanced. This
+    /// bookkeeping cannot revoke an outstanding target or already-started
+    /// physical write: drop the target and drain the flight before replacement
+    /// when possible, and call [`FrameDemand::invalidate`] if a stale write can
+    /// overlap a replacement so that another full repaint remains due.
     ///
     /// # Errors
     ///
@@ -254,11 +291,12 @@ impl FrameDemand {
     ///
     /// **Caller obligation (round-2 finding on premature abandonment):**
     /// this machine can terminally reject the abandoned epoch's witnesses
-    /// (`ForeignSweep`), but it cannot stop a still-live `Sweep` value's
-    /// in-flight transfers from physically writing the panel. Drain or
-    /// settle every transfer of the old sweep before beginning the next
-    /// one; abandoning while transfers are in flight risks visually
-    /// interleaved epochs until the forced full repaint lands.
+    /// (`ForeignSweep`), but it cannot stop a retained old `Sweep` from
+    /// minting a target later or an already-started transfer from physically
+    /// writing the panel. Drop every unstarted target and drain every old
+    /// transfer before beginning the replacement. If a late write can
+    /// overlap the replacement, call [`FrameDemand::invalidate`] so that
+    /// replacement is discarded and another forced full repaint remains due.
     pub fn abandon_active(&mut self) {
         if self.sweeping.take().is_some() {
             self.active_invalidated = false;
@@ -274,6 +312,14 @@ mod tests {
 
     use super::*;
 
+    fn panic_message(payload: &(dyn core::any::Any + Send)) -> Option<&str> {
+        payload.downcast_ref::<&str>().copied().or_else(|| {
+            payload
+                .downcast_ref::<std::string::String>()
+                .map(std::string::String::as_str)
+        })
+    }
+
     #[test]
     fn demand_id_exhaustion_is_sticky() {
         let counter = AtomicU32::new(u32::MAX - 1);
@@ -286,5 +332,33 @@ mod tests {
         );
         assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
         assert_eq!(mint_demand_id(&counter), None, "exhaustion never reopens");
+    }
+
+    #[test]
+    fn epoch_horizon_mints_max_once_then_panics_stickily() {
+        let mut next = Some(u64::MAX);
+        assert_eq!(mint_epoch_or_panic(&mut next), FrameEpoch(u64::MAX));
+        assert_eq!(next, None, "MAX transitions to sticky exhaustion");
+
+        for _ in 0..2 {
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mint_epoch_or_panic(&mut next)
+            }))
+            .expect_err("a sweep beyond the full 2^64 horizon must panic");
+            assert_eq!(
+                panic_message(panic.as_ref()),
+                Some(EPOCH_EXHAUSTED),
+                "debug and release use the same explicit panic"
+            );
+            assert_eq!(next, None, "exhaustion remains sticky after unwind");
+        }
+    }
+
+    #[test]
+    fn eligibility_horizon_accepts_max_and_rejects_overflow() {
+        assert_eq!(eligibility_or_panic(Tick(u64::MAX - 1), 1), Tick::MAX);
+        let panic = std::panic::catch_unwind(|| eligibility_or_panic(Tick::MAX, 1))
+            .expect_err("positive interval beyond MAX must not saturate");
+        assert_eq!(panic_message(panic.as_ref()), Some(TICK_HORIZON_EXHAUSTED));
     }
 }

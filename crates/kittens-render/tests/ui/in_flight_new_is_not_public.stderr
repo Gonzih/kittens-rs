@@ -1,0 +1,5 @@
+error[E0599]: no associated function or constant named `new` found for struct `InFlight<X, S>` in the current scope
+ --> tests/ui/in_flight_new_is_not_public.rs:5:29
+  |
+5 |     let _flight = InFlight::new(transfer, spare, target);
+  |                             ^^^ associated function or constant not found in `InFlight<_, _>`

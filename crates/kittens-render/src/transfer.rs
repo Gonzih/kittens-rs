@@ -28,7 +28,7 @@
 use core::task::{Context, Poll};
 
 use crate::geometry::Region;
-use crate::sweep::{StripeTarget, StripeWritten};
+use crate::sweep::{StripeSettlement, StripeTarget, StripeUnwritten, StripeWritten};
 
 /// An owned, in-flight region transfer at the HAL boundary.
 pub trait OwnedTransfer: Sized {
@@ -88,14 +88,14 @@ pub struct Recovered<T, B> {
 /// finding 4): safe code can neither construct a settlement nor rewrite
 /// its outcome, so the coverage proof chain starts only at a real,
 /// settled transfer.
+#[must_use = "a settled transfer must be recovered and reconciled with its sweep"]
 #[derive(Debug)]
 pub struct Settled<T, B, S> {
     transport: T,
     buffer: B,
     spare: S,
     outcome: TransferOutcome,
-    /// Present exactly until the witness is minted: single-use.
-    target: Option<StripeTarget>,
+    target: StripeTarget,
 }
 
 impl<T, B, S> Settled<T, B, S> {
@@ -104,39 +104,92 @@ impl<T, B, S> Settled<T, B, S> {
         self.outcome
     }
 
-    /// The region this settlement targeted while its single-use target is
-    /// still present. Returns an empty region after
-    /// [`Settled::stripe_written`] consumes that target.
-    pub fn region(&self) -> Region {
-        self.target.as_ref().map_or(
-            Region {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-            },
-            StripeTarget::region,
-        )
+    /// The exact target region supplied to the starter that produced this
+    /// transfer. Whether the integration really wrote it remains a reviewed
+    /// adapter obligation.
+    pub const fn region(&self) -> Region {
+        self.target.region()
     }
 
-    /// Mints the coverage witness: **at most once**, and **only** for a
-    /// `Completed` settlement — the mint consumes the settlement's target,
-    /// so a second call returns `None` and a cancelled/failed settlement
-    /// never mints (round-2 finding 4's single-use requirement).
-    pub fn stripe_written(&mut self) -> Option<StripeWritten> {
-        match self.outcome {
-            TransferOutcome::Completed => self.target.take().map(|target| StripeWritten {
-                demand_id: target.demand_id,
-                epoch: target.epoch,
-                region: target.region,
+    /// Consumes the settlement and returns every resource together with the
+    /// mandatory, single-use witness that reconciles the transfer with its
+    /// owning sweep. Completion yields `Written`; cancellation or failure
+    /// yields `Unwritten`, so recovery cannot silently skip sweep poisoning.
+    pub fn into_parts(self) -> (T, B, S, StripeSettlement) {
+        let settlement = match self.outcome {
+            TransferOutcome::Completed => StripeSettlement::Written(StripeWritten {
+                demand_id: self.target.demand_id,
+                epoch: self.target.epoch,
+                region: self.target.region,
             }),
-            TransferOutcome::Cancelled | TransferOutcome::Failed => None,
-        }
+            TransferOutcome::Cancelled | TransferOutcome::Failed => {
+                StripeSettlement::Unwritten(StripeUnwritten {
+                    demand_id: self.target.demand_id,
+                    epoch: self.target.epoch,
+                    region: self.target.region,
+                    outcome: self.outcome,
+                })
+            }
+        };
+        (self.transport, self.buffer, self.spare, settlement)
     }
+}
 
-    /// Consumes the settlement, returning every resource.
-    pub fn into_resources(self) -> (T, B, S) {
-        (self.transport, self.buffer, self.spare)
+/// A target-driven start was rejected before any transfer was accepted.
+///
+/// The error owns the starter-defined recovery value, the untouched spare,
+/// and the same target, so callers can retry that exact position or abort the
+/// sweep. Any transport or sent-buffer resources captured by the starter
+/// must be returned inside `E`; safe Rust cannot infer that integration
+/// detail.
+#[derive(Debug)]
+pub struct StartFlightError<E, S> {
+    error: E,
+    spare: S,
+    target: StripeTarget,
+}
+
+impl<E, S> StartFlightError<E, S> {
+    /// Returns the rejected start's error, spare, and original target.
+    /// Consuming all three together makes the retry/abort ownership decision
+    /// explicit and prevents minting a second target for the position.
+    pub fn into_parts(self) -> (E, S, StripeTarget) {
+        (self.error, self.spare, self.target)
+    }
+}
+
+impl StripeTarget {
+    /// Starts the transfer from this target's exact region and, on success,
+    /// moves the returned transfer, spare, and same target into flight.
+    ///
+    /// This is the only public path into [`InFlight`]. It removes the old
+    /// ability to pair an independently started transfer with an unrelated
+    /// target. The starter remains an integration boundary: reviewed code
+    /// must actually start a write of the supplied region.
+    ///
+    /// # Errors
+    ///
+    /// [`StartFlightError`] returns `E`, the spare, and the original target.
+    /// Returning `Err` is an acceptance-atomic contract: no transfer was
+    /// started and no later physical write can result from the attempt. A
+    /// start that may still complete must return an [`OwnedTransfer`] in
+    /// `Ok`, not `Err`.
+    pub fn start_flight<X, S, E>(
+        self,
+        spare: S,
+        starter: impl FnOnce(Region) -> Result<X, E>,
+    ) -> Result<InFlight<X, S>, StartFlightError<E, S>>
+    where
+        X: OwnedTransfer,
+    {
+        match starter(self.region) {
+            Ok(transfer) => Ok(InFlight::from_started(transfer, spare, self)),
+            Err(error) => Err(StartFlightError {
+                error,
+                spare,
+                target: self,
+            }),
+        }
     }
 }
 
@@ -145,8 +198,10 @@ impl<T, B, S> Settled<T, B, S> {
 /// `Unpin` exactly when `X: OwnedTransfer + Unpin` and `S: Unpin`; the
 /// associated transport and buffer types need no `Unpin` bound because
 /// they are not stored separately in flight. Owns the transfer *and* the
-/// spare buffer, which stays independently writable during the flight
-/// (SPEC 6.2's transfer boundary).
+/// spare buffer, whose owned value stays writable during the flight. The
+/// generic types do not prove that sent and spare buffers have disjoint
+/// backing storage: safe shared/interior-mutable aliases remain a documented
+/// integration escape (SPEC 6.2).
 ///
 /// ```text
 /// InFlight ── poll_complete Ready ─────────────▶ Settled { .., Completed/Failed }
@@ -162,12 +217,7 @@ pub struct InFlight<X: OwnedTransfer, S> {
 }
 
 impl<X: OwnedTransfer, S> InFlight<X, S> {
-    /// Wraps a started transfer together with the spare buffer that remains
-    /// writable during the flight, bound to the unforgeable stripe target
-    /// minted by [`crate::sweep::Sweep::next_target`] — the transfer and
-    /// its claimed identity can no longer be paired independently
-    /// (round-2 finding 4).
-    pub const fn new(transfer: X, spare: S, target: StripeTarget) -> Self {
+    pub(crate) const fn from_started(transfer: X, spare: S, target: StripeTarget) -> Self {
         Self {
             transfer: Some(transfer),
             spare: Some(spare),
@@ -225,7 +275,7 @@ impl<X: OwnedTransfer, S> InFlight<X, S> {
                     buffer: recovered.buffer,
                     spare,
                     outcome: recovered.outcome,
-                    target: Some(target),
+                    target,
                 })
             }
             Poll::Pending => Poll::Pending,

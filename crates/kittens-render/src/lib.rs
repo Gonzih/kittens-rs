@@ -1,6 +1,6 @@
 //! Embedded rendering/interaction profile for the Kittens reactor kernel.
 //!
-//! **Stage: K2R-0 host slice** (`SPEC.md` revision 3: section 6 is the
+//! **Stage: K2R-0 host slice** (`SPEC.md` revision 4: section 6 is the
 //! normative host surface; the K2R-0A experiment that selected it is
 //! recorded in `K2R0A-LOG.md`, and `TRACE-MANIFEST.md` maps every required
 //! oracle to its status). Not yet frozen: sealing, the kernel-admitted

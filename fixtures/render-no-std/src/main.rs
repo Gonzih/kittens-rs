@@ -6,20 +6,41 @@ use core::panic::PanicInfo;
 use core::task::{Context, Poll, Waker};
 
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
-use kittens_render::geometry::PanelGeometry;
+use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::SweepPlan;
-use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
 
 #[derive(Debug)]
 struct ProbeTransport {
     sequence: u8,
+    written_region: Option<Region>,
+}
+
+impl ProbeTransport {
+    /// The fixture's concrete start boundary records the exact region it
+    /// accepts before returning an owned completion. It is invoked only by
+    /// `StripeTarget::start_flight`, so the fixture no longer preclassifies an
+    /// unrelated transfer as completed and attaches a target afterward.
+    fn start_region(
+        mut self,
+        region: Region,
+        buffer: [u8; 1],
+    ) -> Result<ProbeTransfer, (Self, [u8; 1])> {
+        self.sequence += 1;
+        self.written_region = Some(region);
+        Ok(ProbeTransfer {
+            transport: self,
+            buffer,
+            outcome: None,
+        })
+    }
 }
 
 #[derive(Debug)]
 struct ProbeTransfer {
     transport: ProbeTransport,
     buffer: [u8; 1],
-    outcome: TransferOutcome,
+    outcome: Option<TransferOutcome>,
 }
 
 impl OwnedTransfer for ProbeTransfer {
@@ -27,18 +48,21 @@ impl OwnedTransfer for ProbeTransfer {
     type Buffer = [u8; 1];
 
     fn poll_done(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
+        if self.outcome.is_none() {
+            self.outcome = Some(TransferOutcome::Completed);
+        }
         Poll::Ready(())
     }
 
     fn cancel(&mut self) {
-        self.outcome = TransferOutcome::Cancelled;
+        self.outcome = Some(TransferOutcome::Cancelled);
     }
 
     fn recover(self) -> Recovered<Self::Transport, Self::Buffer> {
         Recovered {
             transport: self.transport,
             buffer: self.buffer,
-            outcome: self.outcome,
+            outcome: self.outcome.expect("polled or cancelled before recovery"),
         }
     }
 }
@@ -59,25 +83,29 @@ fn linked_render_path(stripe_height: u16) -> bool {
     let Some(target) = sweep.next_target() else {
         return false;
     };
+    let expected_region = target.region();
 
-    let transfer = ProbeTransfer {
-        transport: ProbeTransport { sequence: 1 },
-        buffer: [0x5a],
-        outcome: TransferOutcome::Completed,
+    let transport = ProbeTransport {
+        sequence: 0,
+        written_region: None,
     };
-    let mut in_flight = InFlight::new(transfer, [0xc3], target);
+    let Ok(mut in_flight) =
+        target.start_flight([0xc3], |region| transport.start_region(region, [0x5a]))
+    else {
+        return false;
+    };
     let mut cx = Context::from_waker(Waker::noop());
-    let Poll::Ready(mut settled) = in_flight.poll_complete(&mut cx) else {
+    let Poll::Ready(settled) = in_flight.poll_complete(&mut cx) else {
         return false;
     };
-    let Some(written_stripe) = settled.stripe_written() else {
-        return false;
-    };
-    if sweep.mark_written(written_stripe).is_err() {
+    if settled.region() != expected_region {
         return false;
     }
 
-    let (transport, sent, spare) = settled.into_resources();
+    let (transport, sent, spare, stripe_settlement) = settled.into_parts();
+    if sweep.settle(stripe_settlement) != Ok(TransferOutcome::Completed) {
+        return false;
+    }
     let Ok((written_sweep, snapshot)) = sweep.finish() else {
         return false;
     };
@@ -89,6 +117,7 @@ fn linked_render_path(stripe_height: u16) -> bool {
         && !demand.is_dirty()
         && demand.sweeping().is_none()
         && transport.sequence == 1
+        && transport.written_region == Some(expected_region)
         && sent == [0x5a]
         && spare == [0xc3]
         && snapshot == 0xa5

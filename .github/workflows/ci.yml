@@ -19,6 +19,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-targets --all-features
+      - run: cargo run -p kittens-render --example host_sweep
       - run: cargo test -p kittens --doc --all-features
       - run: RUSTDOCFLAGS='-D warnings' cargo doc -p kittens --all-features --no-deps
       - run: cargo build -p kittens-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release --bins

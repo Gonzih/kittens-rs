@@ -2,16 +2,17 @@
 //!
 //! The transport below is deliberately small and synchronous, but it uses
 //! the same ownership and proof boundaries as a hardware integration: the
-//! transfer owns the transport and sent buffer, [`InFlight`] owns the spare
-//! and an unforgeable target, and only a completed settlement can advance
-//! sweep coverage.
+//! transfer owns the transport and sent buffer,
+//! [`InFlight`](kittens_render::transfer::InFlight) owns the spare
+//! and an unforgeable target, and every settlement must reconcile with the
+//! sweep (completion advances; failure or cancellation poisons).
 
 use std::task::{Context, Poll, Waker};
 
 use kittens_render::demand::{FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::{PanelGeometry, Region};
 use kittens_render::sweep::{StripeTarget, Sweep, SweepPlan};
-use kittens_render::transfer::{InFlight, OwnedTransfer, Recovered, TransferOutcome};
+use kittens_render::transfer::{OwnedTransfer, Recovered, TransferOutcome};
 
 const STRIPE_HEIGHT: u16 = 112;
 
@@ -59,8 +60,9 @@ impl StripeBuffer {
         );
     }
 
-    /// The independently owned spare may be prepared while the sent buffer
-    /// belongs to the transfer; clearing it cannot mutate in-flight bytes.
+    /// These concrete buffers own disjoint `Option` storage, so this spare
+    /// may be prepared while the sent buffer belongs to the transfer.
+    /// Arbitrary generic buffer types do not get that disjointness guarantee.
     fn prepare_as_spare(&mut self) {
         self.rendered = None;
     }
@@ -155,8 +157,9 @@ impl HostResources {
 }
 
 /// One stripe follows the complete proof chain: the sweep mints its target,
-/// `InFlight` consumes that target, settlement mints one written witness,
-/// and only consuming that witness may advance the sweep plan.
+/// consuming the target invokes the starter with its exact region, settlement
+/// returns one mandatory witness, and only reconciling that witness may
+/// advance the sweep plan.
 fn write_next_stripe(
     sweep: &mut Sweep<FrameSnapshot>,
     resources: HostResources,
@@ -180,15 +183,18 @@ fn write_next_stripe(
         spare,
     } = resources;
     ready.render(sweep.snapshot(), &target);
-    let transfer = transport.start(ready, region);
-    let mut in_flight = InFlight::new(transfer, spare, target);
+    let mut in_flight = target
+        .start_flight(spare, |target_region| {
+            Ok::<_, core::convert::Infallible>(transport.start(ready, target_region))
+        })
+        .expect("the infallible host starter accepts the target");
     in_flight
         .spare_mut()
         .expect("spare remains available in flight")
         .prepare_as_spare();
 
     let mut context = Context::from_waker(Waker::noop());
-    let mut settled = match in_flight.poll_complete(&mut context) {
+    let settled = match in_flight.poll_complete(&mut context) {
         Poll::Ready(settled) => settled,
         Poll::Pending => panic!("the synchronous host model settles on its first poll"),
     };
@@ -199,15 +205,14 @@ fn write_next_stripe(
         region.y + region.height,
     );
 
-    let written = settled
-        .stripe_written()
-        .expect("a completed settlement mints exactly one witness");
-    sweep
-        .mark_written(written)
-        .expect("the target is the sweep's next planned stripe");
-    println!("  mark:   written coverage advanced");
-
-    let (transport, sent, next_ready) = settled.into_resources();
+    let (transport, sent, next_ready, settlement) = settled.into_parts();
+    assert_eq!(
+        sweep
+            .settle(settlement)
+            .expect("the settlement matches the one outstanding target"),
+        TransferOutcome::Completed,
+    );
+    println!("  settle: written coverage advanced");
     HostResources {
         transport,
         ready: next_ready,
@@ -244,7 +249,9 @@ fn finish_written_frame(
     now: Tick,
 ) -> FrameSnapshot {
     let epoch = sweep.epoch();
-    let (written, snapshot) = sweep.finish().expect("every planned stripe was marked");
+    let (written, snapshot) = sweep
+        .finish()
+        .expect("every planned stripe was reconciled as written");
     println!("sweep:  finish epoch {} -> SweepWritten", epoch.get());
     let disposition = demand
         .finish_written(written, now)

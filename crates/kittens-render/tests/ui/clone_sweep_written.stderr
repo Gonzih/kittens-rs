@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `SweepWritten` in the current scope
+ --> tests/ui/clone_sweep_written.rs:4:39
+  |
+4 |     let _copy: SweepWritten = witness.clone();
+  |                                       ^^^^^ method not found in `SweepWritten`
