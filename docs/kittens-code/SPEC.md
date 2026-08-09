@@ -526,7 +526,18 @@ CoreInputs that need them, never ambient.
 ## 13. Frontends and configuration
 
 - F1. KC0 headless: stdin/stdout protocol stream + JSONL event dump
-  (kittens-code-cli).
+  (`kittens-code-cli`). Each non-empty stdin line is one serialized `Op`;
+  the composition root assigns monotonically increasing `SubmissionId`s,
+  drives the runner to quiescence after each accepted op, and writes each
+  newly published `Event` exactly once as one stdout line, flushing each
+  line. Malformed input produces a non-persisted protocol error event and
+  does not stop later lines. `Shutdown` is submitted and drained before the
+  loop exits; EOF performs one final drain. Bootstrap precedence is CLI args
+  over environment over documented defaults for the session log, workspace
+  root, and model backend. The default backend is the deterministic
+  `JailClient` loaded from a JSON scenario file and never opens the network;
+  the `live` cargo feature admits explicit `LiveClient` selection with the
+  provider API key and model id supplied only as bootstrap environment.
 - F2. ACP adapter: candidate (driver-tokio). ACP *wire protocol* version
   (currently 1) is distinct from schema/package artifact versions.
 - F3. kittens-tui seam: **resolved in shape by conformance** (I-14) — one
