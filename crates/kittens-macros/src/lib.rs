@@ -1,9 +1,21 @@
 //! Procedural-macro compiler for the Kittens K0 reactor grammar.
+//!
+//! # Coverage boundary
+//!
+//! The five `#[proc_macro]` functions below are compiler ABI shims. An empty
+//! [`proc_macro::TokenStream`] can be constructed in-process, but unit tests
+//! cannot supply populated compiler-backed input and observe populated output
+//! conversion outside macro expansion. The shims are therefore absent only
+//! from the unit-test build. Their shared token-level parser, validator,
+//! diagnostic rendering, and all four expansion paths remain present and are
+//! exercised directly; downstream trybuild fixtures remain the invocation-level
+//! compile oracle.
 
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, HashSet};
 
+#[cfg(not(test))]
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -19,38 +31,43 @@ const MAX_DRAIN: usize = 4096;
 /// Expands the selected K0 implementation: direct core polling with an owned
 /// private event enum.
 #[proc_macro]
+#[cfg(not(test))]
 pub fn reactor(input: TokenStream) -> TokenStream {
-    expand_entry(input, Backend::Core, Transfer::Event)
+    expand_input(input.into(), Backend::Core, Transfer::Event).into()
 }
 
 /// Retained comparison: direct core polling with a private event enum.
 #[doc(hidden)]
 #[proc_macro]
+#[cfg(not(test))]
 pub fn reactor_event(input: TokenStream) -> TokenStream {
-    expand_entry(input, Backend::Core, Transfer::Event)
+    expand_input(input.into(), Backend::Core, Transfer::Event).into()
 }
 
 /// Retained comparison: direct core polling with a selected tag and per-arm
 /// item slots.
 #[doc(hidden)]
 #[proc_macro]
+#[cfg(not(test))]
 pub fn reactor_slots(input: TokenStream) -> TokenStream {
-    expand_entry(input, Backend::Core, Transfer::Slots)
+    expand_input(input.into(), Backend::Core, Transfer::Slots).into()
 }
 
 /// Retained control: direct biased Tokio selection with a private event enum.
 #[doc(hidden)]
 #[proc_macro]
+#[cfg(not(test))]
 pub fn reactor_tokio_event(input: TokenStream) -> TokenStream {
-    expand_entry(input, Backend::Tokio, Transfer::Event)
+    expand_input(input.into(), Backend::Tokio, Transfer::Event).into()
 }
 
 /// Retained control: direct biased Tokio selection with a selected tag and
 /// per-arm item slots.
 #[doc(hidden)]
 #[proc_macro]
+#[cfg(not(test))]
 pub fn reactor_tokio_slots(input: TokenStream) -> TokenStream {
-    expand_entry(input, Backend::Tokio, Transfer::Slots)
+    expand_input(input.into(), Backend::Tokio, Transfer::Slots).into()
 }
 
 #[derive(Clone, Copy)]
@@ -65,14 +82,14 @@ enum Transfer {
     Slots,
 }
 
-fn expand_entry(input: TokenStream, backend: Backend, transfer: Transfer) -> TokenStream {
-    let result = syn::parse::<Reactor>(input).and_then(|reactor| {
+fn expand_input(input: TokenStream2, backend: Backend, transfer: Transfer) -> TokenStream2 {
+    let result = syn::parse2::<Reactor>(input).and_then(|reactor| {
         validate(&reactor)?;
         Ok(expand(&reactor, backend, transfer))
     });
     match result {
-        Ok(tokens) => tokens.into(),
-        Err(error) => error.into_compile_error().into(),
+        Ok(tokens) => tokens,
+        Err(error) => error.into_compile_error(),
     }
 }
 
@@ -635,7 +652,10 @@ fn validate(reactor: &Reactor) -> Result<()> {
                 "rename one source declaration and update its relations",
             ));
         }
-        if !is_persistent_place(&arm.source) {
+        // Normalization is also the admission predicate: `None` is precisely
+        // the KTR015 non-place case, so no defensive post-validation spelling
+        // exists merely to make an unreachable branch look covered.
+        let Some(place) = normalize_persistent_place(&arm.source) else {
             return Err(ktr(
                 arm.source.span(),
                 "KTR015",
@@ -644,8 +664,7 @@ fn validate(reactor: &Reactor) -> Result<()> {
                 ),
                 "construct a reviewed persistent source before the reactor, or isolate the producer behind an explicitly owned task/signal and admitted channel source",
             ));
-        }
-        let place = normalize_place(&arm.source);
+        };
         if let Some((first, _)) = places.insert(place, (id.clone(), arm.source.span())) {
             return Err(ktr(
                 arm.source.span(),
@@ -1012,31 +1031,19 @@ fn unknown_relation(owner: &Ident, target: &Ident, span: Span) -> Error {
     )
 }
 
-fn is_persistent_place(expr: &Expr) -> bool {
+fn normalize_persistent_place(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::Path(_) => true,
-        Expr::Field(field) => is_persistent_place(&field.base),
-        Expr::Paren(paren) => is_persistent_place(&paren.expr),
-        _ => false,
-    }
-}
-
-fn normalize_place(expr: &Expr) -> String {
-    match expr {
-        Expr::Paren(paren) => normalize_place(&paren.expr),
-        Expr::Field(field) => format!(
-            "{}.{}",
-            normalize_place(&field.base),
-            field.member.to_token_stream()
+        Expr::Paren(paren) => normalize_persistent_place(&paren.expr),
+        Expr::Field(field) => {
+            let base = normalize_persistent_place(&field.base)?;
+            Some(format!("{}.{}", base, field.member.to_token_stream()))
+        }
+        Expr::Path(path) => Some(
+            path.to_token_stream()
+                .to_string()
+                .replace(char::is_whitespace, ""),
         ),
-        Expr::Path(path) => path
-            .to_token_stream()
-            .to_string()
-            .replace(char::is_whitespace, ""),
-        _ => expr
-            .to_token_stream()
-            .to_string()
-            .replace(char::is_whitespace, ""),
+        _ => None,
     }
 }
 
@@ -1421,15 +1428,863 @@ fn source_for<'a>(reactor: &'a Reactor, id: &Ident) -> &'a Expr {
 }
 
 fn kittens_path() -> TokenStream2 {
-    match crate_name("kittens") {
-        Ok(FoundCrate::Name(name)) => {
+    kittens_path_from(crate_name("kittens").ok())
+}
+
+fn kittens_path_from(found: Option<FoundCrate>) -> TokenStream2 {
+    match found {
+        Some(FoundCrate::Name(name)) => {
             let ident = Ident::new(&name, Span::call_site());
             quote!(::#ident)
         }
-        Ok(FoundCrate::Itself) | Err(_) => quote!(::kittens),
+        Some(FoundCrate::Itself) | None => quote!(::kittens),
     }
 }
 
 fn ktr(span: Span, id: &str, consequence: &str, repair: &str) -> Error {
     Error::new(span, format!("{id} {consequence}. Repair: {repair}."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_and_validate(tokens: TokenStream2) -> Result<Reactor> {
+        let reactor = syn::parse2::<Reactor>(tokens)?;
+        validate(&reactor)?;
+        Ok(reactor)
+    }
+
+    fn assert_rejected(tokens: TokenStream2, id: &str, consequence: &str) {
+        let error = parse_and_validate(tokens)
+            .err()
+            .expect("the mutation must be rejected")
+            .to_string();
+        assert!(error.contains(id), "expected {id} in: {error}");
+        assert!(
+            error.contains(consequence),
+            "expected {consequence:?} in: {error}"
+        );
+        if id.starts_with("KTR") {
+            assert!(error.contains("Repair:"), "missing repair in: {error}");
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn one_arm(attrs: TokenStream2, binding: TokenStream2, source: TokenStream2) -> TokenStream2 {
+        quote! {
+            policy {
+                selection: biased;
+                required_phases: [];
+            }
+            #attrs
+            #binding = #source => { Ok(()) }
+        }
+    }
+
+    fn rich_reactor_tokens() -> TokenStream2 {
+        quote! {
+            policy {
+                selection: biased;
+                required_phases: [initialize, before_poll, after_event];
+            }
+
+            #[doc = "initial presentation is an application obligation"]
+            initialize { Ok(()) }
+
+            before_poll { Ok(()) }
+
+            #[doc = "shutdown stays in the leading prefix"]
+            #[source(stop)]
+            #[readiness(quiescent)]
+            #[shutdown]
+            _ = sources.stop => { Ok(Exit::Stopped) }
+
+            #[source(firehose)]
+            #[readiness(may_remain_ready)]
+            #[when(enabled)]
+            #[yields_to(input, when = buffered)]
+            #[drain(max = 3)]
+            #[before(input)]
+            event = sources.firehose => { consume(event); Ok(Control::Continue) }
+
+            #[source(input)]
+            #[readiness(quiescent)]
+            input = (sources.input) => { consume(input); Ok(Control::Continue) }
+
+            #[source(aux)]
+            #[readiness(quiescent)]
+            #[starvation(allowed, reason = "auxiliary work may wait behind input")]
+            #[drain(max = 2)]
+            item = sources.aux => { consume(item); Ok(Control::Continue) }
+
+            #[source(done)]
+            #[readiness(quiescent)]
+            #[starvation(allowed, reason = "normal completion is lower priority")]
+            #[terminal]
+            #[last]
+            value = sources.done => { Ok(value) }
+
+            after_event { Ok(()) }
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn lean_policy_and_phase_contract_rejects_drift() {
+        let cases = [
+            (
+                quote! { not_policy {} },
+                "KTR000",
+                "must begin with `policy",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; selection: biased; required_phases: []; }
+                },
+                "KTR012",
+                "declared more than once",
+            ),
+            (
+                quote! {
+                    policy { selection: fair; required_phases: []; }
+                },
+                "KTR012",
+                "unsupported selection policy",
+            ),
+            (
+                quote! {
+                    policy {
+                        selection: biased;
+                        required_phases: [];
+                        required_phases: [];
+                    }
+                },
+                "KTR011",
+                "declared more than once",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; lifecycle: []; required_phases: []; }
+                },
+                "KTR012",
+                "unsupported policy field",
+            ),
+            (
+                quote! { policy { required_phases: []; } },
+                "KTR012",
+                "missing `selection",
+            ),
+            (
+                quote! { policy { selection: biased; } },
+                "KTR011",
+                "missing `required_phases",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    mystery { Ok(()) }
+                },
+                "KTR000",
+                "unknown reactor phase",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: [initialize]; }
+                    initialize { Ok(()) }
+                    initialize { Ok(()) }
+                },
+                "KTR011",
+                "appears more than once",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    initialize
+                },
+                "KTR000",
+                "expected a phase block",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: [render]; }
+                    #[source(item)] #[readiness(quiescent)]
+                    item = sources.item => { Ok(()) }
+                },
+                "KTR011",
+                "unknown required phase",
+            ),
+            (
+                quote! {
+                    policy {
+                        selection: biased;
+                        required_phases: [after_event, after_event];
+                    }
+                    #[source(item)] #[readiness(quiescent)]
+                    item = sources.item => { Ok(()) }
+                    after_event { Ok(()) }
+                },
+                "KTR011",
+                "listed more than once",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: [initialize]; }
+                    #[source(item)] #[readiness(quiescent)]
+                    item = sources.item => { Ok(()) }
+                },
+                "KTR011",
+                "block is missing",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(item)] #[readiness(quiescent)]
+                    item = sources.item => { Ok(()) }
+                    before_poll { Ok(()) }
+                },
+                "KTR011",
+                "absent from `required_phases`",
+            ),
+        ];
+
+        for (tokens, id, consequence) in cases {
+            assert_rejected(tokens, id, consequence);
+        }
+
+        let no_phases = one_arm(
+            quote! { #[doc = "rationale"] #[source(item)] #[readiness(quiescent)] },
+            quote!(item),
+            quote!(sources.item),
+        );
+        parse_and_validate(no_phases).expect("removing a phase and its requirement is legal");
+        parse_and_validate(rich_reactor_tokens())
+            .expect("the complete documented phase set must be admitted");
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn arm_grammar_enforces_one_canonical_declaration() {
+        let cases = [
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] },
+                    quote!(mut item),
+                    quote!(sources.item),
+                ),
+                "KTR000",
+                "binding must be `_` or one immutable identifier",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] },
+                    quote!((item,)),
+                    quote!(sources.item),
+                ),
+                "KTR000",
+                "binding must be `_` or one immutable identifier",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(one)] #[source(two)] #[readiness(quiescent)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[source]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)]
+                        #[readiness(quiescent)]
+                        #[readiness(may_remain_ready)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[readiness]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent_after_event)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "unsupported lean readiness",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)] #[shutdown] #[shutdown]
+                    },
+                    quote!(_),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[shutdown]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[last(global)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR000",
+                "takes no arguments",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)]
+                        #[readiness(quiescent)]
+                        #[starvation(allowed, reason = "first")]
+                        #[starvation(allowed, reason = "second")]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[starvation]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[starvation(protected, reason = "not a waiver")]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR018",
+                "supports only an explicit `allowed`",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[starvation(allowed, rationale = "wrong key")]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR018",
+                "expected `reason",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[starvation(allowed, reason = "reason", trailing)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "unexpected tokens",
+                "starvation reason",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[starvation(allowed, reason = "   ")]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR018",
+                "nonempty reason",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[when(true)] #[when(false)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[when]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[yields_to(target, when = buffered)]
+                        #[yields_to(other, when = buffered)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[yields_to]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[yields_to(target, unless = buffered)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR010",
+                "must use `target, when = buffered`",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[drain(max = 1)] #[drain(max = 2)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "declares `#[drain]` more than once",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(limit = 1)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "requires `max = N`",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(max = count)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "integer literal",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(max = 1, extra)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "unexpected tokens",
+                "drain max",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(max = 1usize)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "unsuffixed literal",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(max = 0)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "from 1 through",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[drain(max = 4097)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "from 1 through",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[drain(max = 184467440737095516160)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR008",
+                "not a supported positive integer literal",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[priority(control)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR000",
+                "unsupported lean reactor attribute",
+            ),
+            (
+                one_arm(
+                    quote! { #[kittens::source(item)] #[readiness(quiescent)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR000",
+                "unsupported lean reactor attribute",
+            ),
+            (
+                one_arm(
+                    quote! { #[readiness(quiescent)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "missing `#[source(id)]`",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR017",
+                "missing `#[readiness",
+            ),
+        ];
+
+        for (tokens, id, consequence) in cases {
+            assert_rejected(tokens, id, consequence);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn topology_validator_rejects_each_declared_hazard() {
+        let cases = [
+            (
+                quote! { policy { selection: biased; required_phases: []; } },
+                "KTR000",
+                "requires at least one source arm",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(same)] #[readiness(quiescent)]
+                    one = sources.one => { Ok(()) }
+                    #[source(same)] #[readiness(quiescent)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR001",
+                "duplicate reactor source id",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] },
+                    quote!(item),
+                    quote!(make_source()),
+                ),
+                "KTR015",
+                "persistent path or field",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)]
+                    one = sources.same => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)]
+                    two = (sources.same) => { Ok(()) }
+                },
+                "KTR020",
+                "declared under both",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(stop)] #[readiness(quiescent)] #[shutdown] #[when(true)] },
+                    quote!(_),
+                    quote!(sources.stop),
+                ),
+                "KTR005",
+                "must be unguarded, undrained, and unable to yield",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(stop)] #[readiness(quiescent)] #[shutdown] #[last] },
+                    quote!(_),
+                    quote!(sources.stop),
+                ),
+                "KTR005",
+                "cannot be `last`",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(stop)] #[readiness(quiescent)] #[shutdown]
+                        #[starvation(allowed, reason = "incorrect waiver")]
+                    },
+                    quote!(_),
+                    quote!(sources.stop),
+                ),
+                "KTR005",
+                "cannot waive starvation protection",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(done)] #[readiness(quiescent)] #[terminal] #[drain(max = 2)] },
+                    quote!(value),
+                    quote!(sources.done),
+                ),
+                "KTR008",
+                "terminal source",
+            ),
+            (
+                one_arm(
+                    quote! { #[source(item)] #[readiness(quiescent)] #[before(missing)] },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR002",
+                "references unknown source",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[yields_to(missing, when = buffered)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR002",
+                "references unknown source",
+            ),
+            (
+                one_arm(
+                    quote! {
+                        #[source(item)] #[readiness(quiescent)]
+                        #[yields_to(item, when = buffered)]
+                    },
+                    quote!(item),
+                    quote!(sources.item),
+                ),
+                "KTR010",
+                "cannot yield to itself",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)] #[last]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)] #[last]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR004",
+                "conflicts with earlier global `last`",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)] #[last]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR004",
+                "is declared `last`",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)] #[before(two)]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)] #[before(one)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR003",
+                "scheduling cycle",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)]
+                    #[yields_to(two, when = buffered)]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)]
+                    #[yields_to(one, when = buffered)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR010",
+                "buffered-yield cycle",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)] #[before(one)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR016",
+                "must precede",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(work)] #[readiness(quiescent)]
+                    work = sources.work => { Ok(()) }
+                    #[source(stop)] #[readiness(quiescent)] #[shutdown]
+                    _ = sources.stop => { Ok(()) }
+                },
+                "KTR016",
+                "shutdown leading-prefix rule",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(one)] #[readiness(quiescent)] #[when(first)]
+                    one = sources.one => { Ok(()) }
+                    #[source(two)] #[readiness(quiescent)] #[when(second)]
+                    two = sources.two => { Ok(()) }
+                },
+                "KTR014",
+                "every source arm is guarded",
+            ),
+            (
+                quote! {
+                    policy { selection: biased; required_phases: []; }
+                    #[source(firehose)] #[readiness(may_remain_ready)]
+                    item = sources.firehose => { Ok(()) }
+                    #[source(input)] #[readiness(quiescent)]
+                    input = sources.input => { Ok(()) }
+                },
+                "KTR007",
+                "can starve protected source",
+            ),
+        ];
+
+        for (tokens, id, consequence) in cases {
+            assert_rejected(tokens, id, consequence);
+        }
+    }
+
+    #[test]
+    fn negative_controls_preserve_the_honest_boundary() {
+        let waived_victim = quote! {
+            policy { selection: biased; required_phases: []; }
+            #[source(firehose)] #[readiness(may_remain_ready)]
+            item = sources.firehose => { Ok(()) }
+            #[source(best_effort)] #[readiness(quiescent)]
+            #[starvation(allowed, reason = "this lane may be delayed")]
+            item = sources.best_effort => { Ok(()) }
+        };
+        parse_and_validate(waived_victim).expect("a reason-bearing waiver changes policy");
+
+        let explicit_yield = quote! {
+            policy { selection: biased; required_phases: []; }
+            #[source(stop)] #[readiness(quiescent)] #[shutdown]
+            _ = sources.stop => { Ok(()) }
+            #[source(firehose)] #[readiness(may_remain_ready)]
+            #[yields_to(input, when = buffered)]
+            item = sources.firehose => { Ok(()) }
+            #[source(input)] #[readiness(quiescent)] #[when(enabled)]
+            item = sources.input => { Ok(()) }
+        };
+        parse_and_validate(explicit_yield)
+            .expect("one unguarded control plus a direct buffered yield is valid");
+    }
+
+    #[test]
+    fn persistent_place_normalization_pins_exact_duplicate_detection() {
+        let path: Expr = syn::parse_quote!(sources);
+        let field: Expr = syn::parse_quote!(sources.item);
+        let parenthesized: Expr = syn::parse_quote!((sources.item));
+
+        assert_eq!(
+            normalize_persistent_place(&path).as_deref(),
+            Some("sources")
+        );
+        assert_eq!(
+            normalize_persistent_place(&field).as_deref(),
+            Some("sources.item")
+        );
+        assert_eq!(
+            normalize_persistent_place(&parenthesized).as_deref(),
+            Some("sources.item")
+        );
+    }
+
+    #[test]
+    fn expansion_preserves_all_four_k0_comparison_shapes() {
+        let reactor = parse_and_validate(rich_reactor_tokens()).expect("rich topology is valid");
+        let core_event = expand(&reactor, Backend::Core, Transfer::Event).to_string();
+        let core_slots = expand(&reactor, Backend::Core, Transfer::Slots).to_string();
+        let tokio_event = expand(&reactor, Backend::Tokio, Transfer::Event).to_string();
+        let tokio_slots = expand(&reactor, Backend::Tokio, Transfer::Slots).to_string();
+
+        assert!(core_event.contains("enum __KittensEvent"));
+        assert!(core_event.contains("core :: future :: poll_fn"));
+        assert!(!core_event.contains("tokio :: select"));
+        assert!(core_slots.contains("enum __KittensTag"));
+        assert!(core_slots.contains("__kittens_slot_0"));
+        assert!(!core_slots.contains("tokio :: select"));
+        assert!(tokio_event.contains("enum __KittensEvent"));
+        assert!(tokio_event.contains("tokio :: select"));
+        assert!(tokio_slots.contains("enum __KittensTag"));
+        assert!(tokio_slots.contains("tokio :: select"));
+
+        for output in [&core_event, &core_slots, &tokio_event, &tokio_slots] {
+            assert!(output.contains("assert_SRC001_reactor_source_is_admitted"));
+            assert!(output.contains("assert_KTR006_declared_readiness_matches"));
+            assert!(output.contains("assert_KTR009_source_is_drainable"));
+            assert!(output.contains("assert_KTR010_yield_target_has_backlog_probe"));
+            assert!(output.contains("assert_KTR019_guard_result_is_bool"));
+            assert!(output.contains("__kittens_handled"));
+            assert!(output.contains("DrainableSource :: try_next"));
+            assert!(output.contains("break '__kittens_reactor"));
+
+            let (selection_declaration, handler_match) = if output.contains("enum __KittensEvent") {
+                ("enum __KittensEvent", "match __kittens_event")
+            } else {
+                ("enum __KittensTag", "match __kittens_tag")
+            };
+            let selection_start = output
+                .find(selection_declaration)
+                .expect("selection declaration emitted");
+            let handler_start = output
+                .find(handler_match)
+                .expect("handler dispatch emitted");
+            let selection = &output[selection_start..handler_start];
+            let positions = ["stop", "firehose", "input", "aux", "done"].map(|source| {
+                selection
+                    .find(&format!("sources . {source}"))
+                    .expect("declared source missing from selection")
+            });
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "selection poll order changed: {positions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn token_entry_pipeline_renders_success_and_actionable_failure() {
+        let success = expand_input(rich_reactor_tokens(), Backend::Core, Transfer::Event);
+        assert!(success.to_string().contains("__KittensEvent"));
+
+        let failure = expand_input(
+            quote! { policy { selection: biased; required_phases: []; } },
+            Backend::Core,
+            Transfer::Event,
+        )
+        .to_string();
+        assert!(failure.contains("compile_error"));
+        assert!(failure.contains("KTR000"));
+        assert!(failure.contains("Repair"));
+    }
+
+    #[test]
+    fn dependency_path_resolution_supports_renaming_and_fallback() {
+        let renamed = kittens_path_from(Some(FoundCrate::Name("tiny_cats".to_owned())));
+        let itself = kittens_path_from(Some(FoundCrate::Itself));
+        let absent = kittens_path_from(None);
+
+        assert_eq!(renamed.to_string(), ":: tiny_cats");
+        assert_eq!(itself.to_string(), ":: kittens");
+        assert_eq!(absent.to_string(), ":: kittens");
+        assert_eq!(kittens_path().to_string(), ":: kittens");
+    }
 }

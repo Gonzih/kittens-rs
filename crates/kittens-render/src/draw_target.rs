@@ -58,6 +58,21 @@ pub struct Rgb565StripeDrawTarget<'a> {
     bytes: &'a mut [u8],
 }
 
+fn validate_rgb565_byte_len(
+    width: usize,
+    height: usize,
+    actual: usize,
+) -> Result<(), StripeDrawTargetError> {
+    let expected = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(2))
+        .ok_or(StripeDrawTargetError::BufferSizeOverflow)?;
+    if actual != expected {
+        return Err(StripeDrawTargetError::WrongBufferLength { expected, actual });
+    }
+    Ok(())
+}
+
 impl<'a> Rgb565StripeDrawTarget<'a> {
     /// Binds an exact caller buffer to the supplied sweep's outstanding target.
     ///
@@ -83,17 +98,12 @@ impl<'a> Rgb565StripeDrawTarget<'a> {
         let (panel, stripe) = sweep
             .draw_target_regions(target)
             .ok_or(StripeDrawTargetError::TargetMismatch)?;
-        let expected = usize::from(stripe.width)
-            .checked_mul(usize::from(stripe.height))
-            .and_then(|pixels| pixels.checked_mul(2))
-            .ok_or(StripeDrawTargetError::BufferSizeOverflow)?;
-        if bytes.len() != expected {
-            return Err(StripeDrawTargetError::WrongBufferLength {
-                expected,
-                actual: bytes.len(),
-            });
-        }
-        Ok(Self {
+        validate_rgb565_byte_len(
+            usize::from(stripe.width),
+            usize::from(stripe.height),
+            bytes.len(),
+        )
+        .map(|()| Self {
             panel,
             stripe,
             bytes,
@@ -129,27 +139,45 @@ impl DrawTarget for Rgb565StripeDrawTarget<'_> {
                 continue;
             }
 
-            let (Ok(local_x), Ok(local_y)) = (
-                usize::try_from(point.x - left),
-                usize::try_from(point.y - top),
-            ) else {
-                continue;
-            };
-            let Some(byte) = local_y.checked_mul(row_bytes).and_then(|row| {
-                local_x
-                    .checked_mul(2)
-                    .and_then(|column| row.checked_add(column))
-            }) else {
-                continue;
-            };
-            let Some(end) = byte.checked_add(2) else {
-                continue;
-            };
-            let Some(slot) = self.bytes.get_mut(byte..end) else {
-                continue;
-            };
-            slot.copy_from_slice(&color.into_storage().to_be_bytes());
+            // Constructor admission proved `width * height * 2` fits `usize`
+            // and equals `bytes.len()`. Clipping above proves each nonnegative
+            // local coordinate is strictly inside its `u16` stripe dimension,
+            // so conversion succeeds, `byte <= bytes.len() - 2`, and the
+            // two-byte slice is in bounds. The former defensive fallbacks were
+            // therefore unreachable for every publicly constructible target.
+            let local_x = usize::try_from(point.x - left).expect("clipped x is nonnegative");
+            let local_y = usize::try_from(point.y - top).expect("clipped y is nonnegative");
+            let byte = local_y * row_bytes + local_x * 2;
+            let end = byte + 2;
+            self.bytes[byte..end].copy_from_slice(&color.into_storage().to_be_bytes());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StripeDrawTargetError, validate_rgb565_byte_len};
+
+    #[test]
+    fn rgb565_byte_length_is_checked_at_usize_exhaustion_edges() {
+        // SPEC 6.6: exact `width * height * 2` arithmetic must reject, never
+        // wrap, at either multiplication boundary.
+        assert_eq!(validate_rgb565_byte_len(3, 2, 12), Ok(()));
+        assert_eq!(
+            validate_rgb565_byte_len(3, 2, 11),
+            Err(StripeDrawTargetError::WrongBufferLength {
+                expected: 12,
+                actual: 11,
+            })
+        );
+        assert_eq!(
+            validate_rgb565_byte_len(usize::MAX, 2, 0),
+            Err(StripeDrawTargetError::BufferSizeOverflow)
+        );
+        assert_eq!(
+            validate_rgb565_byte_len(usize::MAX, 1, 0),
+            Err(StripeDrawTargetError::BufferSizeOverflow)
+        );
     }
 }

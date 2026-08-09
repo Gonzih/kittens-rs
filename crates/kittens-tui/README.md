@@ -10,11 +10,36 @@ the canonical wiring is [`examples/status_line.rs`](examples/status_line.rs).
 
 | Component | Guarantee | Enforcement layer |
 |---|---|---|
-| `TerminalSession` | terminal restored on drop, including unwind | RAII `Drop` |
+| `TerminalSession` | ordered best-effort restoration attempts on drop, including unwind | RAII `Drop` |
 | `InputReader` | admitted selection-loss-preserving input source; reader exit is a typed `Closed` event; pause/park handshake | structural isolation + `close::Emit` |
 | `FrameWriter` | in-order write+flush, one ack per frame, typed failure then exit, accepted frames drained before exit | runtime protocol + deterministic tests |
 | `Presenter` | request coalescing, at most one frame in flight, monotonic sequences, stale-ack rejection, throttle deadline | private runtime state + exclusive `Draw` permit (two live draws are E0499) + deterministic tests |
 | wiring | acks above render work, input protected, deadline armed in `before_poll` | `kittens::reactor!` declarations in *your* loop |
+
+The terminal and input backends have private injectable seams for deterministic,
+no-tty oracles. Those seams are test apparatus only: terminal restoration
+attempts are still enforced by `TerminalSession`'s RAII `Drop`, and input
+isolation is still enforced by the owned reader thread plus its admitted
+channel edge.
+
+## Coverage gate
+
+Every crate source file must report 100% line coverage and 100% function
+coverage under:
+
+```console
+cargo llvm-cov -p kittens-tui --all-features --summary-only
+```
+
+Coverage tests are behavioral oracles for `SPEC.md` obligations or documented
+adversarial paths, never line-execution probes. This slice has no coverage
+exemptions; any future genuinely unexecutable line must carry an inline
+justification and be listed in `SPEC.md` section 9.
+
+The readers' and writers' private optional thread slots exist only so teardown
+can move out each join handle exactly once. No public path constructs an empty
+live owner, so teardown asserts that private invariant instead of presenting an
+impossible state as a behavioral coverage target.
 
 ## What this crate is not
 

@@ -486,6 +486,8 @@ impl<S> Sweep<S> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     const PANEL: Region = Region {
@@ -530,9 +532,15 @@ mod tests {
 
     fn assert_rejected_unchanged(sweep: &mut Sweep<()>, settlement: StripeSettlement) {
         let before = private_state(sweep);
+        let debug_before = std::format!("{sweep:?}");
         let expected = sweep.next_region();
         assert_eq!(sweep.settle(settlement), Err(WrongStripe { expected }));
         assert_eq!(private_state(sweep), before);
+        assert_eq!(
+            std::format!("{sweep:?}"),
+            debug_before,
+            "rejection leaves the sweep's observable debug state unchanged"
+        );
     }
 
     #[test]

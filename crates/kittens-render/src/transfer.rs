@@ -371,3 +371,141 @@ impl<X: OwnedTransfer, S> InFlight<X, S> {
 // boundary (interrupt-registered statics), never in the value the reactor
 // stores.
 impl<X: OwnedTransfer + Unpin, S: Unpin> Unpin for InFlight<X, S> {}
+
+#[cfg(test)]
+mod tests {
+    use core::task::Waker;
+
+    use super::*;
+    use crate::geometry::FrameEpoch;
+
+    struct TestTransfer {
+        outcome: Option<TransferOutcome>,
+        waker: Option<Waker>,
+    }
+
+    impl TestTransfer {
+        const fn pending() -> Self {
+            Self {
+                outcome: None,
+                waker: None,
+            }
+        }
+    }
+
+    impl OwnedTransfer for TestTransfer {
+        type Transport = u8;
+        type Buffer = u8;
+
+        fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+            // This deliberately uses the production integration order:
+            // register first, then recheck settlement.
+            self.waker = Some(cx.waker().clone());
+            if self.outcome.is_some() {
+                self.waker = None;
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        }
+
+        fn cancel(&mut self) {
+            if self.outcome.is_none() {
+                self.outcome = Some(TransferOutcome::Cancelled);
+            }
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
+        }
+
+        fn recover(self) -> Recovered<Self::Transport, Self::Buffer> {
+            Recovered {
+                transport: 11,
+                buffer: 22,
+                outcome: self.outcome.expect("test transfer settled"),
+            }
+        }
+    }
+
+    fn target() -> StripeTarget {
+        StripeTarget {
+            demand_id: 7,
+            epoch: FrameEpoch(3),
+            region: Region {
+                x: 5,
+                y: 9,
+                width: 2,
+                height: 1,
+            },
+        }
+    }
+
+    fn settlement_facts(settlement: StripeSettlement) -> (TransferOutcome, FrameEpoch, Region) {
+        match settlement {
+            StripeSettlement::Written(written) => (
+                TransferOutcome::Completed,
+                written.epoch(),
+                written.region(),
+            ),
+            StripeSettlement::Unwritten(unwritten) => {
+                (unwritten.outcome(), unwritten.epoch(), unwritten.region())
+            }
+        }
+    }
+
+    #[test]
+    fn driven_flight_is_pending_ready_then_terminal() {
+        // The transfer contract makes cancellation idempotent even before it
+        // is carried by InFlight.
+        let mut cancelled = TestTransfer::pending();
+        cancelled.cancel();
+        cancelled.cancel();
+        assert_eq!(cancelled.outcome, Some(TransferOutcome::Cancelled));
+
+        let mut flight = InFlight::from_started(TestTransfer::pending(), 33, target());
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(flight.poll_complete(&mut cx).is_pending());
+
+        flight.begin_drain();
+        flight.begin_drain();
+        assert!(flight.is_draining());
+        let mut settled = None;
+        let _ = flight
+            .poll_complete(&mut cx)
+            .map(|value| settled = Some(value));
+        let settled = settled.expect("cancelled transfer must settle");
+        assert_eq!(settled.outcome(), TransferOutcome::Cancelled);
+        assert!(flight.is_spent());
+        assert!(!flight.is_draining());
+        flight.begin_drain();
+        assert!(!flight.is_draining(), "draining a spent flight is inert");
+        assert!(flight.spare_mut().is_none());
+        assert!(flight.poll_complete(&mut cx).is_pending());
+
+        let (transport, buffer, spare, settlement) = settled.into_parts();
+        assert_eq!((transport, buffer, spare), (11, 22, 33));
+        assert_eq!(
+            settlement_facts(settlement),
+            (TransferOutcome::Cancelled, FrameEpoch(3), target().region())
+        );
+
+        // The same concrete flight/settlement types must map real completion
+        // to Written rather than sharing cancellation's Unwritten authority.
+        let completed = TestTransfer {
+            outcome: Some(TransferOutcome::Completed),
+            waker: None,
+        };
+        let mut flight = InFlight::from_started(completed, 44, target());
+        let mut settled = None;
+        let _ = flight
+            .poll_complete(&mut cx)
+            .map(|value| settled = Some(value));
+        let settled = settled.expect("completed transfer must settle");
+        let (transport, buffer, spare, settlement) = settled.into_parts();
+        assert_eq!((transport, buffer, spare), (11, 22, 44));
+        assert_eq!(
+            settlement_facts(settlement),
+            (TransferOutcome::Completed, FrameEpoch(3), target().region())
+        );
+    }
+}

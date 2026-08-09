@@ -8,7 +8,13 @@
 #![allow(missing_docs)]
 
 use core::{convert::Infallible, task::Poll};
-use std::task::{Context, Waker};
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context, Waker},
+};
 
 use embedded_graphics::{
     Pixel,
@@ -188,6 +194,7 @@ struct ModelStart {
     panel: ModelPanel,
     sent: StripeBuffer,
     behavior: ModelBehavior,
+    completion: Arc<ModelCompletion>,
 }
 
 struct ModelTransfer {
@@ -195,7 +202,33 @@ struct ModelTransfer {
     sent: StripeBuffer,
     region: Region,
     behavior: ModelBehavior,
+    completion: Arc<ModelCompletion>,
     settled: Option<TransferOutcome>,
+}
+
+#[derive(Default)]
+struct ModelCompletion {
+    done: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl ModelCompletion {
+    fn poll_done(&self, cx: &mut Context<'_>) -> Poll<()> {
+        *self.waker.lock().expect("completion waker") = Some(cx.waker().clone());
+        if self.done.load(Ordering::Acquire) {
+            self.waker.lock().expect("completion waker").take();
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn complete(&self) {
+        self.done.store(true, Ordering::Release);
+        if let Some(waker) = self.waker.lock().expect("completion waker").take() {
+            waker.wake();
+        }
+    }
 }
 
 impl FlightStarter for ModelStart {
@@ -213,6 +246,7 @@ impl FlightStarter for ModelStart {
             sent: self.sent,
             region,
             behavior: self.behavior,
+            completion: self.completion,
             settled: None,
         })
     }
@@ -222,8 +256,11 @@ impl OwnedTransfer for ModelTransfer {
     type Transport = ModelPanel;
     type Buffer = StripeBuffer;
 
-    fn poll_done(&mut self, _cx: &mut Context<'_>) -> Poll<()> {
+    fn poll_done(&mut self, cx: &mut Context<'_>) -> Poll<()> {
         if self.settled.is_none() {
+            if self.completion.poll_done(cx).is_pending() {
+                return Poll::Pending;
+            }
             self.settled = Some(match self.behavior {
                 ModelBehavior::Complete => {
                     self.panel
@@ -242,6 +279,7 @@ impl OwnedTransfer for ModelTransfer {
     fn cancel(&mut self) {
         if self.settled.is_none() {
             self.settled = Some(TransferOutcome::Cancelled);
+            self.completion.complete();
         }
     }
 
@@ -302,6 +340,7 @@ fn transfer_next(
     } = resources;
     ready.rendered_len = rendered_len;
     ready.bytes[..rendered_len].fill(0xA5);
+    let completion = Arc::new(ModelCompletion::default());
 
     {
         let draw = Rgb565StripeDrawTarget::new(sweep, &target, &mut ready.bytes[..rendered_len])
@@ -325,15 +364,25 @@ fn transfer_next(
                 panel,
                 sent: ready,
                 behavior,
+                completion: Arc::clone(&completion),
             },
         )
         .expect("infallible honest model start");
     let waker = Waker::noop().clone();
     let mut cx = Context::from_waker(&waker);
+    assert!(
+        flight.poll_complete(&mut cx).is_pending(),
+        "the witness chain cannot settle before the modeled completion boundary"
+    );
+    completion.complete();
     let settled = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => settled,
         Poll::Pending => panic!("model transfer settles immediately"),
     };
+    assert!(
+        flight.poll_complete(&mut cx).is_pending(),
+        "a witnessed stripe transfer cannot return its resources twice"
+    );
     let (panel, sent, spare, settlement) = settled.into_parts();
     let outcome = sweep
         .settle(settlement)
@@ -422,8 +471,10 @@ fn pixels_are_clipped_and_translated_into_the_stripe() {
         draw.draw_iter([
             Pixel(Point::new(6, 8), Rgb565::WHITE),
             Pixel(Point::new(7, 8), Rgb565::BLUE),
-            Pixel(Point::new(6, 9), Rgb565::RED),
             Pixel(Point::new(4, 7), Rgb565::RED),
+            Pixel(Point::new(8, 7), Rgb565::GREEN),
+            Pixel(Point::new(5, 6), Rgb565::BLUE),
+            Pixel(Point::new(6, 9), Rgb565::WHITE),
             Pixel(Point::new(i32::MIN, i32::MIN), Rgb565::RED),
             Pixel(Point::new(i32::MAX, i32::MAX), Rgb565::RED),
         ])
@@ -434,6 +485,34 @@ fn pixels_are_clipped_and_translated_into_the_stripe() {
     expected[8..10].copy_from_slice(&[0xFF, 0xFF]);
     expected[10..12].copy_from_slice(&[0x00, 0x1F]);
     assert_eq!(bytes, expected);
+}
+
+#[test]
+fn empty_draw_preserves_scratch_for_complete_scene_reconstruction() {
+    const LOCAL_PANEL: Region = Region {
+        x: 5,
+        y: 7,
+        width: 3,
+        height: 4,
+    };
+    let plan = SweepPlan::for_panel(PanelGeometry::custom_unvalidated_panel(LOCAL_PANEL), 2)
+        .expect("valid plan");
+    let mut demand = FrameDemand::new(0, plan);
+    let mut sweep = begin_scene(&mut demand, Tick(0), SCENE_A);
+    let target = sweep.next_target().expect("first stripe");
+    let mut bytes = [0xA5; 12];
+
+    {
+        let mut draw =
+            Rgb565StripeDrawTarget::new(&sweep, &target, &mut bytes).expect("exact stripe buffer");
+        draw.draw_iter(core::iter::empty::<Pixel<Rgb565>>())
+            .expect("infallible empty draw");
+    }
+
+    assert_eq!(
+        bytes, [0xA5; 12],
+        "SPEC 6.6 leaves background reconstruction and scratch clearing to the caller"
+    );
 }
 
 #[test]
@@ -486,6 +565,111 @@ fn constructor_rejects_foreign_target_and_wrong_buffer_length() {
             actual,
         }) if actual == MAX_STRIPE_BYTES - 1
     ));
+
+    let mut long = [0xA5; MAX_STRIPE_BYTES + 1];
+    assert!(matches!(
+        Rgb565StripeDrawTarget::new(&right, &right_target, &mut long),
+        Err(StripeDrawTargetError::WrongBufferLength {
+            expected: MAX_STRIPE_BYTES,
+            actual,
+        }) if actual == MAX_STRIPE_BYTES + 1
+    ));
+    assert_eq!(
+        long,
+        [0xA5; MAX_STRIPE_BYTES + 1],
+        "rejected exact-length admission must not mutate caller scratch"
+    );
+}
+
+#[test]
+fn constructor_rejects_non_outstanding_and_stale_targets() {
+    // SPEC 6.6 admits a target only while its owning sweep has that exact
+    // target outstanding. A valid target from another sweep must therefore
+    // fail against a Ready sweep before any target has been issued there.
+    let mut ready_demand = FrameDemand::new(0, plan());
+    let ready = begin_scene(&mut ready_demand, Tick(0), SCENE_A);
+    let mut owner_demand = FrameDemand::new(0, plan());
+    let mut owner = begin_scene(&mut owner_demand, Tick(0), SCENE_A);
+    let owner_target = owner.next_target().expect("owner target");
+    let mut scratch = [0xA5; MAX_STRIPE_BYTES];
+
+    assert_eq!(
+        Rgb565StripeDrawTarget::new(&ready, &owner_target, &mut scratch).map(|_| ()),
+        Err(StripeDrawTargetError::TargetMismatch),
+        "a Ready sweep cannot admit any target"
+    );
+    assert_eq!(
+        scratch, [0xA5; MAX_STRIPE_BYTES],
+        "non-outstanding rejection cannot mutate caller scratch"
+    );
+    assert!(
+        Rgb565StripeDrawTarget::new(&owner, &owner_target, &mut scratch).is_ok(),
+        "the same target is valid while outstanding on its owner"
+    );
+
+    // Retaining old values across abandonment is the documented ownership
+    // escape. The replacement is Outstanding on the same demand and region,
+    // so the old target differs only by its terminally stale epoch.
+    let mut demand = FrameDemand::new(0, plan());
+    let mut old = begin_scene(&mut demand, Tick(0), SCENE_A);
+    let old_target = old.next_target().expect("old target");
+    demand.abandon_active();
+    let mut replacement = begin_scene(&mut demand, Tick(1), SCENE_A);
+    let replacement_target = replacement.next_target().expect("replacement target");
+    assert_eq!(old_target.region(), replacement_target.region());
+    assert_ne!(old_target.epoch(), replacement_target.epoch());
+
+    scratch.fill(0x5A);
+    assert_eq!(
+        Rgb565StripeDrawTarget::new(&replacement, &old_target, &mut scratch).map(|_| ()),
+        Err(StripeDrawTargetError::TargetMismatch),
+        "an abandoned epoch's target cannot bind to its same-demand replacement"
+    );
+    assert_eq!(
+        scratch, [0x5A; MAX_STRIPE_BYTES],
+        "stale-target rejection cannot mutate caller scratch"
+    );
+    assert!(
+        Rgb565StripeDrawTarget::new(&replacement, &replacement_target, &mut scratch).is_ok(),
+        "the replacement's current target remains admissible"
+    );
+}
+
+#[test]
+fn maximum_geometry_reports_exact_length_or_platform_overflow() {
+    const MAX_PANEL: Region = Region {
+        x: 0,
+        y: 0,
+        width: u16::MAX,
+        height: u16::MAX,
+    };
+    let plan = SweepPlan::for_panel(PanelGeometry::custom_unvalidated_panel(MAX_PANEL), u16::MAX)
+        .expect("maximum coordinate-space panel is admitted");
+    let mut demand = FrameDemand::new(0, plan);
+    let mut sweep = begin_scene(&mut demand, Tick(0), SCENE_A);
+    let target = sweep.next_target().expect("one maximum-height stripe");
+    let mut empty = [];
+    let Err(error) = Rgb565StripeDrawTarget::new(&sweep, &target, &mut empty) else {
+        panic!("an empty buffer cannot back the maximum panel");
+    };
+
+    let exact_u64 = u64::from(u16::MAX) * u64::from(u16::MAX) * 2;
+    if let Ok(expected) = usize::try_from(exact_u64) {
+        assert_eq!(
+            error,
+            StripeDrawTargetError::WrongBufferLength {
+                expected,
+                actual: 0,
+            },
+            "SPEC 6.6 requires the exact representable byte length"
+        );
+    } else {
+        assert_eq!(
+            error,
+            StripeDrawTargetError::BufferSizeOverflow,
+            "SPEC 6.6 requires an explicit error rather than usize wrap"
+        );
+    }
 }
 
 #[test]

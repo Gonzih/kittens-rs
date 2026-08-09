@@ -39,6 +39,14 @@ scratch storage: render the background and complete ordered scene from
 `Sweep::snapshot()` for every stripe before consuming the same target through
 `start_flight`.
 
+After constructor admission, the exact byte length and stripe clipping jointly
+prove that every accepted pixel's local coordinates, row-major byte offset, and
+two-byte slice are in range. The draw loop uses that invariant directly rather
+than retaining unreachable fallback branches. Checked length arithmetic is
+tested independently at both `usize` exhaustion edges; the maximum public
+`u16` geometry returns `BufferSizeOverflow` on targets where its byte count is
+not representable and the exact `WrongBufferLength` count otherwise.
+
 ## Runnable lifecycle
 
 Run `cargo run -p kittens-render --example host_sweep` for the canonical host

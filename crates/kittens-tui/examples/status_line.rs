@@ -201,8 +201,8 @@ async fn main() -> Result<(), AppError> {
     let result = app.run(&mut sources).await;
 
     // Teardown order per SPEC 6.7: park/stop the reader, drain and join the
-    // writer, and only then restore the terminal so drained frames land on
-    // a live screen. The session drop is last.
+    // writer, and only then attempt terminal restoration so drained frames
+    // land on a live screen. The session drop is last.
     drop(reader);
     let App { writer: handle, .. } = app;
     writer

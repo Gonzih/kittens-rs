@@ -358,19 +358,36 @@ mod tests {
 
     struct OneSnapshot {
         reads: u8,
+        fail_next: bool,
+        int_asserted: bool,
     }
 
     impl TouchReader for OneSnapshot {
-        type Error = core::convert::Infallible;
+        type Error = ();
 
         fn read_snapshot(&mut self) -> Result<TouchReport, Self::Error> {
             self.reads += 1;
-            Ok(TouchReport::default())
+            if self.fail_next {
+                self.fail_next = false;
+                Err(())
+            } else {
+                Ok(TouchReport::default())
+            }
         }
 
         fn int_asserted(&self) -> bool {
-            false
+            self.int_asserted
         }
+    }
+
+    fn service_one_snapshot(
+        service: &mut TouchService,
+        generations: &TouchGenerations,
+        reader: &mut OneSnapshot,
+    ) -> Activation {
+        // Keep the success and failure traces in one concrete service
+        // instantiation so they exercise the same protocol machine.
+        service.service(generations, reader, |_, _| {})
     }
 
     #[test]
@@ -379,14 +396,22 @@ mod tests {
         assert!(generations.produce(), "initial transition requests a wake");
 
         let mut service = TouchService::new(NonZeroU8::MIN);
-        let mut reader = OneSnapshot { reads: 0 };
+        let mut reader = OneSnapshot {
+            reads: 0,
+            fail_next: false,
+            int_asserted: false,
+        };
         let mut activation = None;
 
         // Pause the second producer after its generation increment but
         // before its latch swap. The consumer can complete and exit idle;
         // the producer must then see the cleared latch and request a wake.
         let wake = generations.produce_with_after_increment(|| {
-            activation = Some(service.service(&generations, &mut reader, |_, _| {}));
+            activation = Some(service_one_snapshot(
+                &mut service,
+                &generations,
+                &mut reader,
+            ));
         });
 
         assert_eq!(activation, Some(Activation::Idle { surfaced: 1 }));
@@ -395,6 +420,54 @@ mod tests {
         assert!(
             generations.is_pending(),
             "the requested activation remains latched"
+        );
+
+        // The producer won the post-idle latch transition. If the immediate
+        // retry read fails, that exact work must remain authoritative even
+        // after INT deasserts, and the following activation must recover it.
+        reader.fail_next = true;
+        assert_eq!(
+            service_one_snapshot(&mut service, &generations, &mut reader),
+            Activation::ReadFailed { surfaced: 0 }
+        );
+        assert_eq!(reader.reads, 2);
+        assert!(
+            generations.is_pending(),
+            "the failed handoff read restores retry authority"
+        );
+        assert_eq!(
+            service_one_snapshot(&mut service, &generations, &mut reader),
+            Activation::Idle { surfaced: 1 }
+        );
+        assert_eq!(reader.reads, 3);
+        assert!(
+            !generations.is_pending(),
+            "a successful retry completes the handoff"
+        );
+
+        // Exercise the same concrete service machine with INT stuck asserted:
+        // one complete snapshot consumes the budget, re-latches work, and the
+        // next loop turn must yield without monopolizing the reactor.
+        reader.int_asserted = true;
+        assert_eq!(
+            service_one_snapshot(&mut service, &generations, &mut reader),
+            Activation::BudgetExhausted { surfaced: 1 }
+        );
+        assert_eq!(reader.reads, 4);
+        assert!(
+            generations.is_pending(),
+            "budget exhaustion preserves retry authority while INT is asserted"
+        );
+
+        reader.int_asserted = false;
+        assert_eq!(
+            service_one_snapshot(&mut service, &generations, &mut reader),
+            Activation::Idle { surfaced: 1 }
+        );
+        assert_eq!(reader.reads, 5);
+        assert!(
+            !generations.is_pending(),
+            "the latched stuck-INT retry clears after INT deasserts"
         );
     }
 }
