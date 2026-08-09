@@ -55,3 +55,22 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 ESP32-S3 is Xtensa LX7: target probes need the Espressif Rust toolchain
 (`espup`). Until approved and installed, host-model + `thumbv7em-none-eabi`
 portability checks stand in; no HAL-fidelity claim is made from them.
+
+## Exit review round 1 (2026-08-08)
+
+Full text: `reviews/2026-08-08-exit-review-1-codex.md`. Verdict: **FAIL**,
+15 findings, must-fix 1–11 and 14–15; finding 12 accepted as must-fix by
+the author as well; 13 advisory (adopting `NonZeroU8` regardless).
+Disposition: **all fifteen accepted.** Fix plan, in order: (batch 1)
+transfer/sweep/demand semantic redesign — cancel-settlement linearization
+(F2), unforgeable `StripeWritten` witness wiring transfer→sweep (F4),
+crate-owned `Sweep` with the fixed panel plan (F5), token provenance
+branding + checked fallible finish (F6), invalidation terminating the
+affected epoch without a wrapping counter (F7), `abandon_active` recovery
+(F8), written-milestone renaming (F9); (batch 2) touch redesign — separate
+pending latch with swap-based wake dedup + negative control (F10),
+persistent retry latch across INT-only failure and wrap alias (F11), no
+`Moved` on identical points (F12), `NonZeroU8` budget (F13), shared
+done-slot model + drop traces (F1), superseded-blueprint note (F3);
+(batch 3) spec §6 amendment, trace manifest, README/profile checklist,
+changelog, seam/drop/no-std fixtures (F14, F15). Re-review follows.
