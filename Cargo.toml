@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/kittens",
+    "crates/kittens-code-core",
     "crates/kittens-code-protocol",
     "crates/kittens-macros",
     "crates/kittens-tui",

@@ -1,0 +1,24 @@
+[package]
+name = "kittens-code-core"
+description = "Sans-io coding-agent engine for the kittens-code family: turn state machine, context engine, RLM query engine, and budget law — no_std + alloc, no runtime, no IO"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+kittens-code-protocol = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+# Removable feature gates (SPEC v0.8 rule T7); both OFF in KC0 builds.
+l2 = []
+swarm-port = []
+exec = []
+
+[lints]
+workspace = true
