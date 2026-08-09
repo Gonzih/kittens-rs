@@ -10,10 +10,11 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use std::{fs::File, io::BufRead, io::BufReader, path::Path};
 
 use kittens_code_core::engine::{
-    CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ResumeError,
+    CoreAction, CoreInput, EffectSpec, EffectTerminal, Engine, ModelOutcome, ResumeError,
 };
 use kittens_code_core::record::Record;
 use kittens_code_core::rlm::exec::{AskResult, Page, PageRecord};
@@ -296,11 +297,14 @@ impl Runner {
                     let mut failure = None;
                     for request in requests {
                         let index = request.index;
-                        match model.complete_submodel(request).await {
-                            Ok(outcome) => results.push(AskResult {
-                                index,
-                                answer: outcome.text,
-                            }),
+                        let started = Instant::now();
+                        let completion = model.complete_submodel(request).await;
+                        let wall_clock_ms =
+                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        match completion {
+                            Ok(outcome) => {
+                                results.push(ask_result(index, outcome, wall_clock_ms));
+                            }
                             Err(error) => {
                                 failure = Some(error);
                                 break;
@@ -322,6 +326,19 @@ impl Runner {
             // is a configuration bug, not a runtime condition.
             other => unimplemented!("driver missing EffectSpec handler: {other:?}"),
         }
+    }
+}
+
+fn ask_result(index: u32, outcome: ModelOutcome, wall_clock_ms: u64) -> AskResult {
+    // Current provider usage exposes prompt tokens only. Report those as the
+    // best available subcall token cost; providers without usage data
+    // explicitly contribute zero.
+    let tokens = outcome.usage.map_or(0, |usage| usage.prompt_tokens);
+    AskResult {
+        index,
+        answer: outcome.text,
+        wall_clock_ms,
+        tokens,
     }
 }
 

@@ -13,6 +13,7 @@
 //! This is the sans-io heart of the RLM bet; the driver renders records to
 //! [`PageRecord`] text and runs the sub-model calls.
 
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -70,6 +71,12 @@ pub struct AskResult {
     pub index: u32,
     /// The sub-model's answer text (the executor caps it).
     pub answer: String,
+    /// Wall-clock milliseconds spent resolving this request, measured by
+    /// the driver around the sub-model call.
+    pub wall_clock_ms: u64,
+    /// Tokens consumed by this request, as reported by the model provider.
+    /// Drivers use zero when the provider supplies no usage data.
+    pub tokens: u64,
 }
 
 /// A typed value bound to a `%N` slot.
@@ -141,12 +148,17 @@ pub enum StepOutcome {
 struct Meters {
     budgets: Budgets,
     verbs: u16,
+    recursion_depth: u8,
     subcalls: u16,
+    parallel_subcalls: u8,
     partitions: u16,
     selected_bytes: u32,
     scanned_pages: u32,
     scanned_bytes: u64,
     page_effects: u32,
+    continuation_memory_bytes: u32,
+    ask_wall_clock_ms: u32,
+    ask_tokens: u32,
 }
 
 impl Meters {
@@ -154,12 +166,17 @@ impl Meters {
         Self {
             budgets,
             verbs: 0,
+            recursion_depth: 0,
             subcalls: 0,
+            parallel_subcalls: 0,
             partitions: 0,
             selected_bytes: 0,
             scanned_pages: 0,
             scanned_bytes: 0,
             page_effects: 0,
+            continuation_memory_bytes: 0,
+            ask_wall_clock_ms: 0,
+            ask_tokens: 0,
         }
     }
 
@@ -212,7 +229,71 @@ impl Meters {
                     u64::from(self.budgets.total_subcalls),
                 )
             }
+            BudgetKind::RecursionDepth => {
+                let amount8 = u8::try_from(amount).unwrap_or(u8::MAX);
+                self.recursion_depth = self.recursion_depth.saturating_add(amount8);
+                over(
+                    u64::from(self.recursion_depth),
+                    u64::from(self.budgets.recursion_depth),
+                )
+            }
+            BudgetKind::ParallelSubcalls => {
+                let amount8 = u8::try_from(amount).unwrap_or(u8::MAX);
+                self.parallel_subcalls = self.parallel_subcalls.saturating_add(amount8);
+                over(
+                    u64::from(self.parallel_subcalls),
+                    u64::from(self.budgets.parallel_subcalls),
+                )
+            }
+            BudgetKind::ContinuationMemory => {
+                self.continuation_memory_bytes =
+                    self.continuation_memory_bytes.saturating_add(amount32);
+                over(
+                    u64::from(self.continuation_memory_bytes),
+                    u64::from(self.budgets.continuation_memory_bytes),
+                )
+            }
+            BudgetKind::AskWallClock => {
+                self.ask_wall_clock_ms = self.ask_wall_clock_ms.saturating_add(amount32);
+                over(
+                    u64::from(self.ask_wall_clock_ms),
+                    u64::from(self.budgets.ask_wall_clock_ms),
+                )
+            }
+            BudgetKind::AskTokens => {
+                self.ask_tokens = self.ask_tokens.saturating_add(amount32);
+                over(
+                    u64::from(self.ask_tokens),
+                    u64::from(self.budgets.ask_tokens),
+                )
+            }
             _ => Ok(()),
+        }
+    }
+
+    fn release_parallel_subcalls(&mut self, amount: usize) {
+        let amount = u8::try_from(amount).unwrap_or(u8::MAX);
+        self.parallel_subcalls = self.parallel_subcalls.saturating_sub(amount);
+    }
+
+    fn begin_ask_node(&mut self) {
+        self.ask_wall_clock_ms = 0;
+        self.ask_tokens = 0;
+    }
+
+    /// Reconciles the continuation-memory gauge with a fresh deterministic
+    /// estimate. Growth is routed through `charge`; released storage lowers
+    /// the live gauge instead of counting historical allocations forever.
+    fn retain_continuation_memory(&mut self, retained: u64) -> Result<(), ()> {
+        let retained = u32::try_from(retained).unwrap_or(u32::MAX);
+        if retained >= self.continuation_memory_bytes {
+            self.charge(
+                BudgetKind::ContinuationMemory,
+                u64::from(retained - self.continuation_memory_bytes),
+            )
+        } else {
+            self.continuation_memory_bytes = retained;
+            Ok(())
         }
     }
 }
@@ -260,7 +341,9 @@ struct PageWalk {
 #[derive(Clone, Debug)]
 struct AskJoin {
     slots: Vec<Option<String>>,
-    outstanding: usize,
+    queued: VecDeque<AskRequest>,
+    outstanding: Vec<bool>,
+    budget_exhausted: bool,
 }
 
 /// What the current line is waiting on between steps.
@@ -283,6 +366,11 @@ pub struct Executor {
     slots: Vec<Option<Bound>>,
     meters: Meters,
     pending: Pending,
+    /// Current RLM recursion depth. KC0 has no nested-query instruction, so
+    /// this remains one; the query-entry guard is the admission point a
+    /// future nested-query verb must call with its deeper value.
+    depth: u8,
+    depth_checked: bool,
     finished: bool,
 }
 
@@ -306,6 +394,8 @@ impl Executor {
             slots,
             meters: Meters::new(budgets),
             pending: Pending::Idle,
+            depth: 1,
+            depth_checked: false,
             finished: false,
         }
     }
@@ -334,6 +424,15 @@ impl Executor {
             return StepOutcome::Done {
                 answer: String::new(),
             };
+        }
+        if !self.depth_checked {
+            self.depth_checked = true;
+            if self.admit_recursion_depth(self.depth).is_err() {
+                self.finished = true;
+                return StepOutcome::Failed {
+                    cause: VerbErrorCause::Budget,
+                };
+            }
         }
         if !matches!(self.pending, Pending::Idle) {
             // Stepping while suspended is a driver contract error; results
@@ -379,6 +478,12 @@ impl Executor {
             return self.bind_error(VerbErrorCause::Budget);
         }
         walk.collected.extend(page.records);
+        if self
+            .retain_continuation_memory_extra(page_walk_retained_bytes(&walk))
+            .is_err()
+        {
+            return self.bind_error(VerbErrorCause::Budget);
+        }
         if let Some(cursor) = page.next_cursor {
             walk.cursor = Some(cursor);
             let request = PageRequest {
@@ -396,32 +501,84 @@ impl Executor {
     pub fn provide_ask(&mut self, results: Vec<AskResult>) -> StepOutcome {
         match core::mem::replace(&mut self.pending, Pending::Idle) {
             Pending::Ask => {
-                let answer = results
-                    .into_iter()
-                    .next()
-                    .map(|r| cap(&r.answer, self.meters.budgets.ask_digest_bytes))
-                    .unwrap_or_default();
+                self.meters.release_parallel_subcalls(1);
+                let Some(result) = results.into_iter().next() else {
+                    return self.bind(Bound::Digest(String::new()));
+                };
+                if self.charge_ask_cost(&result).is_err() {
+                    return self.bind_error(VerbErrorCause::Budget);
+                }
+                let answer = cap(&result.answer, self.meters.budgets.ask_digest_bytes);
                 self.bind(Bound::Digest(answer))
             }
             Pending::AskEach(mut join) => {
                 for result in results {
-                    if let Some(slot) = join.slots.get_mut(result.index as usize) {
-                        if slot.is_none() {
-                            *slot = Some(cap(&result.answer, self.meters.budgets.ask_digest_bytes));
-                            join.outstanding = join.outstanding.saturating_sub(1);
-                        }
+                    let index = result.index as usize;
+                    let Some(is_outstanding) = join.outstanding.get_mut(index) else {
+                        continue;
+                    };
+                    if !*is_outstanding {
+                        continue;
+                    }
+                    *is_outstanding = false;
+                    self.meters.release_parallel_subcalls(1);
+                    if self.charge_ask_cost(&result).is_err() {
+                        join.budget_exhausted = true;
+                        join.queued.clear();
+                    } else if let Some(slot) = join.slots.get_mut(index) {
+                        *slot = Some(cap(&result.answer, self.meters.budgets.ask_digest_bytes));
                     }
                 }
-                if join.outstanding == 0 {
+                if join.budget_exhausted {
+                    join.queued.clear();
+                    if join.outstanding.iter().any(|outstanding| *outstanding) {
+                        self.pending = Pending::AskEach(join);
+                        let _ = self.retain_continuation_memory();
+                        return StepOutcome::AwaitingMore;
+                    }
+                    return self.bind_error(VerbErrorCause::Budget);
+                }
+
+                if self
+                    .retain_continuation_memory_extra(ask_join_retained_bytes(&join))
+                    .is_err()
+                {
+                    join.budget_exhausted = true;
+                    join.queued.clear();
+                    if join.outstanding.iter().any(|outstanding| *outstanding) {
+                        self.pending = Pending::AskEach(join);
+                        let _ = self.retain_continuation_memory();
+                        return StepOutcome::AwaitingMore;
+                    }
+                    return self.bind_error(VerbErrorCause::Budget);
+                }
+
+                let available = usize::from(self.meters.budgets.parallel_subcalls)
+                    .saturating_sub(self.meters.parallel_subcalls as usize);
+                let requests = dispatch_ask_window(&mut join, available);
+                if self
+                    .meters
+                    .charge(BudgetKind::ParallelSubcalls, requests.len() as u64)
+                    .is_err()
+                {
+                    return self.bind_error(VerbErrorCause::Budget);
+                }
+
+                if join.slots.iter().all(Option::is_some) {
                     let digests = join
                         .slots
                         .into_iter()
                         .map(Option::unwrap_or_default)
                         .collect();
                     self.bind(Bound::DigestList(digests))
+                } else if requests.is_empty() {
+                    self.pending = Pending::AskEach(join);
+                    let _ = self.retain_continuation_memory();
+                    StepOutcome::AwaitingMore
                 } else {
                     self.pending = Pending::AskEach(join);
-                    StepOutcome::AwaitingMore
+                    let _ = self.retain_continuation_memory();
+                    StepOutcome::NeedAsk(requests)
                 }
             }
             _ => StepOutcome::Failed {
@@ -469,7 +626,11 @@ impl Executor {
                 question,
                 sample_k,
             } => {
+                self.meters.begin_ask_node();
                 if self.meters.charge(BudgetKind::TotalSubcalls, 1).is_err() {
+                    return self.bind_error(VerbErrorCause::Budget);
+                }
+                if self.meters.charge(BudgetKind::ParallelSubcalls, 1).is_err() {
                     return self.bind_error(VerbErrorCause::Budget);
                 }
                 let context = self.render_sel(sel);
@@ -478,6 +639,7 @@ impl Executor {
                     .charge(BudgetKind::SelectedBytes, context.len() as u64)
                     .is_err()
                 {
+                    self.meters.release_parallel_subcalls(1);
                     return self.bind_error(VerbErrorCause::Budget);
                 }
                 self.pending = Pending::Ask;
@@ -569,6 +731,7 @@ impl Executor {
         if chunks.is_empty() {
             return self.bind(Bound::DigestList(Vec::new()));
         }
+        self.meters.begin_ask_node();
         if self
             .meters
             .charge(BudgetKind::TotalSubcalls, chunks.len() as u64)
@@ -576,7 +739,7 @@ impl Executor {
         {
             return self.bind_error(VerbErrorCause::Budget);
         }
-        let mut requests = Vec::with_capacity(chunks.len());
+        let mut queued = VecDeque::with_capacity(chunks.len());
         for (index, chunk) in chunks.iter().enumerate() {
             let context = render_records(chunk);
             // Selected-bytes exhaustion aborts the whole ask-each with a
@@ -588,17 +751,36 @@ impl Executor {
             {
                 return self.bind_error(VerbErrorCause::Budget);
             }
-            requests.push(AskRequest {
+            queued.push_back(AskRequest {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
                 question: String::from(question),
                 context,
                 sample_k: None,
             });
         }
-        self.pending = Pending::AskEach(AskJoin {
+        let mut join = AskJoin {
             slots: alloc::vec![None; chunks.len()],
-            outstanding: chunks.len(),
-        });
+            queued,
+            outstanding: alloc::vec![false; chunks.len()],
+            budget_exhausted: false,
+        };
+        let requests = dispatch_ask_window(
+            &mut join,
+            usize::from(self.meters.budgets.parallel_subcalls),
+        );
+        if requests.is_empty()
+            || self
+                .meters
+                .charge(BudgetKind::ParallelSubcalls, requests.len() as u64)
+                .is_err()
+        {
+            return self.bind_error(VerbErrorCause::Budget);
+        }
+        self.pending = Pending::AskEach(join);
+        if self.retain_continuation_memory().is_err() {
+            self.meters.release_parallel_subcalls(requests.len());
+            return self.bind_error(VerbErrorCause::Budget);
+        }
         StepOutcome::NeedAsk(requests)
     }
 
@@ -622,10 +804,15 @@ impl Executor {
     /// Binds a value to the current slot and advances the program counter.
     fn bind(&mut self, bound: Bound) -> StepOutcome {
         let slot = slot_of(self.pc);
-        let capped = self.cap_bound(bound);
-        self.slots[self.pc] = Some(capped.clone());
-        self.pc += 1;
+        let mut capped = self.cap_bound(bound);
         self.pending = Pending::Idle;
+        self.slots[self.pc] = Some(capped.clone());
+        if self.retain_continuation_memory().is_err() {
+            capped = Bound::Error(VerbErrorCause::Budget);
+            self.slots[self.pc] = Some(capped.clone());
+            let _ = self.retain_continuation_memory();
+        }
+        self.pc += 1;
         StepOutcome::Line {
             slot,
             bound: capped,
@@ -672,6 +859,110 @@ impl Executor {
             .and_then(Option::as_ref)
             .and_then(Bound::out)
     }
+
+    fn charge_ask_cost(&mut self, result: &AskResult) -> Result<(), ()> {
+        self.meters
+            .charge(BudgetKind::AskWallClock, result.wall_clock_ms)?;
+        self.meters.charge(BudgetKind::AskTokens, result.tokens)
+    }
+
+    /// Admits an RLM depth through the Q5 economics guard. KC0 calls this at
+    /// depth one; a future nested-query instruction must call it with the
+    /// deeper child depth before creating that continuation.
+    fn admit_recursion_depth(&mut self, depth: u8) -> Result<(), ()> {
+        let additional = depth.saturating_sub(self.meters.recursion_depth);
+        self.meters
+            .charge(BudgetKind::RecursionDepth, u64::from(additional))
+    }
+
+    fn retain_continuation_memory(&mut self) -> Result<(), ()> {
+        let pending_bytes = pending_retained_bytes(&self.pending);
+        self.retain_continuation_memory_extra(pending_bytes)
+    }
+
+    fn retain_continuation_memory_extra(&mut self, pending_bytes: u64) -> Result<(), ()> {
+        let retained = self
+            .slots
+            .iter()
+            .filter_map(Option::as_ref)
+            .map(bound_retained_bytes)
+            .fold(0_u64, u64::saturating_add)
+            .saturating_add(pending_bytes);
+        self.meters.retain_continuation_memory(retained)
+    }
+}
+
+/// Pulls the next bounded ask-each window from the retained queue and marks
+/// those partition indexes outstanding. The engine emits each request as an
+/// independent child effect, preserving out-of-order completion identity.
+fn dispatch_ask_window(join: &mut AskJoin, available: usize) -> Vec<AskRequest> {
+    let mut requests = Vec::with_capacity(available.min(join.queued.len()));
+    for _ in 0..available {
+        let Some(request) = join.queued.pop_front() else {
+            break;
+        };
+        if let Some(outstanding) = join.outstanding.get_mut(request.index as usize) {
+            *outstanding = true;
+            requests.push(request);
+        }
+    }
+    requests
+}
+
+/// Deterministic continuation-memory approximation. It counts retained
+/// UTF-8 payload bytes (record text, digests, and queued ask question/context)
+/// plus eight bytes for numeric bindings. Container capacity, enum tags,
+/// record sequence numbers, and allocator overhead are deliberately omitted,
+/// keeping the `no_std` estimate stable across targets and allocators.
+fn bound_retained_bytes(bound: &Bound) -> u64 {
+    match bound {
+        Bound::Records(records) => records
+            .iter()
+            .map(|record| record.text.len() as u64)
+            .fold(0, u64::saturating_add),
+        Bound::Chunks(chunks) => chunks
+            .iter()
+            .flatten()
+            .map(|record| record.text.len() as u64)
+            .fold(0, u64::saturating_add),
+        Bound::Count(_) => 8,
+        Bound::Digest(digest) => digest.len() as u64,
+        Bound::DigestList(digests) => digests
+            .iter()
+            .map(|digest| digest.len() as u64)
+            .fold(0, u64::saturating_add),
+        Bound::Error(_) => 0,
+    }
+}
+
+fn pending_retained_bytes(pending: &Pending) -> u64 {
+    match pending {
+        Pending::Pages(walk) => page_walk_retained_bytes(walk),
+        Pending::AskEach(join) => ask_join_retained_bytes(join),
+        Pending::Idle | Pending::Ask => 0,
+    }
+}
+
+fn page_walk_retained_bytes(walk: &PageWalk) -> u64 {
+    walk.collected
+        .iter()
+        .map(|record| record.text.len() as u64)
+        .fold(0, u64::saturating_add)
+}
+
+fn ask_join_retained_bytes(join: &AskJoin) -> u64 {
+    let queued = join
+        .queued
+        .iter()
+        .map(|request| (request.question.len() as u64).saturating_add(request.context.len() as u64))
+        .fold(0, u64::saturating_add);
+    let digests = join
+        .slots
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(|digest| digest.len() as u64)
+        .fold(0, u64::saturating_add);
+    queued.saturating_add(digests)
 }
 
 /// Selects records matching `pattern`, keeping `ctx` records of context on

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Complete the kittens-code Q5 executor meters: window `ask-each` subcalls,
+  enforce recursion depth and driver-reported ask time/token costs, and bound
+  retained continuation payload memory with deterministic byte accounting.
 - Connect the kittens-code RLM continuation executor to turn execution through
   the `recall` tool, with store-page and sub-model effects, query tracing,
   suspended-query admission, cancellation/late-terminal handling, and Tokio
