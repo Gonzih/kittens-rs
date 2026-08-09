@@ -301,3 +301,89 @@ async fn reopened_session_resumes_without_id_collision() {
         "resumed session appended new records"
     );
 }
+
+#[tokio::test]
+async fn torn_tail_line_is_tolerated_and_reopen_continues() {
+    // A crash mid-write leaves a truncated final JSON line. Reopen must
+    // ignore that torn tail, keep the valid prefix, and continue appending
+    // (review input 19 #24).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let header = header_record(4);
+    let mut text = String::new();
+    text.push_str(&serde_json::to_string(&header).unwrap());
+    text.push('\n');
+    // A half-written record: valid JSON prefix, no closing brace, no newline.
+    text.push_str("{\"seq\":1,\"kind\":\"emitted_event\",\"txn\":null,");
+    std::fs::write(&log, text).expect("seed log");
+
+    let (mut appender, replay) = Appender::open(&log, None).expect("reopen past torn tail");
+    // Only the header survives the prefix; the torn line is dropped.
+    assert_eq!(replay.len(), 1);
+    assert_eq!(appender.next_seq(), 1);
+    // Appending continues cleanly from the recovered sequence.
+    let rec = Record::new(
+        1,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(kittens_code_protocol::event::Event::ShuttingDown),
+    )
+    .expect("record");
+    assert!(appender.append(&[rec]).is_ok());
+}
+
+#[tokio::test]
+async fn checksum_corrupt_tail_line_is_tolerated() {
+    // A last line whose checksum no longer matches its payload (bit-rot on
+    // the final unsynced write) is treated as a tolerable tail, not a fatal
+    // mid-log fault (review input 19 #24).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let header = header_record(5);
+    // A well-formed record whose checksum we then corrupt.
+    let rec = Record::new(
+        1,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(kittens_code_protocol::event::Event::ShuttingDown),
+    )
+    .expect("record");
+    // Corrupt the checksum by flipping one bit of its stored value.
+    let mut json: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&rec).unwrap()).unwrap();
+    let stored = json["checksum"].as_u64().unwrap();
+    json["checksum"] = serde_json::json!(stored ^ 1);
+    let mut text = String::new();
+    text.push_str(&serde_json::to_string(&header).unwrap());
+    text.push('\n');
+    text.push_str(&serde_json::to_string(&json).unwrap());
+    text.push('\n');
+    std::fs::write(&log, text).expect("seed log");
+
+    let (appender, replay) = Appender::open(&log, None).expect("reopen past corrupt tail");
+    assert_eq!(replay.len(), 1, "corrupt tail dropped, header retained");
+    assert_eq!(appender.next_seq(), 1);
+}
+
+#[tokio::test]
+async fn out_of_order_append_is_refused_in_release() {
+    // The strict-order contract is enforced in release, not just debug
+    // (review input 19 #16/#24): an append at the wrong sequence errors
+    // before corrupting the log.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("session.jsonl");
+    let (mut appender, _) = Appender::open(&log, Some(header_record(6))).expect("open");
+    // Header consumed seq 0; next expected is 1. Try to append seq 5.
+    let wrong = Record::new(
+        5,
+        RecordKind::EmittedEvent,
+        None,
+        TurnEpoch(0),
+        RecordPayload::EmittedEvent(kittens_code_protocol::event::Event::ShuttingDown),
+    )
+    .expect("record");
+    let err = appender.append(&[wrong]).expect_err("out-of-order refused");
+    assert_eq!(err.0, 5, "the failing sequence is reported");
+}

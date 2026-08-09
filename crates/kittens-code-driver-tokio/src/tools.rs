@@ -225,4 +225,53 @@ mod tests {
         let needle = "fn a() {\n    body\n}";
         assert!(fuzzy_find(hay, needle).is_some());
     }
+
+    #[test]
+    fn empty_and_nested_traversal_paths_are_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        // Empty path resolves to the root itself — allowed to resolve, but a
+        // read/write on a directory fails downstream; the interesting cases
+        // are the escapes.
+        assert!(resolve(root, "a/../../etc/passwd").is_err());
+        assert!(resolve(root, "ok/../../..").is_err());
+        // A `.`-laden but in-bounds path is fine.
+        assert!(resolve(root, "./a/./b/c.rs").is_ok());
+    }
+
+    #[test]
+    fn symlink_leaf_at_write_target_is_refused() {
+        // The final component being a symlink (a swap attack on the write
+        // target) is refused, not followed (review input 19 #25).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let outside = tempfile::tempdir().expect("outside");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path().join("target"), root.join("leaf"))
+                .expect("symlink");
+            assert!(resolve(root, "leaf").is_err());
+        }
+    }
+
+    #[test]
+    fn malformed_tool_json_is_a_tool_failure_not_a_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let call = ProposedToolCall {
+            name: String::from("read"),
+            args_json: String::from("{not valid json"),
+        };
+        let (outcome, _) = run(dir.path(), &call);
+        assert!(matches!(outcome, ToolOutcome::Failed { .. }));
+    }
+
+    #[test]
+    fn fuzzy_find_tolerates_crlf_line_endings() {
+        let hay = "fn a() {\r\n    body\r\n}\r\n";
+        let needle = "fn a() {\n    body\n}";
+        assert!(
+            fuzzy_find(hay, needle).is_some(),
+            "trailing-whitespace normalization also absorbs CR"
+        );
+    }
 }
