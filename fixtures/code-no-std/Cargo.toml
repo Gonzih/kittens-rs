@@ -1,0 +1,16 @@
+[package]
+name = "kittens-code-no-std-fixture"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kittens-code-protocol = { path = "../../crates/kittens-code-protocol", default-features = false }
+kittens-code-core = { path = "../../crates/kittens-code-core", default-features = false }
+
+[[bin]]
+name = "kittens-code-no-std-fixture"
+path = "src/main.rs"
+test = false
+bench = false

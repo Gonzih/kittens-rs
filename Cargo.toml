@@ -6,6 +6,7 @@ members = [
     "crates/kittens-code-protocol",
     "crates/kittens-macros",
     "crates/kittens-tui",
+    "fixtures/code-no-std",
     "fixtures/feature-unifier",
     "fixtures/no-std",
     "fixtures/renamed-dependency",
