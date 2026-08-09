@@ -1,6 +1,6 @@
-//! Frame-demand policy: coalescing requests, one sweep in flight, throttle
-//! eligibility, invalidation, and recovery — with provenance-branded
-//! settlement (exit-review round 1, findings 6–9).
+//! Frame-demand policy: coalescing requests, one machine-active sweep epoch,
+//! throttle eligibility, invalidation, and recovery — with
+//! provenance-branded settlement (exit-review round 1, findings 6–9).
 //!
 //! Vocabulary honesty: the throttle milestone is *written*, never
 //! "presented" — transfer completion says nothing about physical
@@ -11,7 +11,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use crate::geometry::FrameEpoch;
 use crate::sweep::{AbortedSweep, Sweep, SweepPlan, SweepWritten};
 
-/// A crate-owned monotonic instant in platform-defined tick units.
+/// A platform-supplied instant in platform-defined tick units. The time
+/// source is trusted to be monotonic; written-settlement regressions are
+/// clamped, but arbitrary forward values are outside this type's checks.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Tick(pub u64);
 
@@ -40,6 +42,18 @@ pub enum WrittenDisposition {
 // with the same documented exhaustion stance (2^64 sweeps).
 static DEMAND_IDS: AtomicU32 = AtomicU32::new(0);
 
+fn mint_demand_id(counter: &AtomicU32) -> Option<u64> {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .ok()
+        .map(u64::from)
+}
+
+fn mint_demand_id_or_panic(counter: &AtomicU32) -> u64 {
+    mint_demand_id(counter)
+        .expect("FrameDemand provenance-id space exhausted (2^32 - 1 successful constructions)")
+}
+
 /// The demand policy state machine. Owns the fixed, validated panel plan;
 /// sweeps cannot substitute another (finding 5).
 ///
@@ -51,7 +65,7 @@ static DEMAND_IDS: AtomicU32 = AtomicU32::new(0);
 /// | clean, idle | `begin_sweep` | `None` |
 /// | dirty, idle, throttle elapsed | `begin_sweep` | mints `Sweep`, epoch+1, dirty cleared |
 /// | dirty, idle, throttled | `begin_sweep` | `None`, `eligible_at` scheduled |
-/// | any, sweeping | `begin_sweep` | `None` (one sweep in flight) |
+/// | any, sweeping | `begin_sweep` | `None` (one machine-active epoch) |
 /// | sweeping | `request` | dirty (targets the next epoch, survives settlement) |
 /// | sweeping | `finish_written` (active token, not invalidated) | idle, throttle → `now`, obligations cleared: `Effective` |
 /// | sweeping | `finish_written` (active token, invalidated mid-sweep) | idle, dirty + full-repaint retained, throttle unchanged: `DiscardedByInvalidation` |
@@ -80,15 +94,12 @@ impl FrameDemand {
     ///
     /// Panics if `2^32 - 1` `FrameDemand` values have already been
     /// constructed in this program: provenance ids never alias; exhaustion
-    /// is a checked abort, not a silent wrap.
+    /// is sticky even if a host catches the panic, rather than silently
+    /// wrapping the counter.
     pub fn new(min_interval_ticks: u64, plan: SweepPlan) -> Self {
-        let id = DEMAND_IDS.fetch_add(1, Ordering::Relaxed);
-        assert!(
-            id != u32::MAX,
-            "FrameDemand provenance-id space exhausted (2^32 constructions)"
-        );
+        let id = mint_demand_id_or_panic(&DEMAND_IDS);
         Self {
-            id: u64::from(id),
+            id,
             plan,
             dirty: false,
             sweeping: None,
@@ -134,11 +145,13 @@ impl FrameDemand {
         }
     }
 
-    /// Mints the sweep when one is due: demand pending, no sweep in
-    /// flight, throttle elapsed. Binds the immutable snapshot, the fixed
+    /// Mints the sweep when one is due: demand pending, no machine-active
+    /// epoch, throttle elapsed. Binds the caller-frozen snapshot, the fixed
     /// plan, the repaint mode, and the branded epoch. The throttled case
     /// records [`FrameDemand::eligible_at`]; calling this is also the sole
-    /// acknowledgment of elapsed eligibility.
+    /// acknowledgment of elapsed eligibility. Epochs are unique while this
+    /// demand remains below its documented 2^64-sweep operating horizon;
+    /// continuing the same machine past that horizon is unsupported.
     pub fn begin_sweep<S>(&mut self, now: Tick, snapshot: S) -> Option<Sweep<S>> {
         if !self.dirty || self.sweeping.is_some() {
             return None;
@@ -252,5 +265,26 @@ impl FrameDemand {
             self.dirty = true;
             self.full_repaint = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+
+    #[test]
+    fn demand_id_exhaustion_is_sticky() {
+        let counter = AtomicU32::new(u32::MAX - 1);
+
+        assert_eq!(mint_demand_id(&counter), Some(u64::from(u32::MAX - 1)));
+        assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
+        assert!(
+            std::panic::catch_unwind(|| mint_demand_id_or_panic(&counter)).is_err(),
+            "the exhausted constructor path panics"
+        );
+        assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
+        assert_eq!(mint_demand_id(&counter), None, "exhaustion never reopens");
     }
 }

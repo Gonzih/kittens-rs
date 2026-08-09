@@ -186,7 +186,7 @@ fn cancelled_and_failed_transfers_cannot_mark_coverage() {
 }
 
 #[test]
-fn snapshot_is_immutable_through_the_sweep_and_returned_at_the_end() {
+fn snapshot_is_owned_through_the_sweep_and_returned_at_the_end() {
     let mut demand = demand();
     demand.request();
     let sweep = demand

@@ -1,0 +1,9 @@
+error[E0451]: fields `demand_id` and `epoch` of struct `SweepWritten` are private
+ --> tests/ui/forge_sweep_written.rs:6:9
+  |
+5 |     SweepWritten {
+  |     ------------ in this type
+6 |         demand_id: 0,
+  |         ^^^^^^^^^ private field
+7 |         epoch,
+  |         ^^^^^ private field

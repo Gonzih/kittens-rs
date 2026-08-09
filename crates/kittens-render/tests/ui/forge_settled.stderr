@@ -1,0 +1,15 @@
+error[E0451]: fields `transport`, `buffer`, `spare`, `outcome` and `target` of struct `Settled` are private
+ --> tests/ui/forge_settled.rs:5:9
+  |
+4 |     let _forged: Settled<(), (), ()> = Settled {
+  |                                        ------- in this type
+5 |         transport: (),
+  |         ^^^^^^^^^ private field
+6 |         buffer: (),
+  |         ^^^^^^ private field
+7 |         spare: (),
+  |         ^^^^^ private field
+8 |         outcome: TransferOutcome::Completed,
+  |         ^^^^^^^ private field
+9 |         target: None,
+  |         ^^^^^^ private field

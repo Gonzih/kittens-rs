@@ -19,10 +19,16 @@ board's SH8601 path is TX-only, so that seal is acceptable and recorded.
 
 | Candidate | Status | Evidence |
 |---|---|---|
-| A′ carrier + C completion | **selected**; host-model PASS with the corrected oracle suite (11 traces incl. adversarial registration race, cancel-wake, waker replacement, late-IRQ inertness, reuse, spare identity, and a failing check-then-register negative control) | `src/transfer.rs`, `tests/k2r0a_a_prime.rs`, `probes/esp32s3-spi2/VERDICT.md` |
+| A′ carrier + C completion | **selected**; host-model PASS with 12 tests: 11 positive traces (including adversarial registration race, cancel-wake, waker replacement, late-IRQ inertness, reuse, and spare identity) plus the check-then-register lost-wake negative control | `src/transfer.rs`, `tests/k2r0a_a_prime.rs`, `probes/esp32s3-spi2/VERDICT.md` |
 | A — kernel pin admission | not needed for this boundary | — |
 | B — named task + channel boundary | not needed for this boundary | — |
 | ∅ | not reached | — |
+
+The generic `InFlight<X, S>` carrier implements `Unpin` exactly when
+`X: OwnedTransfer + Unpin` and `S: Unpin` (no bound on `X::Transport` or
+`X::Buffer`). The host-model types meet those bounds; the same assertions
+for the concrete Xtensa wrapper and buffers remain part of the target
+compile gate below.
 
 ## Reviewer corrections applied (2026-08-08)
 
@@ -98,18 +104,33 @@ proof chain — `Settled` fields private with a consuming single-use
 witness mint; `StripeTarget` minted by the `Sweep` binds demand/epoch/
 region into `InFlight::new` so targets cannot be claimed independently;
 admitted panel geometry (anchor-board constant; arbitrary panels become a
-named escape); demand IDs to `AtomicU64` and documented epoch-exhaustion
-stance; `Tick` regression clamping plus a documented trusted-time
-boundary; `abandon_active` documented as witness-terminal only (live
-transfers still physically write — caller drains first) with a rejection
-oracle; SPEC §5.2/§6.2 sealing language reconciled; stale stage prose in
-lib.rs/geometry/Cargo.toml fixed; probes README/CHANGELOG stop claiming a
-nonexistent compile-ready corrected probe (corrected blueprint file
-added). Batch 5 (delegated to the reviewing engineer): canonical runnable
-example, trybuild ui/ui-pass controls (forged-construction compile-fails
-become real once fields are private), the lost request-during-sweep
-oracle, slow-successful-sweep throttle, duplicate/replay and
-state-unchanged rejection oracles, external no-std consumer link fixture,
-manifest rows for board-HIL and sealing plus per-row negative-control
-naming, `#[must_use]` advisories, prose/count repairs. Round-3 review
-follows.
+named escape); demand IDs kept thumbv7em-compatible with an
+exhaustion-checked `AtomicU32` and widened to `u64` in witnesses, plus a
+documented 2^64-sweep epoch horizon; `Tick` regression clamping plus a
+documented trusted-time boundary; `abandon_active` documented as
+witness-terminal only (live transfers still physically write — caller
+drains first) with a rejection oracle; missing request-during-sweep,
+slow-successful-sweep/clamp, duplicate/replay, and unchanged-state rejection
+oracles; liveness-critical `#[must_use]` annotations; SPEC §5.2/§6.2
+sealing language reconciled; stale stage prose in lib.rs/geometry/Cargo.toml
+fixed; board-HIL and sealing manifest rows added; probes README/CHANGELOG
+now distinguish the historical and corrected source blueprints without
+claiming either is built (the corrected file remains Xtensa-gated). Batch 5
+(author: the reviewing engineer): canonical runnable host lifecycle;
+trybuild UI failures for private/move-only proof boundaries with compiling
+escape-surface controls; a separate external no-std consumer/link fixture;
+exact conditional-`Unpin`, citation, trace-count, snapshot, Tick, and stage
+prose repairs; and a sticky demand-id exhaustion transition after review
+found that panic-unwind could reopen the original wrapping counter. Round-3
+review follows.
+
+Batch 5 verification (2026-08-08): `cargo test -p kittens-render` passed
+46 runtime oracles plus 15 compile-fail and 5 compile-pass UI controls,
+first with `TRYBUILD=overwrite` and then clean; the canonical example ran
+through all four anchor-panel stripes; package clippy passed with warnings
+denied; rustfmt and rustdoc were clean; the library and separate downstream
+consumer both linked for `thumbv7em-none-eabi --release`. The consumer ELF
+is a statically linked ARM executable retaining `_start`,
+`FrameDemand::new`, and the `kittens-render` demand-id state. The library's
+normal target dependency tree remains empty. No Xtensa, board-HIL, kernel
+admission, sealing, or bilateral-seam gate is claimed by this result.

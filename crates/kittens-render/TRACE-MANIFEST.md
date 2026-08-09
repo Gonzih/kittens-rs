@@ -1,8 +1,11 @@
 # K2R-0 trace manifest
 
-SPEC section 8 requires each suite row to map to a named positive oracle
-with an adjacent negative control, and exit-review finding 14 requires this
-manifest. Statuses: ✓ (oracle in CI), **OPEN** (host work remaining),
+SPEC section 8 requires each suite row to map to named evidence and publish
+its negative boundaries. This manifest names executable negative controls
+where one is meaningful; the UI-pass suite and README name the compiling
+escape surfaces enforced only by documentation. Exit-review finding 14
+requires this manifest. Statuses: ✓ (oracle in CI), **documentation**
+(prose contract with a compiling control), **OPEN** (host work remaining),
 **GATED** (blocked on a named external gate).
 
 | SPEC §8 requirement | Status | Oracle(s) / gate |
@@ -14,11 +17,11 @@ manifest. Statuses: ✓ (oracle in CI), **OPEN** (host work remaining),
 | ordinary-drop runtime oracle | ✓ | `dropped_pending_transfer_disarms_the_slot` (transfer), `abandon_recovers_a_dropped_sweep` (demand) |
 | resource recovery under injected failure | ✓ (model boundary) / **GATED** (enumerated command/chunk trace) | `failure_settles_returns_resources_and_mints_no_witness`; the enumerated per-command/chunk trace belongs to the concrete transport integration — Xtensa/board gate |
 | waker replacement, late IRQ, slot reuse | ✓ | `waker_replacement_wakes_only_the_newest`, `late_completion_after_recovery_is_inert_via_disarm`, `sequential_transfers_reuse_the_same_slot` |
-| sweep coverage is a construction | ✓ | `cancelled_and_failed_transfers_cannot_mark_coverage`, `out_of_order_witnesses_are_rejected`, `plan_tiles_the_panel_exactly_including_partial_last_stripe`, `invalid_plans_are_rejected_including_overflow` |
+| sweep coverage is a construction | ✓ | `cancelled_and_failed_transfers_cannot_mark_coverage`, `out_of_order_witnesses_are_rejected`, `plan_tiles_the_panel_exactly_including_partial_last_stripe`, `invalid_plans_are_rejected_including_overflow`; `tests/ui/` rejects forged/rewritten/replayed proof carriers |
 | full-frame vs stripe pixel equivalence (FrameEpoch reconstruction) | **OPEN** | requires the draw-target integration layer (embedded-graphics stripe target); lands with that slice, not fabricated before it |
-| demand-policy state table | ✓ | one oracle per table row in `k2r0_demand_sweep.rs`: coalescing/monotonic epochs, one-in-flight, request-during-sweep, throttle/eligibility, failed-retains, invalidation-discards, effective-clears, abandon-recovers |
+| demand-policy state table | ✓ | one oracle per table row in `k2r0_demand_sweep.rs`: coalescing/monotonic epochs, one-machine-active-epoch, request-during-sweep, throttle/eligibility, failed-retains, invalidation-discards, effective-clears, abandon-recovers; `tests/ui-pass/old_sweep_survives_abandon.rs` publishes the retained-value/drain-first caller obligation |
 | stale/foreign/duplicate finish | ✓ | `foreign_and_stale_settlement_is_rejected_without_mutation` (foreign swap), `abandoned_epochs_witnesses_are_terminally_rejected` (stale epoch after abandon, no mutation), single-use mint oracle in `k2r0a_a_prime.rs` (duplicate witness unrepresentable) |
-| snapshot immutability through the sweep | ✓ | `snapshot_is_immutable_through_the_sweep_and_returned_at_the_end` |
+| snapshot ownership through the sweep | ✓ | `snapshot_is_owned_through_the_sweep_and_returned_at_the_end` proves owned/shared-reference access for an ordinary value; `tests/ui-pass/interior_mutable_snapshot.rs` shows that logical deep immutability is a caller obligation |
 | touch interleavings (findings 10–13 set) | ✓ | `k2r0_touch.rs` (16 oracles): `increment_then_latch_closes_idle_check_lost_wake` + `negative_control_check_before_increment_loses_idle_wake`, `startup_int_read_failure_retries_after_int_deasserts`, `budget_exhaustion_keeps_retry_latched_after_int_deasserts`, `seeded_two_to_the_32_produces_cannot_alias_pending_to_idle`, `stuck_int_identical_snapshots_emit_no_false_movement_edges`, `service_budget_is_nonzero_by_construction`, plus the round-1 set |
 | Outcome-B receiver/task traces | not applicable | mechanism C selected (`K2R0A-LOG.md`); B was not needed |
 | external-consumer seam fixture | **GATED** | bilateral seam co-sign with the `kittens-code` workstream (SPEC section 10) |
@@ -26,8 +29,14 @@ manifest. Statuses: ✓ (oracle in CI), **OPEN** (host work remaining),
 | real `kittens::reactor!` integration fixture | **GATED** | kernel-admitted source carrier (K2R-0A open item 3; root SPEC 37.6 comparison) |
 | slow-successful-sweep throttle | ✓ | `slow_sweep_throttles_from_its_finish_instant`, `regressing_finish_time_is_clamped` |
 | request during active sweep | ✓ | `request_during_active_sweep_survives_settlement` |
-| crate `no_std` CI gate | ✓ | `cargo build -p kittens-render --target thumbv7em-none-eabi` in CI |
-| board HIL (silicon wake delivery, TE, latency) | **GATED** | hardware arrival + Xtensa gate; SPEC section 7 pass criteria |
+| demand-provenance exhaustion | ✓ | `demand_id_exhaustion_is_sticky` proves the reserved `AtomicU32` exhaustion state does not wrap or reopen, including after a host catches the constructor panic |
+| crate `no_std` CI gate | ✓ | `cargo build -p kittens-render --target thumbv7em-none-eabi --release` in CI |
+| external `no_std` consumer/link | ✓ | separate downstream `kittens-render-no-std-fixture` references the public demand→sweep→transfer proof chain and links it for `thumbv7em-none-eabi --release` in CI |
+| conditional `InFlight` pin boundary | ✓ | `tests/ui/in_flight_is_conditionally_unpin.rs` and `tests/ui/in_flight_spare_is_conditionally_unpin.rs` reject `!Unpin` transfer/spare values; `tests/ui-pass/in_flight_unpin_when_parts_are_unpin.rs` uses `!Unpin` associated transport/buffer types to prove they add no bound |
+| panel-geometry admission | ✓ | private-construction UI failures; `tests/ui-pass/custom_unvalidated_panel.rs` publishes the loud arbitrary-panel escape |
+| `TouchReader` untorn-snapshot contract | **documentation** | `tests/ui-pass/touch_reader_untorn_is_prose_only.rs` proves arbitrary implementations compile; a future reviewed integration must discharge the prose obligation |
+| canonical host lifecycle | ✓ | `cargo run -p kittens-render --example host_sweep` drives and prints demand → sweep → per-stripe transfer/proof → written settlement over the admitted board geometry |
+| board HIL (silicon wake delivery, TE, latency) | **GATED** | hardware arrival + Xtensa gate; SPEC sections 7 and 9, `K2R0A-LOG.md` open item 2 |
 | `OwnedTransfer` sealing | **GATED** | pre-freeze obligation (SPEC 5.2); lands with the freeze decision, not before |
 
 Silent caps rule (root AGENTS.md): nothing above is claimed beyond its

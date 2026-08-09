@@ -3,7 +3,7 @@
 /// A rectangular panel region in global panel coordinates.
 ///
 /// Global, never stripe-local: a stripe target that reported a stripe-local
-/// bounding box would change layout semantics (SPEC 6.4 rule 3).
+/// bounding box would change layout semantics (SPEC 6.1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Region {
     /// Left edge, panel coordinates.
@@ -16,9 +16,10 @@ pub struct Region {
     pub height: u16,
 }
 
-/// Identity of one immutable scene snapshot.
+/// Identity of one logically immutable scene snapshot.
 ///
-/// Monotonic; minted only by the frame-demand policy, never by transports.
+/// Monotonic within one demand machine's documented 2^64-sweep operating
+/// horizon; minted only by the frame-demand policy, never by transports.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct FrameEpoch(pub(crate) u64);
 

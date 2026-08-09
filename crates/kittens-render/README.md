@@ -15,11 +15,19 @@ hardware and the Xtensa toolchain gate.
 
 | Component | Guarantee | Enforcement layer |
 |---|---|---|
-| `transfer::OwnedTransfer` + `InFlight` | resources (transport, sent buffer, spare) always return on the driven path; cancel settles at its linearization point and wakes; register-then-recheck completion | trait contract + wake-count oracles + broken-order negative control |
-| `Settled::stripe_written` | only a `Completed` settlement can mark coverage — cancelled/failed/never-started stripes are unmarkable | unforgeable witness mint (type construction) |
-| `sweep::Sweep<S>` | one immutable snapshot per epoch (shared-ref access), demand-fixed validated plan, in-order full coverage before `SweepWritten` | crate-owned value + consuming witnesses |
-| `demand::FrameDemand` | one sweep in flight; provenance-branded settlement rejected without mutation; invalidation discards the affected epoch's settlement; dropped sweeps recoverable | checked state machine + per-table-row oracles |
-| `touch` | untorn snapshot reports; wake-dedup without the idle-check TOCTOU; bounded service per activation; no edge for unchanged contacts | atomics protocol + adversarial interleaving oracles + negative control |
+| `transfer::OwnedTransfer` + `InFlight` | resources (transport, sent buffer, spare) always return on the driven path; cancel settles at its linearization point and wakes; register-then-recheck completion; `InFlight<X, S>` is `Unpin` exactly for `X: OwnedTransfer + Unpin, S: Unpin` | trait contract + conditional trait bound + wake-count oracles + broken-order negative control |
+| `Settled::stripe_written` | only a private, real `Completed` settlement can mint coverage, at most once — cancelled/failed/never-started stripes are unmarkable | private construction + consuming unforgeable witness mint + compile-fail suite |
+| `PanelGeometry` + `SweepPlan` | the canonical plan is tied to admitted anchor geometry; arbitrary geometry is a visibly named escape | private raw plan constructor + admission type + compile-fail/pass controls |
+| `sweep::Sweep<S>` | one owned snapshot value per epoch (shared-reference-only access), demand-fixed validated plan, in-order full coverage before `SweepWritten` | crate-owned value + ordinary borrowing + consuming witnesses |
+| `demand::FrameDemand` | one machine-active epoch; provenance-branded settlement rejected without mutation; invalidation discards the affected epoch's settlement; dropped sweeps recoverable | checked state machine + per-table-row oracles; caller drains old physical transfers before replacing an abandoned epoch |
+| `touch` | wake-dedup without the idle-check TOCTOU; bounded service per activation; no edge for unchanged contacts; reviewed readers must return untorn snapshots | atomics protocol + adversarial interleaving oracles + negative control; reader atomicity is a documentation obligation |
+
+## Runnable lifecycle
+
+Run `cargo run -p kittens-render --example host_sweep` for the canonical
+host-model demand → sweep → per-stripe transfer/proof → written-settlement
+cycle over `PanelGeometry::WAVESHARE_18_V1`. It prints every ownership and
+proof transition without adding a dependency to the `no_std` library.
 
 ## What this crate is not
 
@@ -27,10 +35,15 @@ Not a display driver, widget/layout/scene framework, HAL, or executor. It
 does not claim physical presentation (milestones are `StripeWritten` /
 `SweepWritten` only), TE synchronization, power/AOD management, or DMA
 overlap — each is a named gate in the SPEC. Escape surfaces that compile by
-design: raw transport access outside the capability boundary, and any
-`TouchReader` implementation's "untorn snapshot" property, which is a
-documentation-level contract on the integration (the FT3168 integration
-discharges it with a single contiguous register read).
+design: raw transport access outside the capability boundary;
+`PanelGeometry::custom_unvalidated_panel`; interior-mutability or shared
+handles inside a sweep snapshot (logical epoch immutability is a caller
+obligation); caller-supplied `Tick` truth beyond regression clamping; and
+any `TouchReader` implementation's "untorn snapshot" property, which is a
+documentation-level contract on the integration (a future reviewed FT3168
+integration must discharge it with a single contiguous register read). The
+UI-pass controls publish the custom-panel, interior-mutable-snapshot, and
+prose-only-reader boundaries beside the compile-fail proof suite.
 
 ## Deferred, with gates
 

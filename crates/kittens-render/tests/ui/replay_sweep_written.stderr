@@ -1,0 +1,9 @@
+error[E0382]: use of moved value: `witness`
+ --> tests/ui/replay_sweep_written.rs:6:41
+  |
+4 | fn replay(demand: &mut FrameDemand, witness: SweepWritten) {
+  |                                     ------- move occurs because `witness` has type `SweepWritten`, which does not implement the `Copy` trait
+5 |     let _first = demand.finish_written(witness, Tick(1));
+  |                                        ------- value moved here
+6 |     let _second = demand.finish_written(witness, Tick(2));
+  |                                         ^^^^^^^ value used here after move

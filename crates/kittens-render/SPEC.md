@@ -4,6 +4,7 @@
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
+- Slice boundary: **K2R-0 host slice** means the host-model protocol surface and oracles may land against amended section 6. It does not mean K2R-0A or full K2R-0 acceptance: the exact Xtensa compile/link probe, kernel admission, seam co-sign, and board HIL remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -25,15 +26,15 @@ Emittability rule (root 9.4) stands: explicit constructors, stable spellings, no
 
 As revision 1 (no widgets; no driver internals; not the generic-gate resolution; no power/AOD — board-coordinator slice; no DMA overlap — K2R-2 gate; no TE synchronization claim), plus review-sharpened exclusions:
 
-- **no `BusIdle` or `FramePresented` facts in these slices** — both transports expose exactly one observable completion boundary; physical presentation and bus-idle milestones wait for hardware evidence (finding 17). The facts are `StripeWritten { epoch, region }` and `SweepWritten { epoch }` only;
+- **no `BusIdle` or `FramePresented` facts in these slices** — both transports expose exactly one observable completion boundary; physical presentation and bus-idle milestones wait for hardware evidence (finding 17). The facts are the private, provenance-carrying `StripeWritten` and `SweepWritten` witnesses only;
 - **no lossless touch-transition promise** — this slice's touch semantics are *latest-state-with-coalescing, complete untorn reports*; a bounded transition queue with explicit overflow policy is a separately gated follow-on (finding 11);
 - **no damage/partial sweeps** — K2R-0 uses one validated, fixed full-panel sweep plan; damage history is deferred (finding 9).
 
 ## 5. What is stable in this revision (normative)
 
-1. **Resource-carrying results.** Success and failure values carry every consumed resource back (`Returned`/`Failed` shapes, whatever their final spelling). Ordinary `drop` of an in-flight completion is a **documented non-returning boundary** — the HAL cancels and drops; nothing comes back through `Future::Output`. Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain transition that is driven to settlement and returns transport, sent buffer, and spare (finding 3).
+1. **Resource-carrying results.** Every driven success or failure settles through `Recovered`/`Settled` and returns the transport, sent buffer, and spare. Ordinary `drop` of an in-flight completion is a **documented non-returning boundary** — the HAL cancels and drops; nothing comes back through `Future::Output`. Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain transition that is driven to settlement (finding 3).
 2. **Sealed capabilities — a pre-freeze obligation.** The transport capability traits will be sealed to reviewed backend adapters before any freeze, because ownership alone cannot distinguish a blocking `start_region` from an honest one (finding 8). During the experiment they are deliberately open so probes and models can implement them (section 6.2); the open state is itself a recorded gate, not a contradiction. Raw backend access remains the documented compiling escape surface.
-3. **Epoch discipline.** One immutable snapshot per sweep; every transmitted stripe fully reconstructed from it; any failure terminates the current epoch and forces a full repaint. Sweep completion is decided **only** by a consuming progress token over a fixed, validated full-panel plan — never by caller assertion (finding 9).
+3. **Epoch discipline.** One sweep-owned snapshot per sweep, exposed only through `&S`; every transmitted stripe is fully reconstructed from that logically immutable state. Ordinary ownership enforces the owned/shared-reference boundary, but unconstrained `S` can contain interior mutability or handles to shared external state: keeping those stable for the epoch is a documented caller obligation and compiling escape surface. Any failure terminates the current epoch and forces a full repaint. Sweep completion is decided **only** by a consuming progress token over a fixed, validated full-panel plan — never by caller assertion (finding 9).
 4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
 6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
@@ -51,7 +52,8 @@ slice and is explicitly not specified here.
 ### 6.1 Geometry and identity
 
 `Region` — global panel coordinates, never stripe-local. `FrameEpoch` —
-monotonic scene-snapshot identity, minted only by `FrameDemand`; no public
+scene-snapshot identity, monotonic within one demand machine's documented
+2^64-sweep operating horizon, minted only by `FrameDemand`; no public
 constructor.
 
 ### 6.2 Transfer boundary
@@ -66,42 +68,66 @@ stores the settlement at its completion-observation **linearization point**
 `Cancelled`) and MUST wake a registered waker. `recover(self) ->
 Recovered<T, B>` — the **sole outcome authority**.
 
-`InFlight<X, S>` — `Unpin`, `&mut`-polled; owns the transfer, the
-independently writable spare, and the epoch/region identity;
-`begin_drain`/`poll_complete` is the only resource-returning path;
-ordinary drop is the documented non-returning boundary (but integrations
-MUST disarm their completion slot on drop — no stale registrations).
+`StripeTarget` — non-`Clone`, private-field identity (demand, epoch, region),
+minted only by `Sweep::next_target` and consumed by `InFlight::new`; a
+transfer and the identity it claims cannot be paired independently.
 
-`Settled<T, B, S>` — transport, sent buffer, spare, outcome, epoch,
-region. `Settled::stripe_written()` is the **only mint** for a
-`StripeWritten` witness and exists only for `Completed` settlements:
-marking a cancelled, failed, or never-started stripe is unrepresentable.
+`InFlight<X, S>` — `&mut`-polled and **conditionally** `Unpin`: exactly
+`X: OwnedTransfer + Unpin` and `S: Unpin`; `X::Transport` and `X::Buffer`
+need no `Unpin` bound because they are not stored separately in flight. It
+owns the transfer, independently writable spare, and `StripeTarget`;
+`begin_drain`/`poll_complete` is the only resource-returning path; ordinary
+drop is the documented non-returning boundary (but integrations MUST disarm
+their completion slot on drop — no stale registrations).
+
+`Settled<T, B, S>` — private resources, outcome, and single-use target;
+safe external code cannot construct one or rewrite its proof-bearing state.
+`Settled::stripe_written(&mut self)` is the **only mint** for a
+`StripeWritten` witness, consumes the target at most once, and succeeds only
+for `Completed` settlements: marking a cancelled, failed, never-started, or
+already-witnessed stripe is unrepresentable.
 
 ### 6.3 Sweep
 
+`PanelGeometry` — admitted full-panel geometry; the anchor board is
+`WAVESHARE_18_V1`. `custom_unvalidated_panel` is the deliberately loud,
+compiling escape for hosts and unadmitted hardware.
+
 `SweepPlan` — validated full-panel stripe plan (empty/zero/overflow
-rejected), fixed at `FrameDemand` construction; sweeps cannot substitute
-another. `Sweep<S>` — crate-owned, minted only by `begin_sweep`; owns the
-immutable snapshot (shared-reference access only), the plan, the repaint
-mode, and the provenance-branded epoch; `mark_written(StripeWritten)`
-enforces epoch match and plan order; `finish(self)` yields
-`(SweepWritten, S)` only at full coverage; `abort(self)` yields
-`(AbortedSweep, S)` at any point. Coverage is a construction, never a
-caller claim.
+rejected) over a `PanelGeometry`, fixed at `FrameDemand` construction;
+sweeps cannot substitute another. `Sweep<S>` — crate-owned, minted only by
+`begin_sweep`; owns the snapshot (shared-reference access only), the plan,
+the repaint-obligation state, and the provenance-branded epoch. Ordinary
+borrowing does not freeze interior mutable or externally shared state inside
+`S`; callers MUST keep that state logically immutable for the epoch.
+`mark_written(StripeWritten)` enforces demand provenance, epoch match, and
+plan order; `finish(self)` yields `(SweepWritten, S)` only at full coverage;
+`abort(self)` yields `(AbortedSweep, S)` at any point. Coverage is a
+construction, never a caller claim. Every K2R-0 plan covers the full panel;
+`full_repaint == false` means no outstanding forced-repaint obligation, not
+a partial sweep.
 
 ### 6.4 Demand
 
-`FrameDemand` — owns the plan and a crate-owned monotonic `Tick` throttle;
+`FrameDemand` — owns the plan and accepts caller-supplied `Tick` values from
+a trusted monotonic platform time source. Regressing written-settlement
+times are clamped, but arbitrary forward values are outside this type's
+validation. Demand provenance uses a thumbv7em-compatible `AtomicU32` with
+checked exhaustion, widened to `u64` in witnesses; epoch uniqueness is
+bounded by the documented 2^64-sweep lifetime of one demand machine.
 `request` (the only kittens-tui-shared vocabulary), `begin_sweep(now,
-snapshot)` (sole eligibility acknowledgment; one sweep in flight),
+snapshot)` (sole eligibility acknowledgment; one active demand epoch),
 `eligible_at`, `finish_written(SweepWritten, now) ->
 Result<WrittenDisposition, ForeignSweep>`, `finish_failed(AbortedSweep,
-now)`, `abandon_active` (dropped-sweep recovery), `invalidate` (bool
-latch; a mid-sweep invalidation makes that sweep's settlement
+now)`, `abandon_active` (dropped-sweep recovery), `invalidate` (bool latch;
+a mid-sweep invalidation makes that sweep's settlement
 `DiscardedByInvalidation`: obligations retained, throttle unchanged).
-Foreign/stale witnesses are rejected **without mutation, in release
-builds**. Milestone vocabulary is written-only: `finish_written`,
-`last_written`, `SweepWritten` — nothing claims physical presentation.
+`abandon_active` is witness-terminal only: before beginning the replacement
+sweep, callers MUST drain or settle every transfer from the abandoned one,
+because a retained old `Sweep` can still drive physical writes. Foreign or
+stale witnesses are rejected **without mutation, in release builds**.
+Milestone vocabulary is written-only: `finish_written`, `last_written`,
+`SweepWritten` — nothing claims physical presentation.
 
 ### 6.5 Touch
 
@@ -117,7 +143,7 @@ untorn snapshots, with edges reconstructed between surfaced reports and
 
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
-A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists.
+A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists. A host-model selection may authorize the K2R-0 host slice and its section 6 amendment, but K2R-0A itself does not pass until the exact target criteria and open items are discharged.
 
 **Candidate matrix (exhaustive per finding 4):**
 
@@ -135,9 +161,9 @@ A **non-freezing experiment**; its deliverable is a selected-and-demonstrated sh
 
 **Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
 
-## 8. K2R-0: protocol suite (design frozen only after the K2R-0A amendment)
+## 8. K2R-0: protocol suite (host slice amended; full acceptance gated)
 
-K2R-0 MUST NOT begin until this spec is amended with K2R-0A's selected shapes. Its suite is then built as a **named trace matrix** (finding 14) — each trace enumerated, each state transition and transport boundary independently observable — covering at minimum:
+The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's host-model-selected shapes. Full K2R-0 acceptance additionally requires K2R-0A's exact target gate and every acceptance item in section 11. The host suite is built as a **named trace matrix** (finding 14) — each trace enumerated, each state transition and transport boundary independently observable — covering at minimum:
 
 - both selection-loss positions for completion; completion before first poll; completion during waker registration;
 - cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
@@ -160,8 +186,8 @@ This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15)
 
 ## 11. Slice acceptance
 
-- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the target compile probe exists in-repo, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative).
-- **K2R-0** is done when: the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds `no_std` without alloc; clippy/fmt/doc gates clean.
+- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the exact target compile/link probe passes, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative). The current host-model selection is not this full acceptance.
+- **K2R-0** is done when: K2R-0A is done; the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds and links through an external `no_std` consumer without alloc; clippy/fmt/doc gates clean.
 - Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
 
 ## 12. Review log

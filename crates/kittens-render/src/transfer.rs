@@ -1,10 +1,11 @@
-//! K2R-0A transfer boundary: an outer-`Unpin` in-flight adapter over a
-//! waker-registering completion boundary.
+//! K2R-0A transfer boundary: a conditionally outer-`Unpin` in-flight
+//! adapter over a waker-registering completion boundary.
 //!
 //! Mechanism verdict (K2R0A-LOG, external engineering contribution): on the
 //! anchor board this boundary is implemented by a profile-owned SPI2
 //! `TransferDone` ISR and critical-section waker slot — candidate C's
 //! completion mechanism carried in candidate A′'s `Unpin` shape. The
+//! generic carrier is `Unpin` exactly when its transfer and spare are; the
 //! borrowing HAL completion future is not used at all.
 //!
 //! Contract obligations came out of review corrections and are load-bearing:
@@ -103,7 +104,9 @@ impl<T, B, S> Settled<T, B, S> {
         self.outcome
     }
 
-    /// The region this settlement targeted.
+    /// The region this settlement targeted while its single-use target is
+    /// still present. Returns an empty region after
+    /// [`Settled::stripe_written`] consumes that target.
     pub fn region(&self) -> Region {
         self.target.as_ref().map_or(
             Region {
@@ -137,10 +140,13 @@ impl<T, B, S> Settled<T, B, S> {
     }
 }
 
-/// The in-flight adapter: `Unpin`, `&mut`-polled, drivable to settlement,
-/// never resource-losing on the driven path. Owns the transfer *and* the
+/// The in-flight adapter: conditionally `Unpin`, `&mut`-polled, drivable to
+/// settlement, never resource-losing on the driven path. It implements
+/// `Unpin` exactly when `X: OwnedTransfer + Unpin` and `S: Unpin`; the
+/// associated transport and buffer types need no `Unpin` bound because
+/// they are not stored separately in flight. Owns the transfer *and* the
 /// spare buffer, which stays independently writable during the flight
-/// (SPEC 6.3's `StripeInFlight` topology).
+/// (SPEC 6.2's transfer boundary).
 ///
 /// ```text
 /// InFlight ── poll_complete Ready ─────────────▶ Settled { .., Completed/Failed }

@@ -8,9 +8,10 @@
 //!   for that witness is a settled transfer whose outcome was `Completed`
 //!   ([`crate::transfer::Settled::stripe_written`]);
 //! - the sweep value is crate-owned and binds the demand-fixed panel plan,
-//!   the immutable scene snapshot (owned, exposed by shared reference
-//!   only), the repaint mode, and the provenance-branded epoch — there is
-//!   no public path to attach a foreign or trivial plan;
+//!   the scene snapshot (owned, exposed by shared reference only), the
+//!   repaint mode, and the provenance-branded epoch — there is no public
+//!   path to attach a foreign or trivial plan. Interior mutability and
+//!   shared external state remain documented snapshot escape surfaces;
 //! - milestone vocabulary is honest: the terminal witness is
 //!   [`SweepWritten`] — every planned stripe was *written*; nothing here
 //!   claims physical presentation.
@@ -174,13 +175,15 @@ pub struct WrongStripe {
     pub expected: Option<Region>,
 }
 
-/// One crate-owned sweep: the immutable scene snapshot, the demand-fixed
+/// One crate-owned sweep: the scene snapshot, the demand-fixed
 /// plan, the repaint mode, and the branded epoch. Minted only by
 /// [`crate::demand::FrameDemand::begin_sweep`].
 ///
-/// The snapshot is owned here and exposed by shared reference only — the
-/// scene cannot be mutated through the sweep, so every stripe of the epoch
-/// renders one state (SPEC 6.4 rule 1's enforcement at this layer).
+/// The snapshot is owned here and exposed by shared reference only (SPEC
+/// 6.3). Ordinary Rust borrowing prevents mutation through a plain `&S`,
+/// but `S` is unconstrained: interior mutability or shared external handles
+/// can still change the rendered state. Keeping those stable for the epoch
+/// is a documented caller obligation, not a type-level guarantee.
 pub struct Sweep<S> {
     snapshot: S,
     plan: SweepPlan,
@@ -218,13 +221,17 @@ impl<S> Sweep<S> {
         }
     }
 
-    /// The immutable scene snapshot for this epoch.
+    /// The scene snapshot for this epoch, exposed only by shared reference.
+    /// Interior mutability and shared external state remain caller-owned
+    /// escape surfaces.
     pub const fn snapshot(&self) -> &S {
         &self.snapshot
     }
 
-    /// Whether this sweep must repaint everything (always true for the
-    /// K2R-0 full-panel plan; carried for damage-sweep forward shape).
+    /// Whether a recovery or invalidation obligation requires this sweep.
+    /// K2R-0 plans cover the full panel regardless; `false` means there is
+    /// no outstanding forced-repaint obligation, not that the sweep is
+    /// partial.
     pub const fn full_repaint(&self) -> bool {
         self.full_repaint
     }

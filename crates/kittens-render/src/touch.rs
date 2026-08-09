@@ -225,9 +225,10 @@ impl TouchGenerations {
     }
 }
 
-/// Platform boundary for one snapshot read. The FT3168 integration reads
-/// one contiguous register block per call and parses count/event/id/
-/// coordinates from that single block — never from separate transactions.
+/// Platform boundary for one snapshot read. A reviewed FT3168 integration
+/// MUST read one contiguous register block per call and parse count/event/
+/// id/coordinates from that single block — never from separate
+/// transactions. This crate does not yet contain that concrete integration.
 pub trait TouchReader {
     /// Transport error type.
     type Error;

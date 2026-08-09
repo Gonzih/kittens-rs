@@ -6,6 +6,7 @@ members = [
     "crates/kittens-tui",
     "fixtures/feature-unifier",
     "fixtures/no-std",
+    "fixtures/render-no-std",
     "fixtures/renamed-dependency",
 ]
 resolver = "2"
