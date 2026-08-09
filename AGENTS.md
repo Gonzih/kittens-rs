@@ -89,6 +89,13 @@ its own boundary in its header.
   `cargo test --workspace --all-features`,
   and for kernel changes the bare-metal gate:
   `cargo build -p kittens-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release`.
+- **Deployment targets** live under `deployment/targets/`; each target
+  directory documents its toolchain, build gate, and flash/deploy process
+  with evidence labels. Xtensa/ESP32-S3 (the kittens-render anchor board):
+  `deployment/targets/xtensa/README.md` — espup toolchain, the
+  standalone-workspace firmware-crate pattern, the linked-ELF build gate,
+  and the espflash bring-up procedure. Firmware crates never join the root
+  workspace.
 - Trybuild snapshots: regenerate with `TRYBUILD=overwrite`, and **read every
   regenerated `.stderr` diff** — a silently rewritten snapshot can mask an
   oracle (this happened; it's recorded in `K0-REPORT.md`).

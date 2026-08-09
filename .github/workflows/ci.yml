@@ -21,9 +21,11 @@ jobs:
       - run: cargo test --workspace --all-targets --all-features
       - run: cargo run -p kittens-render --example host_sweep
       - run: cargo test -p kittens --doc --all-features
-      - run: RUSTDOCFLAGS='-D warnings' cargo doc -p kittens --all-features --no-deps
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
       - run: cargo build -p kittens-no-std-fixture -p kittens-feature-unifier --target thumbv7em-none-eabi --release --bins
-      - run: cargo build -p kittens-render --target thumbv7em-none-eabi --release
+      - run: test "$(cargo tree -p kittens-render --no-default-features -e normal --prefix none | wc -l)" -eq 1
+      - run: cargo build -p kittens-render --no-default-features --target thumbv7em-none-eabi --release
+      - run: cargo build -p kittens-render --no-default-features --features embedded-graphics --target thumbv7em-none-eabi --release
       - run: cargo build -p kittens-render-no-std-fixture --target thumbv7em-none-eabi --release
 
   rust-1-85:
@@ -33,4 +35,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.85.0
       - run: cargo +1.85.0 check -p kittens --no-default-features --features macros
       - run: cargo +1.85.0 check -p kittens --all-features
+      - run: cargo +1.85.0 check -p kittens-render --no-default-features
+      - run: cargo +1.85.0 check -p kittens-render --no-default-features --features embedded-graphics
       - run: cargo +1.85.0 check -p kittens-renamed-dependency-fixture

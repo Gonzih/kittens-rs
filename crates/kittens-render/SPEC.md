@@ -1,6 +1,6 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 6, 2026-08-08 (batch 8 incorporates the accepted exit-review round-5 repairs: crate-issued `StartPermit` dispatch, completed flight-construction privacy/regression controls, throttle-anchored rejection evidence, and cooperative owning-sweep reconciliation with its published escapes). Revision 5 incorporated the round-4 starter/abort/invalidation repairs; revision 4 incorporated the round-3 target/settlement/sweep repairs; revision 3 made section 6 normative after the K2R-0A outcome and exit-review round 1. Earlier revision history remains in section 12.
+- Status: revision 7, 2026-08-09 (the draw-target integration slice adds the optional global-coordinate RGB565 stripe target and closes the host pixel-equivalence oracle row). Revision 6 incorporated the accepted exit-review round-5 repairs: crate-issued `StartPermit` dispatch, completed flight-construction privacy/regression controls, throttle-anchored rejection evidence, and cooperative owning-sweep reconciliation with its published escapes. Earlier revision history remains in section 12.
 - Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6 became normative in revision 3; the kernel-admitted source carrier remains the one explicitly unspecified shape.
@@ -18,7 +18,7 @@ Unchanged from revision 1 in substance; evidence in RESEARCH sections 2–6. On 
 
 1. **The sibling harness workstream** (`kittens-code`). Its current contract negotiates a protocol-event frontend seam and owns one reactor per session; it does not yet authorize renderer task loops. The merge is therefore a **bilateral gate** (section 10): one seam section, mirrored in both specs, agreed by both workstreams — this spec does not assume loop ownership, and every fact it emits must be an ordinary typed event a foreign reactor arm can consume.
 2. **Application authors** on the anchor board.
-3. **Component/engine libraries** above the (K2R-0A-selected) draw-surface contract; widgets/layout/scenes are never owned here.
+3. **Component/engine libraries** above the optional K2R-0 draw-target contract; widgets/layout/scenes are never owned here.
 
 Emittability rule (root 9.4) stands: explicit constructors, stable spellings, no context-dependent sugar — revision 1 violated this by showing typestates with private fields and no constructors; the K2R-0A amendment MUST specify complete construction/transition/teardown APIs for whatever shapes it selects.
 
@@ -38,13 +38,21 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
 6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
+7. **Optional draw integration.** With the default-off `embedded-graphics`
+   feature, one target borrows one exact RGB565 stripe byte buffer and is
+   admitted only for the owning sweep's outstanding `StripeTarget`. Its
+   drawing bounds remain the full panel in global coordinates while writes
+   are clipped and translated into that stripe. Constructor validation,
+   ordinary borrowing, and deterministic host oracles enforce this boundary;
+   physical panel color/order fidelity remains a board-HIL gate.
 
-## 6. Normative K2R-0 surface (amended through exit-review round 5)
+## 6. Normative K2R-0 surface (amended through the draw-target slice)
 
-Revision 6 retains the mechanism selected by the K2R-0A experiment (C
+Revision 7 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
 restructuring, with round-3 batch-6, round-4 batch-7, and round-5 batch-8
-repairs to the target/start/settlement/sweep lifecycle. This section is **normative** for the K2R-0 host slice,
+repairs to the target/start/settlement/sweep lifecycle, and adds the optional
+draw-target integration. This section is **normative** for the K2R-0 host slice,
 superseding revision 2's provisional candidates. The one still-open shape is
 the kernel-admitted source carrier (K2R-0A open item 3): how these values
 appear as `reactor!` arms awaits the kernel admission slice and is explicitly
@@ -240,6 +248,41 @@ budget exhaustion, and counter wrap; per-activation budget is
 untorn snapshots, with edges reconstructed between surfaced reports and
 **no edge for an unchanged contact**.
 
+### 6.6 Optional embedded-graphics stripe target
+
+The crate's default feature set remains empty. Enabling the
+`embedded-graphics` feature adds `Rgb565StripeDrawTarget<'a>` and the
+`embedded-graphics` dependency; disabling it leaves the core dependency-free,
+`no_std`, and no-alloc.
+
+`Rgb565StripeDrawTarget::new(&Sweep<S>, &StripeTarget, &'a mut [u8])` is the
+single construction path. It accepts only the supplied sweep's currently
+outstanding target, deriving both the stripe region and the full panel from
+private sweep state; a foreign, stale, or non-outstanding target is rejected.
+The byte slice length MUST equal `stripe.width * stripe.height * 2`, checked
+without overflow. The target writes row-major RGB565 using the anchor driver's
+host format (raw RGB565 high byte, then low byte), translates global panel
+coordinates into stripe-local byte offsets, and clips every pixel outside the
+one stripe. Drawing is infallible after construction and allocates nothing.
+The target retains no spatial history and does not clear or reconstruct stale
+scratch storage automatically: for every stripe, callers MUST paint the
+background and complete ordered scene from that sweep's snapshot.
+
+Its `Dimensions::bounding_box` MUST be the owning sweep's complete panel region
+in global coordinates, including a nonzero custom-panel origin. It MUST NOT
+report stripe-local bounds: scene code that centers or lays out from target
+dimensions must produce the same geometry on every stripe as it does against a
+full-frame target.
+
+Enforcement layers: private sweep/target provenance plus constructor admission
+for pairing and exact length; ordinary Rust borrowing for exclusive buffer
+access; deterministic draw-target tests for packing, translation, clipping,
+and global bounds; and the section-8 real-witness-chain pixel oracles for epoch
+reconstruction. This host integration does **not** prove the future physical
+transport adapter's byte ordering, panel `MADCTL` color order, physical color
+fidelity, TE behavior, or scene-replay cost. Those remain exact-adapter,
+board-HIL, and measurement gates.
+
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
 A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists. A host-model selection may authorize the K2R-0 host slice and its section 6 amendment, but K2R-0A itself does not pass until the exact target criteria and open items are discharged.
@@ -267,6 +310,11 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
 - both selection-loss positions for completion; completion before first poll; completion during waker registration;
 - cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
+- full-frame versus stripe-swept RGB565 pixel equivalence through the real
+  target/start/transfer/recover/settle witness chain: ordinary reconstruction,
+  a live scene-state change during a sweep that is deferred to the next
+  `FrameEpoch` snapshot, and a failed/partially written sweep followed by a
+  forced full-repaint sweep;
 - demand-policy state table: request-during-sweep, stale/duplicate `finish`, slow-sweep throttling under paused time;
 - touch generation machine: IRQ before registration/during read/after flag sample; INT still asserted; I²C failure restoring pending state; bounded services per activation; startup with INT asserted; generation wrap;
 - Outcome-B-specific (if selected): receiver closure, task shutdown, resource-return backpressure;
@@ -277,7 +325,7 @@ Negative controls published beside them, as always.
 
 ## 9. Board anchor obligations
 
-As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-backend peak memory/bandwidth budgets with zero-allocation-after-init), with finding 7's sharpening: the `write_region` decision is a **K2R-0A-adjacent gate** — the blocking capability freezes only with a compiled no-alloc adapter against an exact SHA.
+As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-backend peak memory/bandwidth budgets with zero-allocation-after-init), with finding 7's sharpening: the `write_region` decision is a **K2R-0A-adjacent gate** — the blocking capability freezes only with a compiled no-alloc adapter against an exact SHA. Host byte-equivalence oracles do not discharge physical panel RGB channel/byte interpretation or color fidelity; those remain board-HIL evidence.
 
 ## 10. The bilateral seam (merge with the harness workstream) — gates full K2R-0 acceptance, not this host slice
 
@@ -327,3 +375,13 @@ narrow-and-publish resolution states that owning-sweep settlement delivery is
 cooperative. Lost or misapplied settlements and abandonment are explicit
 escapes recovered by dropping old values, `abandon_active` full repaint, and
 idle `invalidate` when stale physical work or invalidation may overlap.
+
+Revision 7, 2026-08-09: the draw-target integration contract was written
+before its implementation. The default-off `embedded-graphics` feature adds a
+no-alloc, global-coordinate RGB565 stripe target whose only constructor binds
+the owning `Sweep`, its outstanding `StripeTarget`, and an exact caller byte
+buffer. The target reports full-panel bounds, clips into the stripe, and packs
+the pinned anchor driver's host RGB565 byte order. Section 8 now names the
+three real-witness-chain pixel-equivalence cases required to close the
+manifest row. Physical color/format fidelity remains explicitly behind board
+HIL.

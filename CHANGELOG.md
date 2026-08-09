@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add the default-off `kittens-render/embedded-graphics` integration: a
+  no-alloc, global-coordinate RGB565 target over an exact caller-owned stripe
+  byte buffer, with full-panel layout bounds, clipping/translation, and the
+  anchor driver's high-byte-first host encoding. Three independent full-frame
+  versus real-witness-chain host oracles cover ordinary reconstruction,
+  mid-sweep next-epoch scene changes, and post-failure full repaint. The
+  feature-off core keeps an empty normal-dependency graph, feature-on remains
+  `no_std`, and physical display color/format fidelity remains board-HIL.
 - Add `kittens-render` (unpublished K2R-0 host slice): the embedded
   rendering/interaction profile anchored on the Waveshare ESP32-S3 1.8"
   AMOLED V1 — spec-first with five external exit-review rounds adopted in

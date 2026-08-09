@@ -11,7 +11,12 @@ categories = ["embedded", "no-std", "rendering"]
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+embedded-graphics = ["dep:embedded-graphics"]
+
 [dependencies]
+embedded-graphics = { workspace = true, optional = true }
 
 [dev-dependencies]
 trybuild.workspace = true
