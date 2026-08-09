@@ -166,6 +166,9 @@ impl FrameDemand {
     /// [`ForeignSweep`] — witness from another demand instance or a
     /// non-active epoch; **nothing is mutated** (finding 6, checked in
     /// release builds, not `debug_assert`ed).
+    // Consuming the witness by value is the contract: a settled witness is
+    // spent and cannot be replayed against another demand instance.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn finish_written(
         &mut self,
         written: SweepWritten,
@@ -196,6 +199,7 @@ impl FrameDemand {
     ///
     /// [`ForeignSweep`] — witness from another demand instance or a
     /// non-active epoch; nothing is mutated.
+    #[allow(clippy::needless_pass_by_value)] // witness consumption is the contract
     pub fn finish_failed(&mut self, aborted: AbortedSweep, _now: Tick) -> Result<(), ForeignSweep> {
         if aborted.demand_id != self.id || Some(aborted.epoch) != self.sweeping {
             return Err(ForeignSweep);

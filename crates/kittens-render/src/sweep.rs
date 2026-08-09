@@ -209,6 +209,7 @@ impl<S> Sweep<S> {
     ///
     /// [`WrongStripe`] for an out-of-order region, a foreign epoch, or a
     /// fully covered sweep; progress is unchanged.
+    #[allow(clippy::needless_pass_by_value)] // witness consumption is the contract
     pub fn mark_written(&mut self, witness: StripeWritten) -> Result<(), WrongStripe> {
         match self.next_region() {
             Some(expected) if witness.epoch == self.epoch && witness.region == expected => {

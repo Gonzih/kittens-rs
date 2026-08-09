@@ -70,6 +70,7 @@ struct SharedSlot {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // test model mirrors the ISR slot flags
 struct SlotState {
     active: bool,
     done: bool,
@@ -417,11 +418,15 @@ fn late_completion_after_recovery_is_inert_via_disarm() {
     assert!(flight.poll_complete(&mut cx).is_pending());
     slot.complete();
     assert!(flight.poll_complete(&mut cx).is_ready());
-    let wakes = counter.wakes.load(Ordering::SeqCst);
+    let wakes_at_recovery = counter.wakes.load(Ordering::SeqCst);
     assert!(slot.is_disarmed());
 
     slot.complete(); // late spurious interrupt on the same shared slot
-    assert_eq!(counter.wakes.load(Ordering::SeqCst), wakes, "wakes nobody");
+    assert_eq!(
+        counter.wakes.load(Ordering::SeqCst),
+        wakes_at_recovery,
+        "wakes nobody"
+    );
 }
 
 /// Finding 1's drop trace: dropping a pending in-flight transfer disarms

@@ -11,7 +11,7 @@
 #![allow(missing_docs)]
 
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 
 use kittens_render::demand::{ForeignSweep, FrameDemand, Tick, WrittenDisposition};
 use kittens_render::geometry::Region;
@@ -82,11 +82,6 @@ impl OwnedTransfer for ModelTransfer {
     }
 }
 
-struct NoopWaker;
-impl Wake for NoopWaker {
-    fn wake(self: Arc<Self>) {}
-}
-
 /// Transfers one stripe of `sweep` through a model transfer with the given
 /// outcome, returning whether a witness could be minted and marked.
 fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> bool {
@@ -109,7 +104,7 @@ fn transfer_next_stripe<S>(sweep: &mut Sweep<S>, outcome: TransferOutcome) -> bo
         }
         TransferOutcome::Cancelled => flight.begin_drain(),
     }
-    let waker = Waker::from(Arc::new(NoopWaker));
+    let waker = Waker::noop().clone();
     let mut cx = Context::from_waker(&waker);
     let settled = match flight.poll_complete(&mut cx) {
         Poll::Ready(settled) => settled,
@@ -180,9 +175,8 @@ fn cancelled_and_failed_transfers_cannot_mark_coverage() {
     );
     assert!(!sweep.is_complete());
     // No caller assertion can complete an uncovered sweep.
-    let sweep = match sweep.finish() {
-        Err(uncovered) => uncovered,
-        Ok(_) => panic!("uncovered sweep must not finish"),
+    let Err(sweep) = sweep.finish() else {
+        panic!("uncovered sweep must not finish")
     };
     // The only paths out are more Completed transfers or abort.
     let (aborted, ()) = sweep.abort();
@@ -390,7 +384,7 @@ fn out_of_order_witnesses_are_rejected() {
         sweep.epoch(),
         stripe0,
     );
-    let waker = Waker::from(Arc::new(NoopWaker));
+    let waker = Waker::noop().clone();
     let mut cx = Context::from_waker(&waker);
     let settled = match replay.poll_complete(&mut cx) {
         Poll::Ready(settled) => settled,
