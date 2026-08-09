@@ -1147,3 +1147,7 @@ impl SerializeStructVariant for CanonicalCompound<'_> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "record_tests.rs"]
+mod tests;
