@@ -11,6 +11,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
 
 use kittens_code_protocol::config::SessionConfig;
 use kittens_code_protocol::error::{ErrorCode, ErrorEvent};
@@ -176,6 +177,107 @@ enum Phase {
     Failed,
 }
 
+/// Why a persisted transcript could not seed a resumed engine.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResumeError {
+    /// The replay slice was empty or its first record was not a valid header.
+    MissingHeader,
+    /// The log already used the largest sequence number.
+    SequenceExhausted,
+    /// The log already used the largest effect id.
+    EffectIdExhausted,
+    /// The log already used the largest request/submission id.
+    SubmissionIdExhausted,
+    /// The log already used the largest turn epoch.
+    TurnEpochExhausted,
+}
+
+impl fmt::Display for ResumeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::MissingHeader => "replay must start with a valid header record",
+            Self::SequenceExhausted => "record sequence namespace is exhausted",
+            Self::EffectIdExhausted => "effect id namespace is exhausted",
+            Self::SubmissionIdExhausted => "request/submission id namespace is exhausted",
+            Self::TurnEpochExhausted => "turn epoch namespace is exhausted",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl core::error::Error for ResumeError {}
+
+#[derive(Default)]
+struct ReplayMaxima {
+    seq: u64,
+    effect: u64,
+    submission: u64,
+    epoch: u64,
+}
+
+impl ReplayMaxima {
+    fn observe_record(&mut self, record: &Record) {
+        self.seq = self.seq.max(record.seq);
+        self.epoch = self.epoch.max(record.epoch.0);
+        if let Some(id) = record.txn {
+            self.observe_effect(id);
+        }
+        match &record.payload {
+            RecordPayload::AcceptedOp(submission) => self.observe_submission(submission),
+            RecordPayload::EmittedEvent(event) => self.observe_event(event),
+            _ => {}
+        }
+    }
+
+    fn observe_submission(&mut self, submission: &Submission) {
+        self.observe_request(submission.id);
+        if let Op::Approve { request, .. } = &submission.op {
+            self.observe_request(*request);
+        }
+    }
+
+    fn observe_event(&mut self, event: &Event) {
+        match event {
+            Event::TurnStarted { epoch, correlates } => {
+                self.epoch = self.epoch.max(epoch.0);
+                if let Some(id) = correlates {
+                    self.observe_request(*id);
+                }
+            }
+            Event::TurnEnded { epoch, .. }
+            | Event::ModelDelta { epoch, .. }
+            | Event::CompactionStarted { epoch }
+            | Event::CompactionApplied { epoch }
+            | Event::CompactionSuppressed { epoch } => {
+                self.epoch = self.epoch.max(epoch.0);
+            }
+            Event::ToolProposed { call, .. }
+            | Event::ToolStarted { call }
+            | Event::ToolOutputDelta { call, .. }
+            | Event::ToolTerminal { call, .. } => self.observe_effect(*call),
+            Event::ApprovalRequested { request, call, .. } => {
+                self.observe_request(*request);
+                self.observe_effect(*call);
+            }
+            Event::QueryTrace { query, .. } => self.observe_effect(*query),
+            Event::Error(error) => {
+                if let Some(id) = error.correlates {
+                    self.observe_request(id);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn observe_effect(&mut self, id: EffectId) {
+        self.effect = self.effect.max(id.0);
+    }
+
+    fn observe_request(&mut self, id: SubmissionId) {
+        self.submission = self.submission.max(id.0);
+    }
+}
+
 /// One in-flight tool call slot (rejoin by proposal order, L-T4).
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CallSlot {
@@ -233,6 +335,68 @@ impl Engine {
         }
     }
 
+    /// Reconstructs an idle engine from a validated, durably persisted log.
+    ///
+    /// Configuration patches are applied in record order, while sequence,
+    /// effect, request/submission, and turn-epoch namespaces are seeded above
+    /// every observable persisted value. Opaque effect-outcome payloads expose
+    /// identity only through their record's `txn` field.
+    ///
+    /// KC0 deliberately resumes between turns: replay does not reconstruct a
+    /// half-finished turn, publish replayed events, or commit replayed records.
+    /// The startup scanner remains responsible for schema, checksum, stream-
+    /// lifecycle, and crash-repair validation before calling this constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResumeError::MissingHeader`] when the first record is absent
+    /// or its kind/payload is not a header. Returns another [`ResumeError`]
+    /// when a persisted maximum cannot be incremented without reusing or
+    /// wrapping an identifier.
+    pub fn resume(mut base_config: SessionConfig, records: &[Record]) -> Result<Self, ResumeError> {
+        if !matches!(
+            records.first(),
+            Some(Record {
+                kind: RecordKind::Header,
+                payload: RecordPayload::Header(_),
+                ..
+            })
+        ) {
+            return Err(ResumeError::MissingHeader);
+        }
+
+        let mut maxima = ReplayMaxima::default();
+        for record in records {
+            maxima.observe_record(record);
+            if let RecordPayload::ConfigPatch(patch) = &record.payload {
+                base_config.apply(patch.clone());
+            }
+        }
+
+        let next_seq = maxima
+            .seq
+            .checked_add(1)
+            .ok_or(ResumeError::SequenceExhausted)?;
+        let next_effect = maxima
+            .effect
+            .checked_add(1)
+            .ok_or(ResumeError::EffectIdExhausted)?;
+        let next_request = maxima
+            .submission
+            .checked_add(1)
+            .ok_or(ResumeError::SubmissionIdExhausted)?;
+        if maxima.epoch == u64::MAX {
+            return Err(ResumeError::TurnEpochExhausted);
+        }
+
+        let mut engine = Self::new(base_config, next_seq);
+        engine.epoch = TurnEpoch(maxima.epoch);
+        engine.next_effect = next_effect;
+        engine.next_request = next_request;
+        engine.persisted = maxima.seq;
+        Ok(engine)
+    }
+
     /// Handles one input, returning the bounded action batch.
     pub fn handle(&mut self, input: CoreInput) -> Transition {
         let mut t = Transition::default();
@@ -272,6 +436,12 @@ impl Engine {
     #[must_use]
     pub fn epoch(&self) -> TurnEpoch {
         self.epoch
+    }
+
+    /// The effective replayable session configuration.
+    #[must_use]
+    pub fn config(&self) -> &SessionConfig {
+        &self.config
     }
 
     fn on_op(&mut self, submission: Submission, t: &mut Transition) {

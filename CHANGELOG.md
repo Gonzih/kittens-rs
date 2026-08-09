@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `Engine::resume` replay construction for kittens-code KC0, restoring
+  logged configuration and seeding turn, record, effect, and request counters
+  above every persisted value without re-emitting replayed work.
+
 ## 0.1.1 (kittens-tui) — 2026-08-08
 
 - Add `kittens-tui`: the terminal-orchestration profile (K1-TUI slice) —
