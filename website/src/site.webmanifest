@@ -1,0 +1,22 @@
+{
+  "name": "Kittens — compiler-checked async orchestration",
+  "short_name": "Kittens",
+  "description": "Experimental no_std Rust SDK for explicit, compile-checked async orchestration.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "browser",
+  "background_color": "#fffaf0",
+  "theme_color": "#fff8ea",
+  "icons": [
+    {
+      "src": "assets/kittens-logo.webp",
+      "sizes": "640x640",
+      "type": "image/webp"
+    },
+    {
+      "src": "assets/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}
