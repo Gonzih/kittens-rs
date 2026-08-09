@@ -1,6 +1,9 @@
 [package]
 name = "kittens-code-protocol"
 description = "Wire contract for the kittens-code harness family: ops, events, errors, policies, session configuration, and budget data"
+readme = "README.md"
+keywords = ["agent", "llm", "no-std", "protocol", "serde"]
+categories = ["no-std", "encoding"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

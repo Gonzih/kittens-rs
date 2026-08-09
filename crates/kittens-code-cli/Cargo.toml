@@ -1,6 +1,9 @@
 [package]
 name = "kittens-code-cli"
 description = "Headless composition-root binary for kittens-code KC0"
+readme = "README.md"
+keywords = ["agent", "llm", "harness", "coding-agent", "cli"]
+categories = ["development-tools", "command-line-utilities"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -1,6 +1,9 @@
 [package]
 name = "kittens-code-driver-tokio"
 description = "Tokio driver for the kittens-code core: reactor loop, log appender, model clients (live + deterministic jail), and tool discharge"
+readme = "README.md"
+keywords = ["agent", "llm", "harness", "tokio", "coding-agent"]
+categories = ["development-tools", "asynchronous"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -1,6 +1,9 @@
 [package]
 name = "kittens-code-core"
 description = "Sans-io coding-agent engine for the kittens-code family: turn state machine, context engine, RLM query engine, and budget law — no_std + alloc, no runtime, no IO"
+readme = "README.md"
+keywords = ["agent", "llm", "no-std", "sans-io", "harness"]
+categories = ["no-std", "development-tools"]
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
