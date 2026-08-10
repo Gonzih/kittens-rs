@@ -15,7 +15,9 @@ esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "d48f747ba28accdc51
     "rt",
     "unstable",
 ] }
-kittens-render = { path = "../../crates/kittens-render", default-features = false }
+kittens-render = { path = "../../crates/kittens-render", default-features = false, features = [
+    "esp32s3-sh8601-blocking",
+] }
 
 [[bin]]
 name = "kittens-render-xtensa-probe"

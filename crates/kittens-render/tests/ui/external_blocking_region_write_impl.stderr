@@ -1,0 +1,40 @@
+error[E0277]: the trait bound `ExternalWriter: blocking::private::Sealed` is not satisfied
+  --> tests/ui/external_blocking_region_write_impl.rs:9:5
+   |
+ 9 | /     fn write_region_admitted(
+10 | |         self,
+11 | |         _region: Region,
+12 | |         _pixels: &[u8],
+13 | |         _permit: BlockingWritePermit<'_>,
+14 | |     ) -> (Self, Result<(), Self::Error>) {
+   | |________________________________________^ unsatisfied trait bound
+   |
+help: the trait `blocking::private::Sealed` is not implemented for `ExternalWriter`
+  --> tests/ui/external_blocking_region_write_impl.rs:4:1
+   |
+ 4 | struct ExternalWriter;
+   | ^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `BlockingRegionWrite`
+  --> src/blocking.rs
+   |
+   | pub trait BlockingRegionWrite: private::Sealed + Sized {
+   |                                ^^^^^^^^^^^^^^^ required by this bound in `BlockingRegionWrite`
+   = note: `BlockingRegionWrite` is a "sealed trait", because to implement it you also need to implement `kittens_render::blocking::private::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+
+error[E0277]: the trait bound `ExternalWriter: blocking::private::Sealed` is not satisfied
+ --> tests/ui/external_blocking_region_write_impl.rs:6:30
+  |
+6 | impl BlockingRegionWrite for ExternalWriter {
+  |                              ^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `blocking::private::Sealed` is not implemented for `ExternalWriter`
+ --> tests/ui/external_blocking_region_write_impl.rs:4:1
+  |
+4 | struct ExternalWriter;
+  | ^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `BlockingRegionWrite`
+ --> src/blocking.rs
+  |
+  | pub trait BlockingRegionWrite: private::Sealed + Sized {
+  |                                ^^^^^^^^^^^^^^^ required by this bound in `BlockingRegionWrite`
+  = note: `BlockingRegionWrite` is a "sealed trait", because to implement it you also need to implement `kittens_render::blocking::private::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it

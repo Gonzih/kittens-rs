@@ -56,7 +56,13 @@ Build command, from inside the firmware crate directory:
 
 ```sh
 . "$HOME/export-esp.sh"
-cargo +esp build --release --target xtensa-esp32s3-none-elf
+cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf -- -D warnings
+cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
+file target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
+xtensa-esp32s3-elf-readelf -h \
+  target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
+xtensa-esp32s3-elf-nm -a -C \
+  target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
 ```
 
 Recorded first-run result for `fixtures/render-xtensa-probe` (2026-08-09):
@@ -68,12 +74,44 @@ linked, not stripped`. A successful build **must** produce this linked ELF —
 `cargo check` is not the gate (linking is where missing vectors, linker
 scripts, and start files fail).
 
+A later post-revision-8 freshness rebuild after source changes produced the
+204,292-byte, SHA-256
+`4fff6dcd8284fd35891731caa6fea574f0a70a6601e348048d1db54b8bca4f49`
+revision-9 artifact recorded in `crates/kittens-render/K2R0A-LOG.md`. That is a
+separate chronology point from the 204,700-byte first run above.
+
+Recorded revision-10 blocking-region result (2026-08-09): a fresh locked
+optimized link produced a 208,496-byte artifact with SHA-256
+`648e43a0c03d89d71737d7dd20ff0390d6275b08b4f1f297d15d443af6c68513`.
+`file` identified the statically linked Xtensa executable, `readelf -h`
+reported `EXEC` with entry point `0x403785e8`, and
+`xtensa-esp32s3-elf-size -A` reported 116,988 bytes of `.bss`. `nm -u -C` was
+empty. The complete demangled symbol table retained the concrete
+`Esp32s3Sh8601BlockingTransport` wire implementation and contained none of the
+allocator symbols listed below. The linked entry path deliberately shortens the
+TX descriptor-chain length to 1 before constructor admission restores it to
+16,380.
+
+For every no-allocator gate, inspect the complete demangled `nm` output and
+require no allocator entry points or Rust allocation-module symbols. The
+revision-10 blocking-region evidence checks at least `__rust_alloc`,
+`__rust_dealloc`, `__rust_realloc`, `__rust_alloc_zeroed`, `malloc`, `calloc`,
+`realloc`, `free`, `__rdl_*`, `__rg_*`, top-level `alloc`/`esp_alloc` code, and
+`GlobalAlloc` entry points; a successful link alone is not allocation
+evidence.
+
 Dependency pinning: the probe pins the audited HAL revision
 `esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "d48f747ba28accdc51779ba193eba923138e0382", default-features = false, features = ["esp32s3", "rt", "unstable"] }`
 (that rev is the v1.1.0 release audited in
 `crates/kittens-render/probes/esp32s3-spi2/VERDICT.md`). esp-hal's async/DMA
 API surface is behind its `unstable` cargo feature — that is HAL API
 stability, not Rust nightly.
+
+**Observation:** host package verification of `kittens-render` succeeds and
+Cargo's generated registry manifest retains `esp-hal =1.1.0` while dropping
+the repository-only git location. A future published consumer must instead
+resolve that registry source identity; its Xtensa compile/link remains
+unverified and publication-gated.
 
 Firmware shape: `#![no_std]`, `#![no_main]`, `#[esp_hal::main]`, an
 explicit `#[panic_handler]`, no allocator, `panic = "abort"`, fat LTO.
@@ -110,10 +148,13 @@ not yet arrived).** Record first-flash evidence here when it happens.
 
 ## 4. What a green Xtensa build does and does not prove
 
-Compilation + linking closes the HAL/language feasibility question only:
-the API shape exists, ownership works, no allocation, no self-reference,
-vectors bind. It **cannot** prove silicon interrupt delivery, wake counts,
-TE timing, or visual output — those are board-HIL gates listed in
+For the blocking region row, the host matrix plus exact-HAL link and clean
+symbol inspection close only the declared host + exact-Xtensa-link scope: the
+API shape exists, ownership works, the complete call path is retained, no
+allocator is linked, and vectors bind. Compilation and linking **cannot** prove
+silicon interrupt delivery, wake counts, panel command acceptance, physical
+placement/color, RAMWRC behavior, TE timing, or visual output — those are
+board-HIL gates listed in
 `crates/kittens-render/TRACE-MANIFEST.md` and the K2R-1 checklist in
 `crates/kittens-render/SPEC.md`. Do not claim them from a build log.
 
@@ -124,7 +165,10 @@ The `xtensa-link` GitHub Actions job runs the section-2 release build for
 layer is the CI workflow plus explicit artifact inspection: the job runs
 `cargo +esp build --release --locked --target xtensa-esp32s3-none-elf`, then
 requires `file` and the Xtensa `readelf` to identify the result as a linked
-Tensilica Xtensa executable. `cargo check` is not a substitute.
+Tensilica Xtensa executable. Revision 10 additionally requires `nm -u` to be
+empty, the concrete blocking wire symbol to remain present, and the section-2
+allocator-symbol scan to have zero matches; `cargo check` is not a substitute
+for this link and symbol evidence.
 
 The job pins `esp-rs/xtensa-toolchain` v1.7.0 by commit SHA, selects Xtensa Rust
 1.95.0.0, limits the installed GCC targets to ESP32-S3, and asserts the full

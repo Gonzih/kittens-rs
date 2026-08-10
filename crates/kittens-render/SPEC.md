@@ -1,8 +1,14 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 9, 2026-08-09 (kernel-carrier contract: the one
-  no-allocation source shape is specified and its real-reactor gate is closed
-  with host + portable-link scope; target execution and silicon remain open).
+- Status: revision 10, 2026-08-09 (blocking-region contract: one sealed,
+  profile-owned ESP32-S3/SH8601 adapter and its exact command/failure matrix
+  were specified before implementation; the gate is now **CLOSED WITH HOST +
+  EXACT-XTENSA-LINK SCOPE** after the protocol suite, exact-HAL link, and
+  symbol inspections passed). Published-registry Xtensa consumption and every
+  physical-panel claim remain open. Revision 9's kernel-carrier
+  contract specifies the one no-allocation source shape and closes its
+  real-reactor gate with host + portable-link scope; target execution and
+  silicon remain open.
   Revision 8's publication-readiness correction recorded that the linked
   Xtensa compile/link feasibility probe is closed with scope; task
   wakers are cloned, dropped, and woken outside the adapter's global critical
@@ -10,19 +16,21 @@
   not a protocol freeze. Revision 7 added the optional global-coordinate
   RGB565 stripe target and closed the host pixel-equivalence oracle row.
   Earlier revision history remains in section 12.
-- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 2; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
+- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 3; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6
-  became normative in revision 3; revision 9 specifies the previously open
-  kernel-admitted source-carrier shape.
+  became normative in revision 3; revision 9 specifies the kernel-admitted
+  source-carrier shape and revision 10 specifies the blocking-region shape.
 - Slice boundary: **K2R-0 host slice** means the host-model protocol surface
   and oracles may land against amended section 6. It does not mean K2R-0A or
   full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
   **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
   The kernel-carrier gate is separately closed with host + portable-link scope.
-  Bilateral seam co-sign, `write_region`, board HIL and silicon interrupt
-  delivery, and capability sealing remain separately named gates below.
+  The revision-10 blocking `write_region` row is separately closed with host +
+  exact-Xtensa-link scope. Bilateral seam co-sign, published-registry Xtensa
+  consumption, board HIL and silicon interrupt delivery, target-side reactor
+  execution, and async capability sealing remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -42,7 +50,10 @@ Emittability rule (root 9.4) stands: explicit constructors, stable spellings, no
 
 ## 4. Non-goals
 
-As revision 1 (no widgets; no driver internals; not the generic-gate resolution; no power/AOD — board-coordinator slice; no DMA overlap — K2R-2 gate; no TE synchronization claim), plus review-sharpened exclusions:
+As revision 1 (no widgets; no general display-driver framework beyond section
+6.7's minimal reviewed SH8601 region transaction; not the generic-gate
+resolution; no power/AOD — board-coordinator slice; no DMA overlap — K2R-2
+gate; no TE synchronization claim), plus review-sharpened exclusions:
 
 - **no `BusIdle` or `FramePresented` facts in these slices** — both transports expose exactly one observable completion boundary; physical presentation and bus-idle milestones wait for hardware evidence (finding 17). The facts are the private, provenance-carrying `StripeWritten` and `SweepWritten` witnesses only;
 - **no lossless touch-transition promise** — this slice's touch semantics are *latest-state-with-coalescing, complete untorn reports*; a bounded transition queue with explicit overflow policy is a separately gated follow-on (finding 11);
@@ -50,8 +61,24 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
 
 ## 5. What is stable in this revision (normative)
 
-1. **Resource-carrying results.** Every driven success or failure settles through `Recovered`/`Settled` and returns the transport, sent buffer, and spare. Ordinary `drop` of an in-flight completion is a **documented non-returning boundary** — the HAL cancels and drops; nothing comes back through `Future::Output`. Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain transition that is driven to settlement (finding 3).
-2. **Sealed capabilities — a pre-freeze obligation.** `OwnedTransfer` and `FlightStarter` will be sealed to reviewed backend adapters before any freeze, because ownership alone cannot distinguish an honest region start, acceptance-atomic rejection, or drop cancellation from a dishonest implementation (finding 8; exit-review round-4 finding 1). During the experiment they are deliberately open so probes and models can implement them (section 6.2); the open state is itself a recorded gate, not a contradiction. Raw backend access remains the documented compiling escape surface.
+1. **Resource-carrying results.** Every driven asynchronous success or failure
+   settles through `Recovered`/`Settled` and returns the transport, sent
+   buffer, and spare. The separate synchronous path settles through
+   `BlockingSettled` and returns its writer and exact pixel slice. Ordinary
+   `drop` of an in-flight completion is a **documented non-returning boundary**
+   — the HAL cancels and drops; nothing comes back through `Future::Output`.
+   Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain
+   transition that is driven to settlement (finding 3).
+2. **Capability admission.** `OwnedTransfer` and `FlightStarter` will be
+   sealed to reviewed backend adapters before any freeze, because ownership
+   alone cannot distinguish an honest region start, acceptance-atomic
+   rejection, or drop cancellation from a dishonest implementation (finding
+   8; exit-review round-4 finding 1). During the experiment they are
+   deliberately open so probes and models can implement them (section 6.2);
+   the open state is itself a recorded gate, not a contradiction. The new
+   blocking capability has one selected production implementation and no
+   experiment-phase downstream implementors, so it is sealed from day one.
+   Raw backend access remains the documented compiling escape surface.
 3. **Epoch discipline.** One sweep-owned snapshot per sweep, exposed only through `&S`; every transmitted stripe is fully reconstructed from that logically immutable state. Ordinary ownership enforces the owned/shared-reference boundary, but unconstrained `S` can contain interior mutability or handles to shared external state: keeping those stable for the epoch is a documented caller obligation and compiling escape surface. On the cooperative driven path, callers deliver every recovered `StripeSettlement` to its owning `Sweep::settle`; a matching failed or cancelled settlement poisons that sweep, so it can mint no further target or finish and only abort remains. Rust ownership makes settlements unforgeable, move-only, and non-relabelable, but cannot force delivery: dropping a settlement or misapplying it to another sweep consumes the witness and leaves its owner outstanding. Recovery from either escape is to drop the old sweep and any remaining target/flight, call `abandon_active` (which retains demand and forces a full repaint), and call idle `invalidate` before replacement when stale physical work or external invalidation may overlap; its sticky latch makes the next epoch non-clearing so another full repaint remains due. Ordinary flight drop is the related non-returning escape: the reviewed adapter MUST synchronously cancel/disarm on `Drop`; no settlement witness or resources return. Sweep completion itself is still decided **only** by consuming matching, in-order written settlements over a fixed, validated full-panel plan — never by caller assertion — but settlement delivery is a cooperative contract, not a linear-type guarantee (finding 9; exit-review round-3 findings 2–3; exit-review rounds 4–5 finding 3).
 4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
@@ -63,8 +90,17 @@ As revision 1 (no widgets; no driver internals; not the generic-gate resolution;
    are clipped and translated into that stripe. Constructor validation,
    ordinary borrowing, and deterministic host oracles enforce this boundary;
    physical panel color/order fidelity remains a board-HIL gate.
+8. **One admitted blocking-region path.** The blocking operation is
+   `StripeTarget::write_region`; it consumes the outstanding target, a mutable
+   pixel slice, and a sealed, profile-owned writer. Every ordinary return
+   carries the writer and exact slice back with one written or unwritten
+   settlement for the owning sweep. The reviewed private SH8601 engine and
+   target-only concrete adapter are the admission layer; no public raw-wire
+   implementation seam can report a fabricated success. This operation is
+   synchronous and serialized: it has no spare buffer, future, cancellation,
+   reactor source, timeout, or preemption claim.
 
-## 6. Normative K2R-0 surface (amended through the draw-target slice)
+## 6. Normative K2R-0 surface (amended through the blocking-region slice)
 
 Revision 8 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
@@ -347,6 +383,294 @@ transport adapter's byte ordering, panel `MADCTL` color order, physical color
 fidelity, TE behavior, or scene-replay cost. Those remain exact-adapter,
 board-HIL, and measurement gates.
 
+### 6.7 Blocking SH8601 region transport
+
+The sole canonical blocking operation is
+`StripeTarget::write_region(pixels, writer)`. It consumes the one outstanding
+target, one exact `&mut [u8]`, and a `BlockingRegionWrite` implementation. The
+trait is sealed from its first release and its dispatch method requires a
+private-constructor, non-`Clone`, lifetime-bound `BlockingWritePermit`, so safe
+external code can neither implement the capability nor invoke its raw dispatch
+without a target. The wire trait and SH8601 transaction engine are private.
+The only admitted production implementation in this revision is
+`Esp32s3Sh8601BlockingTransport<'d>`, available only under the explicit
+default-off `esp32s3-sh8601-blocking` feature on `target_arch = "xtensa"`.
+This supersedes RESEARCH section 3's provisional open
+`BlockingRegionWrite<B>` spelling. Structural sealing and the dispatch permit
+serve different checks: the seal rejects unreviewed success reporters, while
+the permit prevents even an admitted writer from being dispatched outside the
+consuming target operation. The async traits remain open only because their
+experiment models and downstream probe implementations have not yet migrated
+to profile-owned admitted types.
+
+The complete public shape (under `kittens_render::blocking`, except for the
+target module named below) is:
+
+```rust
+pub struct BlockingWritePermit<'a> {
+    _key: &'a mut (),
+}
+
+pub trait BlockingRegionWrite: private::Sealed + Sized {
+    type Error;
+
+    fn write_region_admitted(
+        self,
+        region: Region,
+        pixels: &[u8],
+        permit: BlockingWritePermit<'_>,
+    ) -> (Self, Result<(), Self::Error>);
+}
+
+#[must_use = "recover the writer, pixels, result, and owning-sweep settlement"]
+pub struct BlockingSettled<T, P, E> {
+    writer: T,
+    pixels: P,
+    result: Result<(), E>,
+    target: StripeTarget,
+}
+
+impl StripeTarget {
+    pub fn write_region<'pixels, W>(
+        self,
+        pixels: &'pixels mut [u8],
+        writer: W,
+    ) -> BlockingSettled<W, &'pixels mut [u8], W::Error>
+    where
+        W: BlockingRegionWrite;
+}
+
+impl<T, P, E> BlockingSettled<T, P, E> {
+    pub fn region(&self) -> Region;
+    pub fn outcome(&self) -> TransferOutcome;
+    pub fn into_parts(self) -> (T, P, Result<(), E>, StripeSettlement);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sh8601Axis {
+    X,
+    Y,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sh8601PixelCommand {
+    RamWriteStart,
+    RamWriteContinue,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sh8601WriteStage {
+    ColumnAddress,
+    PageAddress,
+    Pixel {
+        command: Sh8601PixelCommand,
+        chunk: usize,
+        offset: usize,
+        len: usize,
+    },
+}
+
+#[derive(Debug)]
+pub enum Sh8601RegionWriteError<E> {
+    EmptyWidth,
+    EmptyHeight,
+    CoordinateOverflow { axis: Sh8601Axis },
+    OutOfBounds { region: Region },
+    WrongByteLength { expected: u32, actual: usize },
+    Io { stage: Sh8601WriteStage, source: E },
+}
+```
+
+The constant `SH8601_DMA_CHUNK_BYTES: usize = 16_380` is exported from this
+module for target scratch sizing. Under the target feature,
+`kittens_render::esp32s3_sh8601` exports:
+
+```rust
+pub struct Esp32s3Sh8601BlockingTransport<'d> {
+    bus: SpiDmaBus<'d, Blocking>,
+}
+
+impl<'d> Esp32s3Sh8601BlockingTransport<'d> {
+    pub fn try_new(
+        spi: SpiDma<'d, Blocking>,
+        rx: DmaRxBuf,
+        tx: DmaTxBuf,
+    ) -> Result<Self, (SpiDma<'d, Blocking>, DmaRxBuf, DmaTxBuf)>;
+
+    pub fn into_parts(self) -> (SpiDma<'d, Blocking>, DmaRxBuf, DmaTxBuf);
+}
+
+impl<'d> BlockingRegionWrite for Esp32s3Sh8601BlockingTransport<'d> {
+    type Error = Sh8601RegionWriteError<esp_hal::spi::Error>;
+    // write_region_admitted body implements the private engine; omitted here.
+}
+```
+
+No other root re-export is added: these two module paths are canonical.
+
+`write_region_admitted` is the visibly exceptional implementation hook, not a
+second consumer spelling; the unconstructible permit prevents safe direct
+dispatch. `BlockingSettled` is `must_use`, privately retains the entire
+consumed `StripeTarget` as the sole source of demand/epoch/region provenance,
+and exposes only the target `region` and `TransferOutcome` classification by
+shared reference. The blocking path can produce only `Completed` or `Failed`;
+`Cancelled` is unreachable because this call has no cancellation transition.
+
+The target operation always returns a private-field
+`BlockingSettled<T, P, E>`. Its consuming `into_parts` returns the same writer,
+the exact mutable pixel slice, the operation result (`Ok(())` or the concrete
+error), and exactly one `StripeSettlement`. A complete adapter return yields
+`Written`; every reported error, including preflight rejection, yields
+`Unwritten(Failed)` and never `Cancelled`. The caller delivers that settlement
+to the owning sweep;
+a failure therefore conservatively poisons the sweep and requires abort/full
+repaint rather than introducing a second retry protocol. The result has no
+constructor or conversion into any other coverage witness. Panic, abort, and
+nontermination are non-returning escapes and recover neither resources nor a
+settlement.
+
+Safe code may also drop `BlockingSettled` without extracting its settlement.
+That drops the writer, releases the mutable slice borrow without returning the
+slice value, and leaves the owning sweep outstanding. This is a documented
+compiling escape, not prevented by `must_use`: recover by dropping the old
+target-owning sweep, calling `FrameDemand::abandon_active`, and retaining the
+underlying pixel storage for a full repaint; use idle `invalidate` before the
+replacement when stale physical state may overlap. A compile-pass control that
+accepts and explicitly drops an otherwise opaque `BlockingSettled<T, P, E>`
+pins this boundary without adding a construction loophole.
+
+The concrete transport consumes `SpiDma<Blocking>`, `DmaRxBuf`, and
+`DmaTxBuf` through
+`Esp32s3Sh8601BlockingTransport::try_new(spi, rx, tx)`. Rejection returns the
+exact `(SpiDma, DmaRxBuf, DmaTxBuf)` tuple and occurs unless both DMA scratch
+buffers have at least 16,380 bytes. Requiring the full RX reserve is a profile
+admission/memory-budget policy copied from the audited upstream board adapter,
+not a claim that TX-only HAL calls consume RX payload storage; target evidence
+must pass before a later revision may lower it. After those rejection checks,
+admission resets the TX descriptor length to exactly 16,380 before
+`with_buffers`: the pinned HAL checks the backing capacity but does not relink
+a caller-shortened descriptor chain inside `half_duplex_write`. Rejection
+therefore returns untouched parts, while every accepted capacity-valid TX
+scratch has descriptors for the maximum operation payload. The target fixture
+enters admission with logical TX length one and checks for 16,380 after split.
+`into_parts` waits for the
+blocking bus to become idle through `SpiDmaBus::split` and returns the same
+tuple. The blocking call copies each command or pixel chunk into the HAL-owned
+TX scratch, waits at the HAL boundary, and allocates nothing. It is not a
+zero-copy operation. No caller-defined interface, callback, or generic backend
+can sit beneath the admitted type.
+
+Before the first bus call, the shared private engine validates in this exact
+precedence: `EmptyWidth`; `EmptyHeight`; checked `u16` X-exclusive-end
+overflow; checked `u16` Y-exclusive-end overflow; `OutOfBounds` for any start
+outside the fixed half-open `0..368 × 0..448` anchor panel or any exclusive end
+with `x + width > 368` or `y + height > 448` (equality is the valid right/bottom
+boundary); then `WrongByteLength`. Once bounds pass, the RGB565 byte count is at most
+329,728 and is computed exactly in `u32`; comparison promotes both that value
+and the supplied slice length to `u64`, so no host- or target-width overflow
+variant is needed. `WrongByteLength` reports the exact `u32` expectation and
+`usize` actual length. Every validation error precedes all bus I/O. The engine
+then emits exactly:
+
+1. `CASET` (`0x2A`): opcode `0x02`, 24-bit address `0x002A00`, single-line
+   command/address/data, zero dummy cycles, and inclusive big-endian X
+   endpoints.
+2. `PASET` (`0x2B`): the same envelope at address `0x002B00`, with inclusive
+   big-endian Y endpoints.
+3. The first nonempty pixel chunk: opcode `0x32`, address `0x002C00`
+   (`RAMWR`), single-line command/address, quad data, zero dummy cycles.
+4. Every remaining chunk: the same pixel envelope at address `0x003C00`
+   (`RAMWRC`). Chunks are at most 16,380 bytes; every non-final chunk is
+   exactly that size. This compatibility constant is copied from the audited
+   upstream board adapter and equals four times the hardware's 4,095-byte
+   maximum TX-descriptor payload. The pinned HAL's 4,092-byte default chunking
+   uses five descriptors for this reserve. It remains below that HAL's
+   32,736-byte SPI DMA transfer ceiling, and its even value never splits one
+   RGB565 pixel.
+
+`Sh8601RegionWriteError<E>` distinguishes the exact preflight cases above and
+an I/O error whose `Sh8601WriteStage` identifies `ColumnAddress`,
+`PageAddress`, or, for a pixel stage, the command kind, zero-based chunk index,
+byte offset, and byte length.
+Validation errors perform zero I/O. An I/O error stops before every later
+command but is not acceptance-atomic: earlier commands/chunks may have changed
+the panel, and its GRAM cursor and region contents are conservatively
+undefined until a full repaint. `Ok` means only that every blocking HAL call in
+the reviewed sequence returned success. It does not mean `BusIdle` beyond the
+HAL method's own fence, `FramePresented`, panel command acceptance, correct
+physical placement or color, or TE-safe presentation.
+
+The implementation is derived from and reviewed against `sh8601-rs` 0.1.8
+commit `4bcddfd529017135f19a5a9a6e79dd6b8ef1b460`; the stock driver is not a
+compiled dependency and its allocating `partial_flush` is not used. Repository
+and fixture builds compile the concrete adapter against `esp-hal` git revision
+`d48f747ba28accdc51779ba193eba923138e0382`; the publishable manifest also
+names the matching `=1.1.0` registry version in the same dependency. Cargo's
+[documented multiple-locations rule](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations)
+uses the git source locally, checks its package version against that
+requirement, and retains the registry version as the publication fallback. The
+exact git source and linked ELF, not the fallback declaration, are the
+repository gate. The optional target feature
+requires the Espressif Rust toolchain (the pinned HAL declares Rust 1.88 or
+newer); the feature-off portable crate retains the workspace Rust 1.85 floor
+and empty normal dependency graph.
+
+The manifest spelling is exact:
+
+```toml
+[features]
+esp32s3-sh8601-blocking = ["dep:esp-hal"]
+
+[target.'cfg(target_arch = "xtensa")'.dependencies.esp-hal]
+version = "=1.1.0"
+git = "https://github.com/esp-rs/esp-hal"
+rev = "d48f747ba28accdc51779ba193eba923138e0382"
+optional = true
+default-features = false
+features = ["esp32s3", "unstable"]
+```
+
+The standalone repository fixture enables this profile feature and depends on
+the identical git URL/revision (with `rt` additionally enabled for firmware),
+so its `SpiDma` resource has the same Cargo source identity as the public
+constructor expects. A future published crate instead exposes registry
+`esp-hal =1.1.0` types, and its consumer must use that registry identity. The
+repository's exact-git link does not validate that publication fallback;
+packaged-registry target consumption remains unverified and MUST be gated at
+the separately human-ordered publication step. No publication is part of this
+slice.
+
+Enforcement layers: sealed trait admission plus the profile-owned concrete
+adapter exclude external success reporters; private target/result/witness
+state and ordinary ownership bind success or failure to the consumed target
+and returned resources; the single private engine is shared by the host wire
+recorder and real HAL adapter; deterministic traces establish validation,
+encoding, chunking, stop-on-error, and resource identity; and a no-allocator
+Xtensa link plus symbol inspection establish the target allocation boundary.
+The crate-wide `forbid(unsafe_code)` remains in force: the production adapter
+uses only esp-hal's safe `SpiDmaBus` construction, blocking-write, and split
+surface and introduces no unsafe block in `kittens-render` or the fixture.
+Raw direct HAL access still compiles and remains outside the capability.
+Calling this synchronous operation inside a reactor handler can block every
+other arm. Panel initialization and serialization with reset, sleep/AOD,
+brightness, and other commands remain a board-coordinator obligation.
+
+`try_new` accepts esp-hal's unbranded `SpiDma<Blocking>`; sealing does not prove
+which SPI peripheral, GDMA channel, QSPI pins, mode, or frequency the caller
+configured, nor that the panel is initialized or command access serialized.
+`Ok` is therefore scoped to the reviewed transaction over the supplied bus.
+The exact fixture binds SPI2/GDMA_CH0/GPIO4–7/11/12 at 40 MHz, while a target
+compile-pass function accepting arbitrary same-source `SpiDma` and scratch
+buffers pins the configuration-honesty escape. Physical-board truth remains
+HIL; no board-construction token is claimed in this slice.
+
+The revision-9 Xtensa feasibility artifact exercised only the distinct owning
+`SpiDma::half_duplex_write` surface with small TX-only buffers and provided no
+partial evidence for this blocking path. Revision 10 adds a separate retained,
+unexecuted entry path through `SpiDmaBus`, the symmetric fixed scratch policy,
+and `split`; its host + exact-Xtensa-link evidence closes only the scoped
+blocking-region row recorded in sections 9 and 11.
+
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
 A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists. A host-model selection may authorize the K2R-0 host slice and its section 6 amendment, but K2R-0A itself does not pass until the exact target criteria and open items are discharged.
@@ -398,7 +722,37 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
   negative control, raw `future_mut` replacement compiles as the handler-side
   mutation escape, while declaring the carrier `may_remain_ready` fails the
   sealed readiness check;
-- cancel-and-drain on every in-flight state; injected failure at every command/chunk boundary of an enumerated reference trace;
+- cancel-and-drain on every in-flight state;
+- the blocking-region reference trace uses
+  `Region { x: 0, y: 0, width: 368, height: 112 }` and exactly 82,432 RGB565
+  bytes. Its eight ordered calls are `CASET [00 00 01 6f]`,
+  `PASET [00 00 00 6f]`, `RAMWR` at offset 0 for 16,380 bytes, four
+  `RAMWRC` chunks at offsets 16,380, 32,760, 49,140, and 65,520 for 16,380
+  bytes each, then one `RAMWRC` at offset 81,900 for 532 bytes. Independent
+  failure injection at every boundary proves the exact prior prefix, reported
+  stage and, for pixel stages, command/index/offset/length, absence of every
+  later call, writer and pixel pointer identity, an unwritten settlement, and
+  owning-sweep poison/abort.
+  The success trace proves the exact resources, written settlement, and
+  owning-sweep advance;
+- blocking preflight traces exercise the exact section-6.7 precedence: zero
+  width; zero height; X overflow; Y overflow; out-of-bounds start/extent; and
+  short/long buffers, all with zero I/O and exact error payloads. Positive
+  boundary controls cover the first row (`y_end == 0`), origin `1×1`, exact
+  bottom/right endpoint, and a nonzero origin's big-endian coordinate encoding.
+  A compile failure rejects
+  an external `BlockingRegionWrite` implementation and separate failures reject
+  permit/result/witness construction; raw HAL calls remain the compiling
+  bypass. Compile-pass controls accept and drop an opaque `BlockingSettled`,
+  accept arbitrary same-source target bus parts for `try_new`, and cite
+  `constraint_erasure_boundaries.rs` for the kernel's existing proof that
+  handler interiors remain unchecked (including synchronous blocking work).
+  The Xtensa fixture invokes this same engine on real SPI2/GDMA/pins,
+  uses fixed 16,380-byte RX/TX scratch with no allocator, recovers the exact
+  resources, proves that admission restores a deliberately shortened TX
+  descriptor length, links at the pinned HAL revision, and is inspected for
+  allocator symbols. Host traces and a linked ELF remain non-controls for panel
+  interpretation, physical delivery, and visible output;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
 - full-frame versus stripe-swept RGB565 pixel equivalence through the real
   target/start/transfer/recover/settle witness chain: ordinary reconstruction,
@@ -415,7 +769,24 @@ Negative controls published beside them, as always.
 
 ## 9. Board anchor obligations
 
-As revision 1 (TE measured behavior, `write_region` upstream/fork decision, per-backend peak memory/bandwidth budgets with zero-allocation-after-init), with finding 7's sharpening: the `write_region` decision is a **K2R-0A-adjacent gate** — the blocking capability freezes only with a compiled no-alloc adapter against an exact SHA. Host byte-equivalence oracles do not discharge physical panel RGB channel/byte interpretation or color fidelity; those remain board-HIL evidence.
+Revision 10 resolves the `write_region` upstream/fork decision: Kittens owns a
+minimal reviewed SH8601 region transaction whose protocol provenance is exact
+upstream commit `4bcddfd529017135f19a5a9a6e79dd6b8ef1b460`, while the stock driver crate
+is deliberately not compiled. The actual adapter dependency is `esp-hal` at
+exact git revision `d48f747ba28accdc51779ba193eba923138e0382`. This explicitly
+replaces the earlier ambiguous requirement to compile against both a display-
+driver SHA and a HAL SHA; provenance-only review is not mislabeled as a Cargo
+dependency.
+
+The blocking capability's **host + exact-Xtensa-link** row closes only after
+all section-8 traces and controls pass against the single shared engine, the
+real target adapter is invoked in the no-allocator firmware, the locked
+optimized ELF links, and allocator-symbol inspection is clean. That scope does
+not require hardware and does not freeze the still-open async capabilities.
+TE measured behavior, panel initialization/command acceptance, physical region
+placement, RAMWRC interpretation, RGB565 channel/byte fidelity, visible
+output, tearing, latency, and per-backend measured peak memory/bandwidth remain
+K2R-1 board-HIL obligations. No host byte trace or linked ELF discharges them.
 
 ## 10. The bilateral seam (merge with the harness workstream) — gates full K2R-0 acceptance, not this host slice
 
@@ -424,6 +795,11 @@ This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15)
 ## 11. Slice acceptance
 
 - **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the exact target compile/link probe passes, the kernel-carrier reactor/portable-link oracles pass, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative). The current host-model selection is not this full acceptance.
+- The blocking `write_region` row may close independently with **host +
+  exact-Xtensa-link scope** when section 6.7's sealed concrete adapter, every
+  section-8 oracle/control, and section 9's linked/symbol evidence pass. That
+  closure does not close K2R-0A target execution, board HIL, the bilateral
+  seam, or `FlightStarter`/`OwnedTransfer` sealing.
 - **K2R-0** is done when: K2R-0A is done; the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds and links through an external `no_std` consumer without alloc; clippy/fmt/doc gates clean.
 - Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
 
@@ -506,3 +882,35 @@ dependency boundary, and scope claim. Its three P3 notes were verification
 hygiene (discharged separately), optional selection-loss/rearm symmetry (not a
 contract gap), and cosmetic README wrapping (adopted). The retained review is
 `reviews/2026-08-09-carrier-precommit-claude.md`.
+
+Revision 10, 2026-08-09: the blocking-region design is selected before
+implementation. An audited stock-driver defect rejects the valid first-row
+window (`y_end == 0`), while its public partial-flush path allocates and cannot
+borrow the profile's external stripe bytes. The selected replacement is a
+minimal private SH8601 transaction derived from the exact upstream commit,
+not a false claim that the stock crate is compiled. A sealed-from-day-one,
+profile-owned ESP32-S3 transport is the only production implementation; a
+private permit and target-owned operation make it the single proof-bearing
+spelling. The exact command/chunk/failure matrix, resource return, conservative
+failure settlement, fixed scratch sizes, no-allocation target link, source
+pin, and HIL non-guarantees are now normative. Implementation evidence was
+gated until the matrix and exact-HAL ELF passed; those gates subsequently
+closed only the host + exact-Xtensa-link row recorded in sections 9 and 11.
+
+Revision-10 implementation drift, 2026-08-09: source-level review of the
+pinned HAL found that `SpiDmaBus::half_duplex_write` checks TX backing capacity
+but does not relink a caller-shortened descriptor chain. The capacity-only
+admission rule was retained and made executable by requiring the concrete
+constructor to restore the exact 16,380-byte TX descriptor length after all
+rejection checks. The target fixture deliberately enters with length one and
+checks the recovered normalized length; no silicon behavior is inferred.
+
+Revision-10 implementation review, 2026-08-09: Claude Code
+`claude-opus-4-8` at maximum effort initially rejected an allocator-symbol CI
+regex that missed realistic `esp_alloc`, `__rdl`/`__rg`, and `GlobalAlloc`
+entry points. After the checker was widened and tested against both the real
+ELF and synthetic positive/negative symbols, its follow-up verdict was
+**SOUND, zero unresolved P0–P2 findings**. Target Clippy and the review's
+descriptor/runtime-wording hygiene findings were also adopted. The retained
+review is
+`reviews/2026-08-09-write-region-implementation-precommit-claude.md`.

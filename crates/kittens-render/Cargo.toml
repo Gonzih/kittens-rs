@@ -14,9 +14,18 @@ publish = true
 [features]
 default = []
 embedded-graphics = ["dep:embedded-graphics"]
+esp32s3-sh8601-blocking = ["dep:esp-hal"]
 
 [dependencies]
 embedded-graphics = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "xtensa")'.dependencies.esp-hal]
+version = "=1.1.0"
+git = "https://github.com/esp-rs/esp-hal"
+rev = "d48f747ba28accdc51779ba193eba923138e0382"
+optional = true
+default-features = false
+features = ["esp32s3", "unstable"]
 
 [dev-dependencies]
 kittens.workspace = true

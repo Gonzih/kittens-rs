@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `StripeSettlement: From<Result<(), ()>>` is not satisfied
+ --> tests/ui/launder_blocking_result_into_settlement.rs:4:12
+  |
+4 |     result.into()
+  |            ^^^^ the trait `From<Result<(), ()>>` is not implemented for `StripeSettlement`
+  |
+  = note: required for `Result<(), ()>` to implement `Into<StripeSettlement>`
