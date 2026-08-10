@@ -2,7 +2,7 @@
   "name": "kittens-public-website",
   "schema_version": 1,
   "site_version": "W0.3",
-  "source_commit": "7da7964cefb5962684564356cd6644d42fbed5eb",
-  "source_date": "2026-08-10T11:35:27-04:00",
+  "source_commit": "83694c2f1b55998b8227cfd21127ee8d5c9c15b9",
+  "source_date": "2026-08-10T11:40:41-04:00",
   "source_repository": "https://github.com/Gonzih/kittens-rs"
 }
