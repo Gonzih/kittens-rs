@@ -298,8 +298,9 @@ explicit non-control for section 2.1's normalized packaged-source + registry-
 HAL row. Revision 12 also configures a separate recurring
 `xtensa-packaged-link` job to reproduce the clean-package provenance,
 metadata, target-Clippy, locked-link, and artifact inspections. The scoped row
-is closed by the clean local run recorded in section 2.1; no GitHub execution
-of the newly configured job is claimed here yet.
+is closed by the clean local run recorded in section 2.1. Recurring GitHub runs
+are independent check evidence and are not folded into that local artifact
+claim.
 
 ## 6. Troubleshooting (Fact — each observed in this repo)
 

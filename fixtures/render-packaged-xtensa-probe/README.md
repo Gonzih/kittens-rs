@@ -69,8 +69,8 @@ symbol-filter counts are zero. `nm -a -S -C` retains
 `linked_packaged_registry_parts` at `0x20` bytes and
 `linked_packaged_registry_start` at `0x16bd` bytes. The local row is therefore
 **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**. The recurring
-CI job is configured, but no GitHub execution of that new job is claimed by
-this local result.
+CI job repeats the matrix; any individual GitHub run is independent check
+evidence and is not part of this local artifact claim.
 
 **Observation:** a passing locked target link proves compatibility between
 the locally packaged public adapter and the registry HAL source identity for

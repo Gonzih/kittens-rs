@@ -178,22 +178,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96.0
-      - name: Restore the pinned Xtensa toolchain
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.rustup/toolchains/esp
-          key: xtensa-toolchain-${{ runner.os }}-${{ runner.arch }}-espup-${{ env.ESPUP_MAPPING_EPOCH }}-rust-${{ env.ESP_RUST_VERSION }}-gcc-${{ env.ESP_GCC_VERSION }}
-      - name: Install the pinned Xtensa toolchain
-        uses: esp-rs/xtensa-toolchain@ec6d36527049a7f4fb2cb0c1a644668c1bb8a2a4 # v1.7.0
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          buildtargets: esp32s3
-          version: ${{ env.ESP_RUST_VERSION }}
-          ldproxy: false
-          default: false
-          override: false
-          export: true
       - name: Cache Cargo downloads for the packaged-source fixture
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -377,6 +361,25 @@ jobs:
             "$package_lock_sha256"
           test "$(sha256sum "$fixture_dir/Cargo.lock" | awk '{print $1}')" = \
             "$fixture_lock_sha256"
+      # The composite installer downloads its espup archive into the checkout.
+      # Package first so the clean-provenance assertion observes only committed
+      # repository state, then install the target toolchain for the staged build.
+      - name: Restore the pinned Xtensa toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.rustup/toolchains/esp
+          key: xtensa-toolchain-${{ runner.os }}-${{ runner.arch }}-espup-${{ env.ESPUP_MAPPING_EPOCH }}-rust-${{ env.ESP_RUST_VERSION }}-gcc-${{ env.ESP_GCC_VERSION }}
+      - name: Install the pinned Xtensa toolchain
+        uses: esp-rs/xtensa-toolchain@ec6d36527049a7f4fb2cb0c1a644668c1bb8a2a4 # v1.7.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          buildtargets: esp32s3
+          version: ${{ env.ESP_RUST_VERSION }}
+          ldproxy: false
+          default: false
+          override: false
+          export: true
       - name: Clippy, link, and inspect the staged registry-HAL consumer
         shell: bash
         working-directory: ${{ runner.temp }}/kittens-render-packaged-stage/fixtures/render-packaged-xtensa-probe

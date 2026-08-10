@@ -23,6 +23,11 @@
   crates.io publication remains human-ordered, crates.io 0.1.1 remains
   immutable older source, and K2R-0 freeze, K2R-1 runtime/HIL, arbitrary-waker
   allocation behavior, and silicon behavior remain separate gates.
+- Run the recurring packaged-source clean-provenance step before the pinned
+  Xtensa installer. The third-party composite action downloads its `espup`
+  archive into the checkout, so installing first correctly tripped the clean-
+  tree guard before packaging; the reordered job preserves that guard instead
+  of weakening it around bootstrap artifacts.
 - Repair the `kittens-render` acceptance map in spec revision 12: K2R-0A is
   closed with host + portable-link + exact-Xtensa-link scope; K2R-0 freeze is
   gated on exactly the bilateral seam and generic async capability sealing;
