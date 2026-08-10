@@ -22,9 +22,9 @@
 //! - the spare buffer is carried through the in-flight state and returned at
 //!   settlement, per SPEC section 7's resource-recovery criterion;
 //! - sealing [`OwnedTransfer`] and [`FlightStarter`] to reviewed integrations
-//!   is a pre-freeze obligation recorded in `K2R0A-LOG.md`; during the
-//!   experiment they stay open so probes and models can implement them. A
-//!   dishonest experiment-phase starter can ignore its region, return a
+//!   is a K2R-0 breaking-freeze obligation recorded in `K2R0A-LOG.md`; they
+//!   remain open in the current 0.1.x surface. A dishonest open-trait starter
+//!   can ignore its region, return a
 //!   prestarted transfer, or start and then reject; that is the documented
 //!   integration-honesty escape, not a structural guarantee. Safe external
 //!   code still cannot invoke a starter directly: [`StartPermit`] is issued
@@ -41,8 +41,8 @@ use crate::sweep::{StripeSettlement, StripeTarget, StripeUnwritten, StripeWritte
 ///
 /// A reviewed implementation's `Drop` MUST synchronously cancel any pending
 /// physical operation and disarm its completion registration. The trait is
-/// intentionally open during the experiment, so that obligation becomes
-/// structural only when integrations are reviewed and sealed at freeze.
+/// intentionally open until the K2R-0 breaking freeze, so that obligation
+/// becomes structural only when integrations are reviewed and sealed there.
 pub trait OwnedTransfer: Sized {
     /// The transport (bus/display handle) consumed by the transfer.
     type Transport;
@@ -70,7 +70,7 @@ pub trait OwnedTransfer: Sized {
 ///
 /// The constructor and field are private, and this type deliberately does not
 /// implement `Clone`. Its lifetime is tied to one
-/// [`StripeTarget::start_flight`] call, so an experiment-phase starter cannot
+/// [`StripeTarget::start_flight`] call, so an open-trait starter cannot
 /// return the received permit in its lifetime-independent error type for later
 /// direct invocation. The type is public only because external integrations
 /// must name it when implementing [`FlightStarter`].
@@ -87,8 +87,8 @@ impl<'a> StartPermit<'a> {
 /// One operation-bound capability for starting a transfer at a crate-supplied
 /// region.
 ///
-/// This trait is deliberately open during the experiment and MUST be sealed
-/// to reviewed integrations on the same pre-freeze schedule as
+/// This trait remains open in the current 0.1.x surface and MUST be sealed to
+/// reviewed integrations at the K2R-0 breaking freeze on the same schedule as
 /// [`OwnedTransfer`]. Requiring a crate-issued [`StartPermit`] makes direct
 /// safe invocation unavailable even while the trait remains open. Under sealed
 /// integrations, consuming the starter and invoking it inside
@@ -168,8 +168,8 @@ impl<T, B, S> Settled<T, B, S> {
     }
 
     /// The exact target region supplied to the [`FlightStarter`] that produced
-    /// this transfer. Whether an experiment-phase implementation really wrote
-    /// it remains a reviewed-integration obligation.
+    /// this transfer. While the trait remains open, whether an implementation
+    /// really wrote it remains a reviewed-integration obligation.
     pub const fn region(&self) -> Region {
         self.target.region()
     }
@@ -179,7 +179,7 @@ impl<T, B, S> Settled<T, B, S> {
     /// owning sweep. Completion yields `Written`; cancellation or failure
     /// yields `Unwritten`. Rust prevents forging, relabeling, or duplicating
     /// that witness, but cannot force its delivery: dropping it or consuming
-    /// it in a rejected wrong-sweep call is a published recovery escape. Drop
+    /// it in a rejected wrong-sweep call is a documented recovery escape. Drop
     /// the outstanding owner and use
     /// [`crate::demand::FrameDemand::abandon_active`] to retain demand and
     /// force a full repaint; use idle `invalidate` before replacement if stale
@@ -239,9 +239,9 @@ impl StripeTarget {
     /// [`StartPermit`] required by [`FlightStarter::start`], so safe callers
     /// cannot dispatch a starter without consuming a target. Target/start
     /// pairing is structural once [`FlightStarter`] is sealed to reviewed
-    /// integrations. During the experiment, a dishonest implementation can
-    /// still ignore the supplied region or return an independently started
-    /// transfer.
+    /// integrations at the K2R-0 breaking freeze. While the trait remains
+    /// open, a dishonest implementation can still ignore the supplied region
+    /// or return an independently started transfer.
     ///
     /// # Errors
     ///
@@ -395,7 +395,7 @@ mod tests {
 
     // This is a contract-conforming model used to observe `InFlight` itself.
     // Its behavior is test setup, not evidence that arbitrary implementations
-    // of the deliberately open `OwnedTransfer` trait satisfy the contract.
+    // of the currently open `OwnedTransfer` trait satisfy the contract.
     struct TestTransfer {
         outcome: Option<TransferOutcome>,
         waker: Option<Waker>,
@@ -472,9 +472,10 @@ mod tests {
 
     #[test]
     fn model_transfer_fixture_cancel_is_idempotent() {
-        // `OwnedTransfer` remains an open integration contract. This oracle
-        // validates the contract-conforming test model used below; it does not
-        // claim that arbitrary external implementations are thereby checked.
+        // `OwnedTransfer` remains open until the K2R-0 breaking freeze. This
+        // oracle validates the contract-conforming test model used below; it
+        // does not claim that arbitrary external implementations are thereby
+        // checked.
         let mut transfer = TestTransfer::pending();
         transfer.cancel();
         transfer.cancel();

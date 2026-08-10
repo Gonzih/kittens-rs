@@ -12,7 +12,7 @@
 //!   while matching failed or cancelled settlements poison the epoch and leave
 //!   only abort.
 //!   Rust cannot force delivery: dropping or misapplying the settlement is a
-//!   published escape recovered through owner drop plus
+//!   documented compiling escape recovered through owner drop plus
 //!   [`crate::demand::FrameDemand::abandon_active`]'s forced full repaint;
 //! - the sweep value is crate-owned and binds the demand-fixed panel plan,
 //!   the scene snapshot (owned, exposed by shared reference only), the
@@ -34,10 +34,10 @@ use crate::transfer::TransferOutcome;
 /// operation's crate-issued dispatch permit. Blocking dispatch is limited to
 /// the sealed, reviewed profile implementation, whose region behavior is
 /// pinned separately by the private engine and deterministic traces. Pairing
-/// for the still-open async experiment becomes structural under sealed
-/// `FlightStarter` integrations, while an open implementation can still be
-/// dishonest about the region (exit-review round-3 finding 1; rounds 4–5
-/// finding 1).
+/// for the still-open generic async capability becomes structural when
+/// `FlightStarter` integrations are sealed at the K2R-0 breaking freeze,
+/// while an open implementation can still be dishonest about the region
+/// (exit-review round-3 finding 1; rounds 4–5 finding 1).
 #[derive(Debug)]
 pub struct StripeTarget {
     pub(crate) demand_id: u64,

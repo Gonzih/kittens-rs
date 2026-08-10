@@ -1,0 +1,10 @@
+[unstable]
+build-std = ["core"]
+
+[target.xtensa-esp32s3-none-elf]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,-Tlinkall.x",
+    "-C",
+    "link-arg=-nostartfiles",
+]

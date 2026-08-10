@@ -167,6 +167,328 @@ jobs:
             exit 1
           fi
 
+  xtensa-packaged-link:
+    name: Xtensa packaged registry-HAL ELF
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ESP_RUST_VERSION: "1.95.0.0"
+      ESP_GCC_VERSION: "15.2.0_20250920"
+      ESPUP_MAPPING_EPOCH: "0.17.1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - name: Restore the pinned Xtensa toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.rustup/toolchains/esp
+          key: xtensa-toolchain-${{ runner.os }}-${{ runner.arch }}-espup-${{ env.ESPUP_MAPPING_EPOCH }}-rust-${{ env.ESP_RUST_VERSION }}-gcc-${{ env.ESP_GCC_VERSION }}
+      - name: Install the pinned Xtensa toolchain
+        uses: esp-rs/xtensa-toolchain@ec6d36527049a7f4fb2cb0c1a644668c1bb8a2a4 # v1.7.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          buildtargets: esp32s3
+          version: ${{ env.ESP_RUST_VERSION }}
+          ldproxy: false
+          default: false
+          override: false
+          export: true
+      - name: Cache Cargo downloads for the packaged-source fixture
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: xtensa-packaged-cargo-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.ESP_RUST_VERSION }}-${{ hashFiles('Cargo.lock', 'fixtures/render-packaged-xtensa-probe/Cargo.lock') }}
+      - name: Package clean source and stage the standalone consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          expected_head="$(git rev-parse HEAD)"
+          archive_rel="target/package/kittens-render-0.1.1.crate"
+          extracted_rel="target/package/kittens-render-0.1.1"
+          archive="$GITHUB_WORKSPACE/$archive_rel"
+          test ! -e "$archive"
+          test ! -e "$GITHUB_WORKSPACE/$extracted_rel"
+          test -z "$(git ls-files -- "$archive_rel" "$extracted_rel" "$extracted_rel/**")"
+          cargo +1.96.0 --version | grep -F 'cargo 1.96.0 '
+          cargo +1.96.0 package -p kittens-render --locked
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+          stage="$RUNNER_TEMP/kittens-render-packaged-stage"
+          package_dir="$stage/target/package/kittens-render-0.1.1"
+          fixture_dir="$stage/fixtures/render-packaged-xtensa-probe"
+          test -f "$archive"
+          mkdir -p "$stage/target/package" "$stage/fixtures"
+          tar -xzf "$archive" -C "$stage/target/package"
+          cp -R "$GITHUB_WORKSPACE/fixtures/render-packaged-xtensa-probe" "$stage/fixtures/"
+          test -f "$package_dir/Cargo.toml"
+          test -f "$fixture_dir/Cargo.toml"
+          package_dir="$(cd "$package_dir" && pwd -P)"
+          fixture_dir="$(cd "$fixture_dir" && pwd -P)"
+          test -f "$package_dir/Cargo.lock"
+          test -f "$fixture_dir/Cargo.lock"
+          test -f "$fixture_dir/src/main.rs"
+          cmp "$fixture_dir/.cargo/config.toml" \
+            "$GITHUB_WORKSPACE/fixtures/render-xtensa-probe/.cargo/config.toml"
+          test "$(sha256sum "$fixture_dir/.cargo/config.toml" | awk '{print $1}')" = \
+            "aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9"
+          package_lock_sha256="$(sha256sum "$package_dir/Cargo.lock" | awk '{print $1}')"
+          fixture_lock_sha256="$(sha256sum "$fixture_dir/Cargo.lock" | awk '{print $1}')"
+
+          python3 - \
+            "$package_dir/Cargo.toml" \
+            "$fixture_dir/Cargo.toml" \
+            "$fixture_dir/src/main.rs" \
+            "$package_dir/Cargo.lock" \
+            "$fixture_dir/Cargo.lock" \
+            "$fixture_dir/.cargo/config.toml" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          (
+              package_manifest_path,
+              fixture_manifest_path,
+              source_path,
+              package_lock_path,
+              fixture_lock_path,
+              config_path,
+          ) = map(pathlib.Path, sys.argv[1:])
+          package_manifest = tomllib.loads(package_manifest_path.read_text())
+          fixture_manifest = tomllib.loads(fixture_manifest_path.read_text())
+
+          for manifest_path, manifest in (
+              (package_manifest_path, package_manifest),
+              (fixture_manifest_path, fixture_manifest),
+          ):
+              assert "patch" not in manifest, f"active [patch] table in {manifest_path}"
+              assert "replace" not in manifest, f"active [replace] table in {manifest_path}"
+          assert fixture_manifest.get("workspace") == {}, "fixture workspace is not empty"
+          config = tomllib.loads(config_path.read_text())
+          assert config == {
+              "unstable": {"build-std": ["core"]},
+              "target": {
+                  "xtensa-esp32s3-none-elf": {
+                      "rustflags": [
+                          "-C",
+                          "link-arg=-Wl,-Tlinkall.x",
+                          "-C",
+                          "link-arg=-nostartfiles",
+                      ]
+                  }
+              },
+          }, "fixture target config changed"
+
+          registry_source = "registry+https://github.com/rust-lang/crates.io-index"
+          esp_hal_checksum = "6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0"
+          for lock_path in (package_lock_path, fixture_lock_path):
+              lock = tomllib.loads(lock_path.read_text())
+              packages = lock["package"]
+              esp_hal = [package for package in packages if package["name"] == "esp-hal"]
+              assert len(esp_hal) == 1, f"expected one esp-hal package in {lock_path}"
+              assert esp_hal[0]["version"] == "1.1.0", f"wrong esp-hal version in {lock_path}"
+              assert esp_hal[0]["source"] == registry_source, f"wrong esp-hal source in {lock_path}"
+              assert esp_hal[0]["checksum"] == esp_hal_checksum, f"wrong esp-hal checksum in {lock_path}"
+              assert not any(
+                  str(package.get("source", "")).startswith("git+") for package in packages
+              ), f"git package found in {lock_path}"
+
+          source = source_path.read_text()
+          parts_type_start = source.index("type PackagedRegistryPartsHook = fn(")
+          parts_type_end = source.index(";", parts_type_start)
+          parts_type = source[parts_type_start:parts_type_end]
+          type_offsets = [
+              parts_type.index(singleton)
+              for singleton in (
+                  "SPI2<'static>",
+                  "DMA_CH0<'static>",
+                  "GPIO4<'static>",
+                  "GPIO5<'static>",
+                  "GPIO6<'static>",
+                  "GPIO7<'static>",
+                  "GPIO11<'static>",
+                  "GPIO12<'static>",
+                  "DmaRxBuf",
+                  "DmaTxBuf",
+                  "Waveshare18V1Sh8601Parts<'static>",
+              )
+          ]
+          assert type_offsets == sorted(type_offsets), "typed constructor hook order changed"
+          parts_hook_start = source.index("fn linked_packaged_registry_parts(")
+          start_hook_start = source.index("fn linked_packaged_registry_start(", parts_hook_start)
+          main_start = source.index("#[esp_hal::main]", start_hook_start)
+          parts_hook_source = source[parts_hook_start:start_hook_start]
+          start_hook_source = source[start_hook_start:main_start]
+          main_source = source[main_start:]
+          assert "Waveshare18V1Sh8601Parts::new(" in parts_hook_source
+          assert "Waveshare18V1Sh8601Transport::try_new(parts)" in start_hook_source
+          assert "transport.into_start(sent)" in start_hook_source
+          assert re.search(
+              r"target\s*\.start_flight\(\s*spare,\s*transport\.into_start\(sent\)\s*\)",
+              start_hook_source,
+          ), "retained hook does not reach target.start_flight"
+          assert "let parts = linked_packaged_registry_parts(" in main_source
+          assert (
+              "let parts_hook: PackagedRegistryPartsHook = linked_packaged_registry_parts;"
+              in main_source
+          ), "retained parts-hook binding changed"
+          assert (
+              "let start_hook: PackagedRegistryStartHook = linked_packaged_registry_start;"
+              in main_source
+          ), "retained hook binding changed"
+          assert "core::hint::black_box(parts_hook);" in main_source
+          assert "core::hint::black_box(start_hook);" in main_source
+          PY
+
+          jq -e --arg head "$expected_head" '
+            .git.sha1 == $head and
+            .path_in_vcs == "crates/kittens-render" and
+            ((.git | has("dirty") | not) or (.git.dirty == false))
+          ' "$package_dir/.cargo_vcs_info.json"
+
+          cargo +1.96.0 metadata --locked --no-deps --format-version 1 \
+            --manifest-path "$package_dir/Cargo.toml" \
+            > "$RUNNER_TEMP/kittens-render-package-metadata.json"
+          jq -e --arg manifest "$package_dir/Cargo.toml" '
+            (.packages | length) == 1 and
+            (.packages[0].name == "kittens-render") and
+            (.packages[0].version == "0.1.1") and
+            (.packages[0].source == null) and
+            (.packages[0].manifest_path == $manifest) and
+            ([.packages[0].dependencies[] | select(.name == "esp-hal")] | length) == 1 and
+            ([.packages[0].dependencies[] | select(.name == "esp-hal")][0] |
+              .req == "=1.1.0" and
+              .source == "registry+https://github.com/rust-lang/crates.io-index" and
+              .target == "cfg(target_arch = \"xtensa\")" and
+              .uses_default_features == false and
+              .optional == true and
+              ((.features | sort) == ["esp32s3", "unstable"])) and
+            ((.packages[0].features["esp32s3-sh8601-async"] |
+              index("esp-hal/rt")) != null) and
+            ([.packages[0].dependencies[] |
+              select((.source // "") | startswith("git+"))] | length) == 0
+          ' "$RUNNER_TEMP/kittens-render-package-metadata.json"
+          test "$(sha256sum "$package_dir/Cargo.lock" | awk '{print $1}')" = \
+            "$package_lock_sha256"
+          test "$(sha256sum "$fixture_dir/Cargo.lock" | awk '{print $1}')" = \
+            "$fixture_lock_sha256"
+      - name: Clippy, link, and inspect the staged registry-HAL consumer
+        shell: bash
+        working-directory: ${{ runner.temp }}/kittens-render-packaged-stage/fixtures/render-packaged-xtensa-probe
+        run: |
+          set -euo pipefail
+          cp "$HOME/exports" "$HOME/export-esp.sh"
+          . "$HOME/export-esp.sh"
+          rustc +esp --version --verbose | grep -F "($ESP_RUST_VERSION)"
+          xtensa-esp32s3-elf-gcc --version | grep -F "$ESP_GCC_VERSION"
+
+          package_dir="$(cd "$RUNNER_TEMP/kittens-render-packaged-stage/target/package/kittens-render-0.1.1" && pwd -P)"
+          package_manifest="$package_dir/Cargo.toml"
+          target_dir="$RUNNER_TEMP/kittens-render-packaged-stage/build"
+          package_lock_sha256="$(sha256sum "$package_dir/Cargo.lock" | awk '{print $1}')"
+          fixture_lock_sha256="$(sha256sum Cargo.lock | awk '{print $1}')"
+          cargo +esp metadata --locked --format-version 1 \
+            --filter-platform xtensa-esp32s3-none-elf \
+            > "$RUNNER_TEMP/kittens-render-packaged-consumer-metadata.json"
+          jq -e \
+            --arg consumer_manifest "$(pwd -P)/Cargo.toml" \
+            --arg package_dir "$package_dir" \
+            --arg package_manifest "$package_manifest" '
+            (.resolve.root as $root |
+              [.packages[] | select(.id == $root)][0]) as $consumer |
+            (.workspace_members == [.resolve.root]) and
+            ($consumer.name == "kittens-render-packaged-xtensa-probe") and
+            ($consumer.source == null) and
+            ($consumer.manifest_path == $consumer_manifest) and
+            ([$consumer.dependencies[] | select(.name == "esp-hal")] | length) == 1 and
+            ([$consumer.dependencies[] | select(.name == "esp-hal")][0] |
+              .req == "=1.1.0" and
+              .source == "registry+https://github.com/rust-lang/crates.io-index" and
+              .uses_default_features == false and
+              ((.features | sort) == ["esp32s3", "rt", "unstable"])) and
+            ([$consumer.dependencies[] | select(.name == "kittens-render")] | length) == 1 and
+            ([$consumer.dependencies[] | select(.name == "kittens-render")][0] |
+              .req == "=0.1.1" and
+              .source == null and
+              .path == $package_dir and
+              .uses_default_features == false and
+              .features == ["esp32s3-sh8601-async"]) and
+            ([$consumer.dependencies[] |
+              select(.name == "kittens" or .name == "critical-section")] | length) == 0 and
+            ([.packages[] | select(.name == "esp-hal")] | length) == 1 and
+            ([.packages[] | select(
+              .name == "esp-hal" and
+              .version == "1.1.0" and
+              .source == "registry+https://github.com/rust-lang/crates.io-index"
+            )] | length) == 1 and
+            ([.packages[] | select(
+              ((.source // "") | startswith("git+"))
+            )] | length) == 0 and
+            ([.packages[] | select(
+              .name == "kittens-render" and
+              .version == "0.1.1" and
+              .source == null and
+              .manifest_path == $package_manifest
+            )] | length) == 1
+          ' "$RUNNER_TEMP/kittens-render-packaged-consumer-metadata.json"
+
+          cargo +esp clippy --release --locked \
+            --target-dir "$target_dir" \
+            --target xtensa-esp32s3-none-elf \
+            --manifest-path "$package_manifest" \
+            --no-default-features --features esp32s3-sh8601-async \
+            --lib -- -D warnings
+          cargo +esp clippy --release --locked \
+            --target-dir "$target_dir" \
+            --target xtensa-esp32s3-none-elf -- -D warnings
+          cargo +esp build --release --locked \
+            --target-dir "$target_dir" \
+            --target xtensa-esp32s3-none-elf
+
+          test "$(sha256sum "$package_dir/Cargo.lock" | awk '{print $1}')" = \
+            "$package_lock_sha256"
+          test "$(sha256sum Cargo.lock | awk '{print $1}')" = \
+            "$fixture_lock_sha256"
+          artifact="$target_dir/xtensa-esp32s3-none-elf/release/kittens-render-packaged-xtensa-probe"
+          test -f "$artifact"
+          file "$artifact" | grep -E 'ELF 32-bit LSB executable, Tensilica Xtensa.*statically linked'
+          xtensa-esp32s3-elf-readelf -h "$artifact" | grep -E 'Type:[[:space:]]+EXEC'
+          xtensa-esp32s3-elf-readelf -h "$artifact" | grep -E 'Machine:[[:space:]]+Tensilica Xtensa Processor'
+          xtensa-esp32s3-elf-nm -u -C "$artifact" > "$RUNNER_TEMP/xtensa-packaged-undefined.txt"
+          test ! -s "$RUNNER_TEMP/xtensa-packaged-undefined.txt"
+          xtensa-esp32s3-elf-nm -a -S -C "$artifact" > "$RUNNER_TEMP/xtensa-packaged-symbols.txt"
+          awk -v symbol='kittens_render_packaged_xtensa_probe::linked_packaged_registry_parts' '
+            $2 ~ /^[[:xdigit:]]+$/ && $2 !~ /^0+$/ && $3 ~ /^[TtWw]$/ && $4 == symbol {
+              count += 1
+            }
+            END { exit count != 1 }
+          ' "$RUNNER_TEMP/xtensa-packaged-symbols.txt"
+          hook_size_hex="$(
+            awk -v symbol='kittens_render_packaged_xtensa_probe::linked_packaged_registry_start' '
+              $2 ~ /^[[:xdigit:]]+$/ && $2 !~ /^0+$/ && $3 ~ /^[TtWw]$/ && $4 == symbol {
+                size = $2
+                count += 1
+              }
+              END {
+                if (count != 1) exit 1
+                print size
+              }
+            ' "$RUNNER_TEMP/xtensa-packaged-symbols.txt"
+          )"
+          test "$((16#$hook_size_hex))" -ge "$((0x1000))"
+          printf 'retained hook size: 0x%s\n' "$hook_size_hex"
+          awk '$3 ~ /^[TtWw]$/' "$RUNNER_TEMP/xtensa-packaged-symbols.txt" \
+            > "$RUNNER_TEMP/xtensa-packaged-text-symbols.txt"
+          if grep -E '[[:space:]](__rust_(alloc|dealloc|realloc|alloc_zeroed)|__(rdl|rg)_(alloc|dealloc|realloc|alloc_zeroed)|malloc|calloc|realloc|free)$|[[:space:]]<?esp_alloc::|[[:space:]]<?alloc::(alloc|vec|raw_vec)::|GlobalAlloc>::(alloc|dealloc|realloc|alloc_zeroed)(::|$)' "$RUNNER_TEMP/xtensa-packaged-text-symbols.txt"; then
+            echo 'allocator symbol found in the packaged no-allocation Xtensa fixture' >&2
+            exit 1
+          fi
+
   coverage:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,33 @@
+[package]
+name = "kittens-render-packaged-xtensa-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autobins = false
+
+# This firmware deliberately does not join the monorepo workspace. CI stages
+# it beside Cargo's extracted, normalized kittens-render package so the exact
+# relative path below remains unchanged outside the checkout.
+[workspace]
+
+[dependencies]
+esp-hal = { version = "=1.1.0", default-features = false, features = [
+    "esp32s3",
+    "rt",
+    "unstable",
+] }
+kittens-render = { version = "=0.1.1", path = "../../target/package/kittens-render-0.1.1", default-features = false, features = [
+    "esp32s3-sh8601-async",
+] }
+
+[[bin]]
+name = "kittens-render-packaged-xtensa-probe"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = "s"
+panic = "abort"

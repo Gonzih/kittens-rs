@@ -1,17 +1,24 @@
 //! Embedded rendering/interaction profile for the Kittens reactor kernel.
 //!
-//! **Stage: experimental 0.1.x evidence release of the K2R-0 host slice**
-//! (`SPEC.md` revision 11: section 6 is the normative host surface; the K2R-0A
-//! experiment that selected it is recorded in `K2R0A-LOG.md`, and
-//! `TRACE-MANIFEST.md` maps every required oracle to its status). Publication
-//! is not a protocol freeze. The kernel-admitted inline completion source and
-//! real `reactor!` integration are closed with host + portable-link scope.
-//! The sealed blocking-region path is separately closed with host + exact-
-//! Xtensa-link scope. The branded single-payload async-region row is separately
-//! closed with host + exact-Xtensa-reactor-link scope. `FlightStarter`/
-//! `OwnedTransfer` sealing, bilateral seam co-sign, target-side reactor
-//! execution, published-registry Xtensa consumption, and board HIL/silicon
-//! delivery remain named gates.
+//! **Stage: K2R-0A closed with host + portable-link + exact-Xtensa-link
+//! scope; K2R-0 and K2R-1 remain gated** (`SPEC.md` revision 12: section 6 is
+//! the normative host surface, `K2R0A-LOG.md` records the selection history,
+//! and `TRACE-MANIFEST.md` maps every required oracle to its status). The
+//! kernel-admitted inline completion source and real `reactor!` integration
+//! are closed with host + portable-link scope. The sealed blocking-region path
+//! is separately closed with host + exact-Xtensa-link scope. The branded
+//! single-payload async-region row is separately closed with host + exact-
+//! Xtensa-reactor-link scope. Bilateral seam co-sign and sealing
+//! `FlightStarter`/`OwnedTransfer` gate the K2R-0 breaking freeze. A real target
+//! executor, board coordinator, target-runtime observations, and board
+//! HIL/silicon delivery belong to K2R-1.
+//!
+//! The local normalized packaged-source + registry-HAL Xtensa consumer row is
+//! selected but remains open until its clean-package matrix passes. The
+//! repository's exact-git fixture is not a control for that source-identity
+//! boundary. Upload, index availability, and exact-version download for a
+//! future correctly versioned release remain human-ordered publication work;
+//! none is implied by K2R-0A closure.
 //!
 //! The crate core is `#![no_std]`, no-alloc, `#![forbid(unsafe_code)]`. Host
 //! tests model the HAL boundary. The pinned exact-HAL Xtensa compile/link probe

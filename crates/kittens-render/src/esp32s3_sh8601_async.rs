@@ -190,8 +190,9 @@ impl<'d> Waveshare18V1Sh8601Transport<'d> {
         })
     }
 
-    /// Runs an exceptional synchronous board-coordinator command while the
-    /// transport is idle.
+    /// Runs the visibly exceptional temporary board-command escape while the
+    /// transport is idle. This is not the serialized board coordinator; that
+    /// protocol and its runtime evidence belong to K2R-1.
     pub fn with_idle_commands<R>(
         &mut self,
         f: impl FnOnce(&mut Waveshare18V1Sh8601IdleCommands<'_, 'd>) -> R,

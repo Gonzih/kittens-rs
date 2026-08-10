@@ -8,6 +8,14 @@ without joining the stock-Rust root workspace. The direct HAL dependency and
 `kittens-render`'s target-only dependency therefore resolve to one Cargo source
 identity.
 
+Under the revision-12 acceptance map, this is the repository's exact-git
+source-revision fixture. Its evidence contributes to the K2R-0A matrix, which
+is closed with host + portable-link + exact-Xtensa-link scope, but the fixture
+does not by itself close that matrix or the K2R-0 protocol freeze. Bilateral
+seam co-sign and sealing `FlightStarter`/`OwnedTransfer` still gate K2R-0. A
+real target executor, board coordinator, runtime observations, and board HIL
+belong to K2R-1.
+
 Build from this directory:
 
 ```sh
@@ -86,16 +94,28 @@ and `.bss` was 116,988 bytes. Its undefined-symbol table was empty, the
 blocking wire implementation was retained, and the documented allocator scan
 was clean. That chronology remains evidence only for revision 10.
 
-**Observation:** the revision-11 link closes only exact HAL API, vector
-binding, Rust ownership, branded type rejection, retained generated code, and
-allocator-symbol questions. Because the async hooks are not called,
-it is explicitly not evidence for executor scheduling, SPI2 interrupt
-delivery, wake counts, completion/cancellation races, drop at runtime, panel
+**Observation:** the revision-11 link closes the named async adapter row only
+for exact HAL API, vector binding, Rust ownership, branded type rejection,
+retained generated code, and allocator-symbol questions. Because the async
+hooks are not called, it is explicitly not evidence for executor scheduling,
+SPI2 interrupt delivery, wake counts, completion/cancellation races, drop at
+runtime, panel
 commands, or pixels on silicon. The allocator scan constrains this exact
 noop-waker binary only; an arbitrary executor's `RawWaker` callbacks may
 allocate or perform other unchecked work.
 
-**Gap: physical panel initialization and command acceptance, SPI2 interrupt
-delivery, exact wake counts, async cancellation/drop behavior on silicon,
-region placement, RGB565 fidelity, visible output, tearing, and timing (no data
-exists).** These remain board-HIL gates.
+**Observation (selected open row):** this fixture resolves the exact git HAL
+revision and is an explicit non-control for revision 12's clean normalized
+packaged-source + registry-HAL Xtensa consumer gate. That separate local gate
+must compose Cargo's extracted package with one registry `esp-hal =1.1.0`
+identity, cross the packaged board constructor and `start_flight`, then pass
+target Clippy, optimized link, and ELF/symbol inspections. It remains open;
+this fixture's green history cannot substitute for it. Even a future pass
+would not authorize publication. Upload, index availability, and exact-version
+download for a correctly versioned release are human-ordered only.
+
+**Gap: real target-executor polling, board-coordinator serialization, physical
+panel initialization and command acceptance, SPI2 interrupt delivery, exact
+wake counts, async cancellation/drop behavior on silicon, region placement,
+RGB565 fidelity, visible output, tearing, and timing (no data exists).** These
+are K2R-1 runtime and board-HIL gates.
