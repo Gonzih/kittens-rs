@@ -4,11 +4,13 @@
 //! Exit-review restructuring through round 3 (round-1 findings 4, 5, 9;
 //! round-3 findings 1–3):
 //!
-//! - on the cooperative driven path, coverage consumes each matching transfer
-//!   settlement rather than caller claims:
-//!   [`crate::transfer::Settled::into_parts`] returns exactly one move-only
-//!   [`StripeSettlement`]; matching written settlements advance, while matching
-//!   failed or cancelled settlements poison the epoch and leave only abort.
+//! - on the cooperative driven path, coverage consumes each matching operation
+//!   settlement rather than caller claims: both
+//!   [`crate::transfer::Settled::into_parts`] and
+//!   [`crate::blocking::BlockingSettled::into_parts`] return exactly one
+//!   move-only [`StripeSettlement`]; matching written settlements advance,
+//!   while matching failed or cancelled settlements poison the epoch and leave
+//!   only abort.
 //!   Rust cannot force delivery: dropping or misapplying the settlement is a
 //!   published escape recovered through owner drop plus
 //!   [`crate::demand::FrameDemand::abandon_active`]'s forced full repaint;
@@ -24,15 +26,18 @@
 use crate::geometry::{FrameEpoch, PanelGeometry, Region};
 use crate::transfer::TransferOutcome;
 
-/// An unforgeable stripe target: the identity (demand, epoch, region) a
-/// transfer must carry to witness coverage. Minted only by
-/// [`Sweep::next_target`]; non-`Clone`, private fields, and consumed by
-/// [`StripeTarget::start_flight`]. The target itself supplies the starter's
-/// region and is the only path that receives a crate-issued `StartPermit`, so
-/// safe external code cannot invoke `FlightStarter::start` directly. Pairing
-/// is structural under sealed `FlightStarter` integrations; an open
-/// experiment-phase implementation can still be dishonest about the region
-/// (exit-review round-3 finding 1; rounds 4–5 finding 1).
+/// An unforgeable stripe target: the identity (demand, epoch, region) an
+/// operation must carry to witness coverage. Minted only by
+/// [`Sweep::next_target`]; non-`Clone`, private fields, and consumed by either
+/// [`StripeTarget::start_flight`] or [`StripeTarget::write_region`]. The target
+/// supplies the exact region and is the only path that receives the
+/// operation's crate-issued dispatch permit. Blocking dispatch is limited to
+/// the sealed, reviewed profile implementation, whose region behavior is
+/// pinned separately by the private engine and deterministic traces. Pairing
+/// for the still-open async experiment becomes structural under sealed
+/// `FlightStarter` integrations, while an open implementation can still be
+/// dishonest about the region (exit-review round-3 finding 1; rounds 4–5
+/// finding 1).
 #[derive(Debug)]
 pub struct StripeTarget {
     pub(crate) demand_id: u64,
@@ -52,9 +57,11 @@ impl StripeTarget {
     }
 }
 
-/// Witness that one stripe's transfer settled `Completed`. Minted exactly
-/// once in the [`StripeSettlement::Written`] arm returned by
-/// [`crate::transfer::Settled::into_parts`]; non-`Clone`, private fields.
+/// Witness that one stripe operation settled `Completed`. Minted exactly once
+/// in the [`StripeSettlement::Written`] arm returned by either
+/// [`crate::transfer::Settled::into_parts`] or
+/// [`crate::blocking::BlockingSettled::into_parts`]; non-`Clone`, private
+/// fields.
 #[must_use = "an unreconciled written witness is lost coverage"]
 #[derive(Debug)]
 pub struct StripeWritten {
@@ -105,7 +112,7 @@ impl StripeUnwritten {
     }
 }
 
-/// The move-only reconciliation witness for one started transfer. The
+/// The move-only reconciliation witness for one consumed target operation. The
 /// cooperative caller contract delivers it to its owning [`Sweep::settle`].
 /// Separate unforgeable inner types prevent safe code from rewriting a failed
 /// or cancelled recovery into written coverage, but Rust cannot force the
@@ -120,7 +127,7 @@ pub enum StripeSettlement {
 }
 
 impl StripeSettlement {
-    /// The transfer recovery outcome carried by this witness.
+    /// The operation recovery outcome carried by this witness.
     pub const fn outcome(&self) -> TransferOutcome {
         match self {
             Self::Written(_) => TransferOutcome::Completed,
@@ -382,7 +389,7 @@ impl<S> Sweep<S> {
         })
     }
 
-    /// Reconciles the one outstanding transfer. Matching written settlement
+    /// Reconciles the one outstanding target operation. Matching written settlement
     /// clears outstanding and advances coverage once; matching failed or
     /// cancelled settlement clears outstanding and irreversibly poisons this
     /// epoch, leaving [`Sweep::abort`] as its only terminal transition.
@@ -453,7 +460,7 @@ impl<S> Sweep<S> {
     }
 
     /// Aborts a ready or poisoned sweep and returns the snapshot. An
-    /// outstanding target or flight must settle first.
+    /// outstanding target or operation must settle first.
     ///
     /// On the cooperative delivery path this restriction adds no liveness cost
     /// to an accepted flight:
@@ -462,7 +469,7 @@ impl<S> Sweep<S> {
     /// contract, `Settled::into_parts` returns the move-only witness, and
     /// [`Sweep::settle`] clears outstanding (poisoning on cancellation) before
     /// retrying `abort`. A never-accepted target or a dropped/misapplied
-    /// settlement instead requires the explicit drop-plus-
+    /// settlement, or a dropped blocking result, instead requires the explicit drop-plus-
     /// `FrameDemand::abandon_active` recovery boundary. That recovery forces a
     /// full repaint; use idle `invalidate` before replacement when stale
     /// physical work or external invalidation may overlap.

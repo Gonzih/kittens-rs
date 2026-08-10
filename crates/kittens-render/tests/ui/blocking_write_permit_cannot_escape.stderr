@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/ui/blocking_write_permit_cannot_escape.rs:4:5
+  |
+3 | fn escape<'a>(permit: BlockingWritePermit<'a>) -> BlockingWritePermit<'static> {
+  |           -- lifetime `'a` defined here
+4 |     permit
+  |     ^^^^^^ returning this value requires that `'a` must outlive `'static`

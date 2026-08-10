@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/ui/construct_blocking_write_permit.rs:5:40
+  |
+5 |     let _permit = BlockingWritePermit::new(&mut key);
+  |                                        ^^^ private associated function
+  |
+ ::: src/blocking.rs
+  |
+  |     const fn new(key: &'a mut ()) -> Self {
+  |     ------------------------------------- private associated function defined here

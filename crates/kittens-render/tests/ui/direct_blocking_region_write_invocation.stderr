@@ -1,0 +1,15 @@
+error[E0061]: this method takes 3 arguments but 2 arguments were supplied
+ --> tests/ui/direct_blocking_region_write_invocation.rs:5:20
+  |
+5 |     let _ = writer.write_region_admitted(region, pixels);
+  |                    ^^^^^^^^^^^^^^^^^^^^^---------------- argument #3 of type `BlockingWritePermit<'_>` is missing
+  |
+note: method defined here
+ --> src/blocking.rs
+  |
+  |     fn write_region_admitted(
+  |        ^^^^^^^^^^^^^^^^^^^^^
+help: provide the argument
+  |
+5 |     let _ = writer.write_region_admitted(region, pixels, /* BlockingWritePermit<'_> */);
+  |                                                        +++++++++++++++++++++++++++++++

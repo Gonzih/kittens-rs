@@ -78,9 +78,9 @@ impl<'a> Rgb565StripeDrawTarget<'a> {
     ///
     /// The returned target borrows only `bytes`; it copies the private admitted
     /// panel and stripe regions. After the draw target is dropped, the same
-    /// [`StripeTarget`] can be consumed by
-    /// [`StripeTarget::start_flight`]
-    /// together with the rendered buffer.
+    /// [`StripeTarget`] can be consumed together with the rendered buffer by
+    /// either [`StripeTarget::start_flight`] or
+    /// [`StripeTarget::write_region`].
     ///
     /// # Errors
     ///

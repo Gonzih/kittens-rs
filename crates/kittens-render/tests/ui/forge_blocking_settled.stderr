@@ -1,0 +1,13 @@
+error[E0451]: fields `writer`, `pixels`, `result` and `target` of struct `BlockingSettled` are private
+  --> tests/ui/forge_blocking_settled.rs:11:9
+   |
+10 |     BlockingSettled {
+   |     --------------- in this type
+11 |         writer,
+   |         ^^^^^^ private field
+12 |         pixels,
+   |         ^^^^^^ private field
+13 |         result,
+   |         ^^^^^^ private field
+14 |         target,
+   |         ^^^^^^ private field

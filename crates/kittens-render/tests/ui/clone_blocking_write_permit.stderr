@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for struct `BlockingWritePermit<'a>` in the current scope
+ --> tests/ui/clone_blocking_write_permit.rs:4:24
+  |
+4 |     let _copy = permit.clone();
+  |                        ^^^^^ method not found in `BlockingWritePermit<'_>`

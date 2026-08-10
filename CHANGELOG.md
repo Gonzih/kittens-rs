@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add the sealed, profile-owned blocking SH8601 region path as the sole
+  `StripeTarget::write_region` operation. The exact host matrix proves all
+  eight CASET/PASET/RAMWR/RAMWRC calls, all eight injected failure boundaries,
+  ten ordered preflight rejections, resource identity, conservative sweep
+  poisoning, and eight compile-fail plus one explicit-drop compile-pass
+  controls. The exact `esp-hal` revision links a real multichunk SPI2/GDMA
+  invocation without undefined or allocator symbols, closing this row with
+  host + exact-Xtensa-link scope only; published-registry Xtensa consumption,
+  async capability sealing, target-side reactor execution, the bilateral seam,
+  and every physical-panel/HIL claim remain open.
 - Admit the portable, allocation-free `OptionalInlineOneShot` source for
   `Future + Unpin` and drive render `InFlight` completion through a real
   generated reactor. Deterministic tests cover both selection-loss positions,
@@ -62,10 +72,11 @@
   exactly when its owned transfer and spare are both `Unpin`); the historical
   verdict and its explicitly non-compile-ready pseudocode delta are retained
   under `probes/` as a superseded historical record. The real pinned-SHA
-  Xtensa firmware fixture closes compile/link feasibility with scope; board
-  HIL and silicon delivery, kernel admission, the bilateral seam,
-  `write_region`, and pre-freeze capability sealing remain open. Publication
-  of the 0.1.x evidence release is not that freeze.
+  Xtensa firmware fixture closed compile/link feasibility with scope. At this
+  initial slice, board HIL and silicon delivery, kernel admission, the
+  bilateral seam, `write_region`, and pre-freeze capability sealing remained
+  open; the later blocking-row closure is recorded above. Publication of the
+  0.1.x evidence release is not the capability freeze.
 - Make the workspace coverage gate honest and durable: deterministic TUI
   oracles no longer construct and discard live crossterm bindings merely to
   mark lines covered; the two process-terminal binding files are explicit,

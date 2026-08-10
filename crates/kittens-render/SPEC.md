@@ -2,8 +2,10 @@
 
 - Status: revision 10, 2026-08-09 (blocking-region contract: one sealed,
   profile-owned ESP32-S3/SH8601 adapter and its exact command/failure matrix
-  are specified before implementation; the gate remains open until the host
-  protocol suite and exact-HAL Xtensa link pass). Revision 9's kernel-carrier
+  were specified before implementation; the gate is now **CLOSED WITH HOST +
+  EXACT-XTENSA-LINK SCOPE** after the protocol suite, exact-HAL link, and
+  symbol inspections passed). Published-registry Xtensa consumption and every
+  physical-panel claim remain open. Revision 9's kernel-carrier
   contract specifies the one no-allocation source shape and closes its
   real-reactor gate with host + portable-link scope; target execution and
   silicon remain open.
@@ -25,10 +27,10 @@
   **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
   The kernel-carrier gate is separately closed with host + portable-link scope.
-  Revision 10 selects the `write_region` design but does not close its evidence
-  row. Bilateral seam co-sign, the blocking adapter evidence, board HIL and
-  silicon interrupt delivery, and async capability sealing remain separately
-  named gates below.
+  The revision-10 blocking `write_region` row is separately closed with host +
+  exact-Xtensa-link scope. Bilateral seam co-sign, published-registry Xtensa
+  consumption, board HIL and silicon interrupt delivery, target-side reactor
+  execution, and async capability sealing remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -544,7 +546,14 @@ exact `(SpiDma, DmaRxBuf, DmaTxBuf)` tuple and occurs unless both DMA scratch
 buffers have at least 16,380 bytes. Requiring the full RX reserve is a profile
 admission/memory-budget policy copied from the audited upstream board adapter,
 not a claim that TX-only HAL calls consume RX payload storage; target evidence
-must pass before a later revision may lower it. `into_parts` waits for the
+must pass before a later revision may lower it. After those rejection checks,
+admission resets the TX descriptor length to exactly 16,380 before
+`with_buffers`: the pinned HAL checks the backing capacity but does not relink
+a caller-shortened descriptor chain inside `half_duplex_write`. Rejection
+therefore returns untouched parts, while every accepted capacity-valid TX
+scratch has descriptors for the maximum operation payload. The target fixture
+enters admission with logical TX length one and checks for 16,380 after split.
+`into_parts` waits for the
 blocking bus to become idle through `SpiDmaBus::split` and returns the same
 tuple. The blocking call copies each command or pixel chunk into the HAL-owned
 TX scratch, waits at the HAL boundary, and allocates nothing. It is not a
@@ -573,9 +582,11 @@ then emits exactly:
 4. Every remaining chunk: the same pixel envelope at address `0x003C00`
    (`RAMWRC`). Chunks are at most 16,380 bytes; every non-final chunk is
    exactly that size. This compatibility constant is copied from the audited
-   upstream board adapter and equals four 4,095-byte maximum TX-descriptor
-   payloads at the pinned HAL revision. It is below that HAL's 32,736-byte SPI
-   DMA transfer ceiling, and its even value never splits one RGB565 pixel.
+   upstream board adapter and equals four times the hardware's 4,095-byte
+   maximum TX-descriptor payload. The pinned HAL's 4,092-byte default chunking
+   uses five descriptors for this reserve. It remains below that HAL's
+   32,736-byte SPI DMA transfer ceiling, and its even value never splits one
+   RGB565 pixel.
 
 `Sh8601RegionWriteError<E>` distinguishes the exact preflight cases above and
 an I/O error whose `Sh8601WriteStage` identifies `ColumnAddress`,
@@ -653,11 +664,12 @@ compile-pass function accepting arbitrary same-source `SpiDma` and scratch
 buffers pins the configuration-honesty escape. Physical-board truth remains
 HIL; no board-construction token is claimed in this slice.
 
-The already-closed Xtensa feasibility probe exercises a distinct owning
-`SpiDma::half_duplex_write` surface with small TX-only buffers. It provides no
-partial evidence for this blocking `SpiDmaBus` path, its symmetric fixed
-scratch policy, or `split`; all three remain wholly inside the pending
-blocking-region row.
+The revision-9 Xtensa feasibility artifact exercised only the distinct owning
+`SpiDma::half_duplex_write` surface with small TX-only buffers and provided no
+partial evidence for this blocking path. Revision 10 adds a separate retained,
+unexecuted entry path through `SpiDmaBus`, the symmetric fixed scratch policy,
+and `split`; its host + exact-Xtensa-link evidence closes only the scoped
+blocking-region row recorded in sections 9 and 11.
 
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
@@ -737,8 +749,9 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
   handler interiors remain unchecked (including synchronous blocking work).
   The Xtensa fixture invokes this same engine on real SPI2/GDMA/pins,
   uses fixed 16,380-byte RX/TX scratch with no allocator, recovers the exact
-  resources, links at the pinned HAL revision, and is inspected for allocator
-  symbols. Host traces and a linked ELF remain non-controls for panel
+  resources, proves that admission restores a deliberately shortened TX
+  descriptor length, links at the pinned HAL revision, and is inspected for
+  allocator symbols. Host traces and a linked ELF remain non-controls for panel
   interpretation, physical delivery, and visible output;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
 - full-frame versus stripe-swept RGB565 pixel equivalence through the real
@@ -880,5 +893,24 @@ profile-owned ESP32-S3 transport is the only production implementation; a
 private permit and target-owned operation make it the single proof-bearing
 spelling. The exact command/chunk/failure matrix, resource return, conservative
 failure settlement, fixed scratch sizes, no-allocation target link, source
-pin, and HIL non-guarantees are now normative. Implementation evidence remains
-gated until the matrix and exact-HAL ELF pass.
+pin, and HIL non-guarantees are now normative. Implementation evidence was
+gated until the matrix and exact-HAL ELF passed; those gates subsequently
+closed only the host + exact-Xtensa-link row recorded in sections 9 and 11.
+
+Revision-10 implementation drift, 2026-08-09: source-level review of the
+pinned HAL found that `SpiDmaBus::half_duplex_write` checks TX backing capacity
+but does not relink a caller-shortened descriptor chain. The capacity-only
+admission rule was retained and made executable by requiring the concrete
+constructor to restore the exact 16,380-byte TX descriptor length after all
+rejection checks. The target fixture deliberately enters with length one and
+checks the recovered normalized length; no silicon behavior is inferred.
+
+Revision-10 implementation review, 2026-08-09: Claude Code
+`claude-opus-4-8` at maximum effort initially rejected an allocator-symbol CI
+regex that missed realistic `esp_alloc`, `__rdl`/`__rg`, and `GlobalAlloc`
+entry points. After the checker was widened and tested against both the real
+ELF and synthetic positive/negative symbols, its follow-up verdict was
+**SOUND, zero unresolved P0–P2 findings**. Target Clippy and the review's
+descriptor/runtime-wording hygiene findings were also adopted. The retained
+review is
+`reviews/2026-08-09-write-region-implementation-precommit-claude.md`.

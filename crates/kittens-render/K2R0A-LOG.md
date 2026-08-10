@@ -62,7 +62,15 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
    both selection-loss positions, same-carrier rearm, graceful drain, and
    post-exit drop/disarm. The external generated-reactor consumer links on
    Thumb and wasm. This supplies no Xtensa-runtime or silicon observation.
-4. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
+4. **Blocking `write_region` — CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE
+   (2026-08-09)**: the exact command/failure/preflight matrix, proof controls,
+   resource and owning-sweep reconciliation, a linked real SPI2/GDMA
+   multichunk call path,
+   locked optimized ELF, and undefined/allocator-symbol inspections pass
+   against `esp-hal` rev
+   `d48f747ba28accdc51779ba193eba923138e0382`. This supplies no physical-panel
+   or published-registry target observation.
+5. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
 ## Toolchain status
@@ -469,9 +477,10 @@ concrete flight, so target-side reactor execution is not claimed.
 **Gap: SPI2 silicon wake delivery and target-side executor behavior remain
 board-HIL gated (no data exists).**
 
-**Gap: the blocking `write_region` exact-stack integration remains open; this
-probe compiles the raw SH8601 pixel phase, not a complete display-driver
-transaction (no data exists).**
+**Observation:** the revision-9 artifact in the preceding section remained a
+non-control for blocking `write_region`. Revision 10 closes that separate row
+below using a new artifact that invokes the complete admitted region path; it
+does not retroactively broaden the async carrier evidence.
 
 ## Blocking-region contract selection (2026-08-09)
 
@@ -500,10 +509,58 @@ an unwritten settlement and poisons the sweep. Keep the existing async
 `FlightStarter` gate separate: its Xtensa model still issues only RAMWR and is
 not region-honest enough to seal.
 
-**Gap: implementation evidence remains pending until the exact host command
-and per-boundary failure matrix, compile controls, resource identities,
-owning-sweep settlement, real SPI2/GDMA no-allocator call, locked optimized
-Xtensa link, and allocator-symbol inspection pass (no data exists).**
+**Fact — host protocol and ownership evidence:**
+`reference_trace_returns_exact_resources_and_advances_owning_sweep` records the
+368×112 reference region as exactly eight calls (CASET, PASET, RAMWR, five
+RAMWRC) and proves writer/pixel identity, written settlement, and sweep
+advance. `every_reference_boundary_failure_stops_and_poisons_the_owning_sweep`
+injects each of the eight call boundaries and proves the exact successful
+prefix, attempted stage, absence of later calls, resource identity, failed
+settlement, sweep poison, and abort/full-repaint result.
+`preflight_precedence_is_exact_and_returns_resources_without_io` runs ten
+ordered rejection cases with exact error payloads and zero I/O;
+`valid_panel_boundaries_and_nonzero_coordinates_encode_big_endian` covers the
+first row, origin 1×1, exact right/bottom endpoint, and nonzero-origin
+encoding.
+
+**Fact — public-boundary controls:** eight new compile-fail fixtures reject an
+external `BlockingRegionWrite` implementation, permit construction by call or
+struct literal, permit cloning, permit escape to `'static`, direct admitted
+dispatch, `BlockingSettled` forgery, and laundering `Result` into a
+settlement. The adjacent `drop_opaque_blocking_settled.rs` compile-pass fixture
+publishes ordinary
+result drop as the explicit escape. Raw HAL calls, arbitrary same-source
+unbranded bus parts, and the kernel's existing unchecked-handler-interior
+control continue to compile.
+
+**Fact — exact target evidence:** the standalone fixture deliberately sets its
+TX descriptor-chain length to 1 before construction; the admitted constructor
+normalizes it to 16,380. The retained, unexecuted firmware entry path contains
+the same private-engine call for the complete multichunk transaction over
+SPI2/GDMA_CH0/pins and checks the exact bus, RX/TX scratch, pixel pointer, and
+owning-sweep settlement. The fresh locked
+optimized ELF is 208,496 bytes with SHA-256
+`648e43a0c03d89d71737d7dd20ff0390d6275b08b4f1f297d15d443af6c68513`.
+`readelf` reports `EXEC`, entry point `0x403785e8`; `.bss` is 116,988 bytes;
+`nm -u -C` is empty; the complete symbol table retains the concrete wire
+implementation and matches no allocator entry point or Rust allocation-module
+symbol. CI now repeats the locked link and asserts both the undefined-symbol
+and allocator-symbol conditions.
+
+**Fact — package mechanics:** host `cargo package` verification succeeds. In
+the generated registry manifest Cargo removes the repository-only git URL/rev
+and retains target dependency `esp-hal =1.1.0`, which is the intended
+multiple-locations fallback.
+
+**Observation:** these results close only the blocking `write_region` row with
+**HOST + EXACT-XTENSA-LINK SCOPE**. They do not close the async capability
+sealing gate, target-side reactor execution, the bilateral seam, or any board-
+HIL property. They also do not prove that a published crate and consumer
+compile the registry-source HAL type identity for Xtensa.
+
+**Gap: published registry-source Xtensa consumption remains unverified and is
+gated on the separately human-ordered publication workflow (no target data
+exists).**
 
 **Gap: panel initialization, physical command acceptance and placement,
 RGB565 fidelity, RAMWRC behavior on silicon, TE/tearing, visible output, and
