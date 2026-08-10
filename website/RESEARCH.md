@@ -68,13 +68,13 @@ controls its own semantics.
 - **Observation —** The comparable sites are strongest when a one-sentence
   promise, small proof-oriented feature set, concrete code, and ecosystem map
   appear in that order. None requires a complex application shell.
-- **Hypothesis —** A single long-form landing page will produce a better first
-  understanding than separate “product,” “vision,” and “docs” pages at W0,
-  because Kittens' key challenge is preserving the qualification adjacent to
-  each guarantee.
-- **Recommendation —** Use one page with progressive disclosure: outcome →
-  coverage layers → current crates → code → enforcement boundary → future
-  direction. Keep the repository specs and docs as the deep links.
+- **Hypothesis —** One short landing page will produce better first
+  understanding than either a multi-page launch or a long-form technical
+  essay, because the first job is earning curiosity rather than transferring
+  the repository's full contract.
+- **Recommendation —** Use one compressed journey: product promise → three
+  flagship outcomes → three reasons the underlying approach matters → compact
+  family view → install. Keep exhaustive truth in repository documentation.
 
 ## 3. Brand and visual research
 
@@ -209,11 +209,16 @@ controls its own semantics.
   the kernel exists: one application forces streaming, interrupt/shutdown,
   effect completion, persistence, context pressure, tools, budgets, and
   frontmatter to share an inspectable vocabulary.
-- **Recommendation —** Put the flagship immediately after the hero; show the
-  three-layer agent decomposition, end-to-end turn flow, four crate boundaries,
-  six enforcement laws, deterministic quick start, RLM example, shipped/open
-  ledger, and the complete evidence library before returning to the foundation
-  crates on `main`.
+- **Fact —** After reviewing the published W0.1 page, the operator rejected
+  visible branch topology, gate identifiers, release-review framing, and the
+  exhaustive architecture walkthrough as inappropriate for marketing.
+- **Observation —** W0.1 preserved technical truth but made visitors process
+  the internal development structure before reaching the product payoff. The
+  volume turned evidence into friction.
+- **Recommendation —** Keep `kittens-code` immediately after the hero, but sell
+  only three outcomes—durable work, recall beyond the live window, and
+  predictable recovery. Move crate topology, RLM grammar, evidence ledgers,
+  branch state, and deferred gates back to repository docs.
 
 ## 8. Gaps and decisions deliberately not invented
 

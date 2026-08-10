@@ -2,21 +2,14 @@
 
 ## Unreleased
 
-- Make `kittens-code` the public website's flagship demo with its complete
-  four-crate map, JSONL-to-effect turn flow, transcript/context/RLM/budget
-  laws, DISPLAY/ORCHESTRATION/COGNITION layering, deterministic offline quick
-  start, published/open evidence ledger, and deep links to the `kc0` source,
-  frozen contract, research, architecture note, release record, and inputs.
-  The adjacent status boundary states that source is not yet on `main` and
-  that full reactor wiring, E1 evaluation, MCU drivers, and stable APIs remain
-  open rather than allowing flagship placement to overstate the evidence.
-- Launch the public Kittens website on GitHub Pages: an evidence-led,
-  accessible, dependency-free introduction to the coverage thesis, shipped
-  kernel/TUI/render surfaces, lean reactor grammar, honest non-guarantees, and
-  longer-term agent/engine/meta-harness vision. The site reuses the canonical
-  cat-and-yarn artwork, adds a bespoke social card, records its research and
-  controlling W0 contract in-repo, and publishes reproducible output from a
-  provenance-marked `gh-pages` branch without analytics or cookies.
+- Refocus the Kittens website as a concise, benefit-led marketing page: remove
+  visible development branches, gate identifiers, release-review framing,
+  architecture walkthroughs, RLM syntax, and evidence ledgers; keep one sharp
+  hero, three `kittens-code` outcomes, three reasons Kittens matters, a compact
+  product-family view, and a direct install action.
+- Launch the public Kittens website on GitHub Pages with the canonical
+  cat-and-yarn artwork, bespoke `kittens-code` social card, accessible static
+  markup, deterministic provenance, and no analytics or cookies.
 - Publish `kittens-render` 0.1.1 to crates.io (2026-08-09) as an
   experimental K2R-0 evidence release, human-ordered and gated on the
   round-7 publication-readiness review: all five blockers fixed, workspace

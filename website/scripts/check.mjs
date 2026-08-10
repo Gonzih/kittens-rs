@@ -29,6 +29,16 @@ function occurrences(text, pattern) {
   return [...text.matchAll(pattern)].length;
 }
 
+function visibleWordCount(document) {
+  const text = document
+    .replace(/<!--[\s\S]*?-->/gu, " ")
+    .replace(/<script\b[\s\S]*?<\/script>/giu, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/giu, " ")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&(?:[a-z]+|#\d+|#x[0-9a-f]+);/giu, " ");
+  return text.match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)?.length ?? 0;
+}
+
 function linearChannel(value) {
   const normalized = value / 255;
   return normalized <= 0.04045
@@ -127,6 +137,9 @@ check(html.includes('name="twitter:card" content="summary_large_image"'), "missi
 check(html.includes('href="site.webmanifest"'), "missing web manifest link");
 check(html.includes('<script src="script.js" defer></script>'), "website script must be deferred");
 check(occurrences(html, /<h1(?:\s|>)/gu) === 1, "index.html must contain exactly one h1");
+check(occurrences(html, /<h2(?:\s|>)/gu) <= 4, "marketing page must contain no more than four h2 headings");
+check(occurrences(html, /<section(?:\s|>)/gu) <= 5, "marketing page must contain no more than five sections");
+check(visibleWordCount(html) < 700, "visible marketing copy must remain below 700 words");
 check(html.includes('<main id="main-content">'), "missing main landmark");
 check(html.includes('class="skip-link" href="#main-content"'), "missing skip link");
 check(occurrences(html, /<nav(?:\s|>)/gu) >= 2, "expected primary and footer navigation landmarks");
@@ -169,29 +182,17 @@ check(
 check(occurrences(notFound, /<h1(?:\s|>)/gu) === 1, "404.html must contain exactly one h1");
 
 const requiredCopy = [
-  "Make async orchestration harder to get wrong.",
-  "Meet kittens-code",
-  "kittens-code-protocol",
-  "kittens-code-core",
-  "kittens-code-driver-tokio",
-  "kittens-code-cli",
+  "Build async Rust that stays untangled.",
+  "A coding agent with nine lives.",
+  "Keep the thread.",
+  "Recall what matters.",
+  "Make failure boring.",
+  "Put order in the code.",
+  "Catch tangled changes early.",
+  "Test the truly dynamic parts.",
   "cargo install kittens-code-cli --version 0.0.1",
-  "source lives on <code>kc0</code>, not deployed <code>main</code>",
-  "driver topology and E1 evaluation rig remain deferred KC0 scope",
-  "Op → Submission",
-  "handle() → Transition",
-  "Commit → Persisted",
-  "DISPLAY",
-  "ORCHESTRATION",
-  "COGNITION",
-  "ask-each",
-  "Inexpressible",
-  "Static detection",
-  "Deterministic schedules",
-  "Confidence ends where the declared vocabulary ends.",
-  "not a runtime, scheduler, HAL, or sandbox",
-  "formal K0 gates still reported open",
-  "Direction, clearly labeled",
+  "Kittens checks the orchestration you declare—not arbitrary Rust or the outside world.",
+  "Experimental. APIs may change.",
   "No cookies. No analytics.",
 ];
 
@@ -199,25 +200,40 @@ for (const copy of requiredCopy) {
   check(html.includes(copy), `required evidence-boundary copy is missing: ${copy}`);
 }
 
-const requiredFlagshipLinks = [
-  "https://github.com/Gonzih/kittens-rs/tree/kc0",
-  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/SPEC.md",
-  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/RESEARCH.md",
-  "https://github.com/Gonzih/kittens-rs/blob/kc0/docs/kittens-code/FRONTMATTER.md",
-  "https://github.com/Gonzih/kittens-rs/blob/kc0/CHANGELOG.md#kittens-code-family-001--2026-08-09",
-  "https://github.com/Gonzih/kittens-rs/tree/kc0/docs/kittens-code/research-inputs",
-  "https://crates.io/crates/kittens-code-protocol",
-  "https://crates.io/crates/kittens-code-core",
-  "https://crates.io/crates/kittens-code-driver-tokio",
+const requiredMarketingLinks = [
+  "https://github.com/Gonzih/kittens-rs",
   "https://crates.io/crates/kittens-code-cli",
-  "https://docs.rs/kittens-code-protocol/0.0.1/kittens_code_protocol/",
-  "https://docs.rs/kittens-code-core/0.0.1/kittens_code_core/",
-  "https://docs.rs/kittens-code-driver-tokio/0.0.1/kittens_code_driver_tokio/",
   "https://docs.rs/kittens-code-cli/0.0.1/kittens_code_cli/",
 ];
 
-for (const url of requiredFlagshipLinks) {
-  check(html.includes(`href="${url}"`), `required kittens-code link is missing: ${url}`);
+for (const url of requiredMarketingLinks) {
+  check(html.includes(`href="${url}"`), `required marketing link is missing: ${url}`);
+}
+
+check(
+  !/github\.com\/Gonzih\/kittens-rs\/(?:tree|blob)\//u.test(html),
+  "marketing page must not deep-link development branches or process documents",
+);
+
+for (const internalMarker of [
+  "status boundary",
+  "source branch",
+  "source lives on",
+  "deployed main",
+  "deferred scope",
+  "research archive",
+  "frozen contract",
+  "frontmatter",
+  "coreinput",
+  "coreaction",
+  "ask-each",
+  "thumbv7em",
+  "kc0",
+  "e1 evaluation",
+  "g10",
+  "formal k0",
+]) {
+  check(!html.toLowerCase().includes(internalMarker), `internal development marker leaked: ${internalMarker}`);
 }
 
 for (const forbiddenClaim of [
@@ -289,13 +305,13 @@ let build;
 try {
   build = JSON.parse(buildText);
   check(build.schema_version === 1, "unexpected build.json schema version");
-  check(build.site_version === "W0.1", "unexpected site version in build.json");
+  check(build.site_version === "W0.2", "unexpected site version in build.json");
   check(/^[0-9a-f]{40}$/u.test(build.source_commit), "build.json needs a full source commit");
   check(
     build.source_repository === "https://github.com/Gonzih/kittens-rs",
     "build.json source repository is wrong",
   );
-  check(html.includes(build.source_commit), "footer provenance does not match build.json");
+  check(!html.includes(build.source_commit), "machine provenance must not appear in marketing copy");
 } catch (error) {
   failures.push(`invalid build.json: ${error.message}`);
 }

@@ -105,7 +105,7 @@ for (const filename of ["index.html", "404.html", "sitemap.xml", "robots.txt"]) 
 const buildMetadata = {
   name: "kittens-public-website",
   schema_version: 1,
-  site_version: "W0.1",
+  site_version: "W0.2",
   source_commit: sourceCommit,
   source_date: sourceDate,
   source_repository: "https://github.com/Gonzih/kittens-rs",
