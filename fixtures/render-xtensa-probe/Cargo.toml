@@ -3,20 +3,29 @@ name = "kittens-render-xtensa-probe"
 version = "0.0.0"
 edition = "2024"
 publish = false
+autobins = false
 
 # This firmware deliberately does not join the monorepo workspace. It needs
 # the Espressif Rust toolchain and the exact audited esp-hal git revision.
 [workspace]
 
+[features]
+compile-fail-dma-ch1 = []
+compile-fail-spi3 = []
+compile-fail-swapped-sio = []
+compile-pass-parts = []
+
 [dependencies]
-critical-section = "1"
 esp-hal = { git = "https://github.com/esp-rs/esp-hal", rev = "d48f747ba28accdc51779ba193eba923138e0382", default-features = false, features = [
     "esp32s3",
     "rt",
     "unstable",
 ] }
+kittens = { path = "../../crates/kittens", default-features = false, features = [
+    "macros",
+] }
 kittens-render = { path = "../../crates/kittens-render", default-features = false, features = [
-    "esp32s3-sh8601-blocking",
+    "esp32s3-sh8601-async",
 ] }
 
 [[bin]]
@@ -24,6 +33,34 @@ name = "kittens-render-xtensa-probe"
 path = "src/main.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "compile-fail-spi3"
+path = "ui/compile_fail_spi3.rs"
+test = false
+bench = false
+required-features = ["compile-fail-spi3"]
+
+[[bin]]
+name = "compile-fail-dma-ch1"
+path = "ui/compile_fail_dma_ch1.rs"
+test = false
+bench = false
+required-features = ["compile-fail-dma-ch1"]
+
+[[bin]]
+name = "compile-fail-swapped-sio"
+path = "ui/compile_fail_swapped_sio.rs"
+test = false
+bench = false
+required-features = ["compile-fail-swapped-sio"]
+
+[[bin]]
+name = "compile-pass-parts"
+path = "ui/compile_pass_parts.rs"
+test = false
+bench = false
+required-features = ["compile-pass-parts"]
 
 [profile.release]
 codegen-units = 1

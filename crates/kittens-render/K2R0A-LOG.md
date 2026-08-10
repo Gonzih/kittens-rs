@@ -70,7 +70,15 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
    against `esp-hal` rev
    `d48f747ba28accdc51779ba193eba923138e0382`. This supplies no physical-panel
    or published-registry target observation.
-5. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
+5. **Profile-owned exact-region async adapter + generated-reactor Xtensa link —
+   CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK SCOPE (2026-08-09)**: the
+   fixture-local RAMWR-only adapter is replaced by the branded SPI2
+   implementation. The exact three-boundary host matrix, concrete-Waker slot
+   lifecycle, target singleton controls, direct target Clippy, and locked
+   generated-reactor/drop-glue ELF source/symbol scans pass. This closes only
+   one concrete-adapter evidence row; it does not seal the generic traits or
+   claim target execution.
+6. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
 ## Toolchain status
@@ -471,8 +479,10 @@ consumer produced an 11,880-byte statically linked Thumb ELF (SHA-256
 **Observation:** this closes K2R-0A item 3 with host + portable-link scope. It
 does not certify an arbitrary inner future, force owning-sweep delivery, or
 turn raw `.await`, manual polling, `future_mut` replacement, or whole-source
-drop into rejected programs. The Xtensa fixture still manually polls its
-concrete flight, so target-side reactor execution is not claimed.
+drop into rejected programs. The revision-9 Xtensa fixture manually polled its
+concrete flight; revision 11 instead links a generated-reactor path but never
+calls its retained outer hooks, so target-side reactor execution is still not
+claimed.
 
 **Gap: SPI2 silicon wake delivery and target-side executor behavior remain
 board-HIL gated (no data exists).**
@@ -565,6 +575,77 @@ exists).**
 **Gap: panel initialization, physical command acceptance and placement,
 RGB565 fidelity, RAMWRC behavior on silicon, TE/tearing, visible output, and
 latency remain board-HIL gated (no data exists).**
+
+## Concrete async-region contract selection (2026-08-09)
+
+**Fact:** the revision-10 Xtensa adapter is wake- and ownership-feasible but is
+not region-honest: its starter derives only byte count, ignores X/Y, and starts
+RAMWR without CASET/PASET. The public `SpiDma` type also erases the concrete SPI
+instance even though the reviewed completion slot reads and masks SPI2
+registers. Moving that adapter unchanged into the profile would turn two
+documented assumptions into a misleading admission claim.
+
+**Fact:** the pinned HAL's `DmaTxBuf` can reset logical length only from the
+start of its backing buffer. It exposes neither a safe owned offset view that
+can later rejoin the original buffer nor an API from which this crate can build
+one without implementing the unsafe `DmaTxBuffer` trait. A 368×16 RGB565 stripe
+is 11,776 bytes and fits beneath the existing 16,380-byte payload constant.
+
+**Recommendation — adopted by SPEC revision 11:** add one profile-owned,
+board-branded async transport under the still-open generic traits. Its safe
+constructor consumes exact SPI2/DMA_CH0/GPIO singleton types and command
+scratch, its shared private engine preflights and emits CASET/PASET, and one
+accepted transfer owns exactly one RAMWR payload no larger than 16,380 bytes.
+Return every resource on start rejection and driven recovery; retain the
+reviewed register-then-recheck/cancel/drop slot. Defer async RAMWRC rather than
+invent unsafe slicing or destructive-copy semantics.
+
+**Observation:** exact peripheral construction would otherwise strand panel
+initialization after the transport owns SPI2. Revision 11 therefore names an
+idle-only `with_idle_commands` coordinator escape. Its private-field borrowed
+facade exposes command writes but cannot move, replace, or reconfigure the
+underlying bus, and it is not a proof-bearing stripe spelling; arbitrary
+commands, blocking, panel state, serialization, and closure termination remain
+unchecked.
+
+**Recommendation — target evidence:** add a named, `#[inline(never)]` link-only
+driver containing generated-reactor handler paths for two settlement/rearms and
+a third-drain Completed-versus-Cancelled branch. A separate noinline opaque
+shim performs exactly one noop-waker poll; no spin executor observes those
+paths. Retain a second noinline hook that drops an armed real source owner and
+records the drop-plus-abandon spelling. The firmware entrypoint black-boxes
+both outer function pointers but never calls them; `nm -S -C` must retain both
+nonzero symbols. CI therefore proves code generation, target drop glue, and
+link only, not executor scheduling, ISR delivery, wake counts, arbitrary-waker
+allocation behavior, drop execution, or silicon behavior.
+
+**Observation — implementation evidence (2026-08-09):** the host suite records
+the literal 368×16 CASET/PASET/RAMWR trace, every one of its three independent
+failure boundaries, cap-before-length preflight, positive windows, independent
+RX/TX scratch rejection and post-admission normalization, both register/recheck
+positions, waker replacement outside exclusion, completion/cancel/disarm/reuse,
+resource-carrying rejection/recovery, written/cancelled owning-sweep settlement,
+and ordinary drop. Three exact-target bins reject SPI3, DMA_CH1, and swapped
+SIO0/SIO1 with their intended E0308 diagnostics; the exact Parts roundtrip
+control passes.
+
+**Observation — exact target evidence (2026-08-09):** direct profile-library
+and standalone-fixture target Clippy pass against `esp-hal` revision
+`d48f747ba28accdc51779ba193eba923138e0382`; the locked optimized ELF is
+214,352 bytes with SHA-256
+`30cd240176d206d6483e04fd0f2384ced2b101491ff6e516ec635a4bbd98664a`,
+entry `0x403785e8`, and 115,492 bytes of `.bss`. Its undefined-symbol table and
+allocator scan are empty. Nonzero text symbols retain
+`linked_async_reactor_paths` (`0x168`), `poll_generated_reactor_once`
+(`0xaf6`), and `linked_async_drop_path` (`0x137`). The hooks are black-boxed
+but uncalled, so this is link evidence, not executor, IRQ, cancellation/drop
+runtime, arbitrary-waker allocation, or silicon evidence.
+
+**Observation — implementation review (2026-08-09):** Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after tracing the pinned HAL, protocol/preflight, slot races, resource paths,
+controls, target hooks, and CI. The retained report is
+`reviews/2026-08-09-async-region-implementation-precommit-claude.md`.
 
 ## Publication mechanics evidence (2026-08-09)
 

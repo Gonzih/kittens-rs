@@ -38,6 +38,11 @@ impl<'d> Esp32s3Sh8601BlockingTransport<'d> {
     /// Rejection returns the exact SPI driver and both scratch buffers. After
     /// admission, the TX descriptor chain is normalized to the same 16,380
     /// bytes even if its caller-visible logical length was previously shorter.
+    ///
+    /// # Errors
+    ///
+    /// Returns the untouched driver and both scratch buffers when either
+    /// buffer's capacity is below the fixed profile reserve.
     pub fn try_new(
         spi: SpiDma<'d, Blocking>,
         rx: DmaRxBuf,

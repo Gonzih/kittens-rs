@@ -81,6 +81,53 @@ jobs:
           . "$HOME/export-esp.sh"
           rustc +esp --version --verbose | grep -F "($ESP_RUST_VERSION)"
           xtensa-esp32s3-elf-gcc --version | grep -F "$ESP_GCC_VERSION"
+          # Source-identity and fixture-shape checks fail before a link can
+          # accidentally certify the superseded fixture-local adapter.
+          grep -A3 -F 'name = "esp-hal"' Cargo.lock |
+            grep -F 'source = "git+https://github.com/esp-rs/esp-hal?rev=d48f747ba28accdc51779ba193eba923138e0382#d48f747ba28accdc51779ba193eba923138e0382"'
+          grep -F 'kittens = { path = "../../crates/kittens", default-features = false, features = [' Cargo.toml
+          grep -F '"macros",' Cargo.toml
+          grep -F '"esp32s3-sh8601-async",' Cargo.toml
+          test "$(grep -E -c '^[[:space:]]*critical-section[[:space:]]*=' Cargo.toml)" -eq 0
+          test ! -e src/adapter.rs
+          grep -F 'kittens::reactor!' src/main.rs
+          grep -F 'core::hint::black_box(future.as_mut()).poll(&mut cx)' src/main.rs
+          test "$(grep -F -c '.poll(&mut cx)' src/main.rs)" -eq 1
+          test "$(grep -F -c 'Waker::noop()' src/main.rs)" -eq 1
+          test "$(grep -F -c 'poll_complete' src/main.rs)" -eq 0
+          grep -F 'let reactor_hook: AsyncReactorHook = linked_async_reactor_paths;' src/main.rs
+          grep -F 'let drop_hook: AsyncDropHook = linked_async_drop_path;' src/main.rs
+
+          expect_type_rejection() {
+            bin="$1"
+            feature="$2"
+            expected="$3"
+            actual="$4"
+            log="$RUNNER_TEMP/$bin.stderr"
+            if cargo +esp check --release --locked \
+              --target xtensa-esp32s3-none-elf \
+              --bin "$bin" --features "$feature" >"$log" 2>&1; then
+              echo "$bin unexpectedly accepted the wrong board singleton" >&2
+              exit 1
+            fi
+            source="${bin//-/_}.rs"
+            grep -F "ui/$source" "$log"
+            grep -F 'error[E0308]:' "$log"
+            grep -F "$expected" "$log"
+            grep -F "$actual" "$log"
+          }
+          expect_type_rejection compile-fail-spi3 compile-fail-spi3 SPI2 SPI3
+          expect_type_rejection compile-fail-dma-ch1 compile-fail-dma-ch1 DMA_CH0 DMA_CH1
+          expect_type_rejection compile-fail-swapped-sio compile-fail-swapped-sio GPIO4 GPIO5
+          cargo +esp check --release --locked \
+            --target xtensa-esp32s3-none-elf \
+            --bin compile-pass-parts --features compile-pass-parts
+
+          cargo +esp clippy --release --locked \
+            --target xtensa-esp32s3-none-elf \
+            --manifest-path ../../crates/kittens-render/Cargo.toml \
+            --no-default-features --features esp32s3-sh8601-async \
+            --lib -- -D warnings
           cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf -- -D warnings
           cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
           artifact=target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
@@ -92,11 +139,29 @@ jobs:
           # symbols are not currently part of this self-contained firmware.
           xtensa-esp32s3-elf-nm -u -C "$artifact" > "$RUNNER_TEMP/xtensa-undefined.txt"
           test ! -s "$RUNNER_TEMP/xtensa-undefined.txt"
-          xtensa-esp32s3-elf-nm -a -C "$artifact" > "$RUNNER_TEMP/xtensa-symbols.txt"
-          # This pinned-toolchain tripwire proves retention, while source-level
-          # ownership from main proves reachability of the blocking path.
+          xtensa-esp32s3-elf-nm -a -S -C "$artifact" > "$RUNNER_TEMP/xtensa-symbols.txt"
+          # These pinned-toolchain tripwires prove nonzero linked retention.
+          # The entrypoint executes only the blocking path; it retains but
+          # never calls the two async outer hooks.
           grep -F '<kittens_render::esp32s3_sh8601::Esp32s3Sh8601BlockingTransport as kittens_render::blocking::Sh8601Wire>::write' "$RUNNER_TEMP/xtensa-symbols.txt"
-          awk '$2 ~ /^[TtWw]$/' "$RUNNER_TEMP/xtensa-symbols.txt" > "$RUNNER_TEMP/xtensa-text-symbols.txt"
+          require_exact_nonzero_text_symbol() {
+            symbol="$1"
+            awk -v symbol="$symbol" '
+              $2 ~ /^[[:xdigit:]]+$/ && $2 !~ /^0+$/ && $3 ~ /^[TtWw]$/ && $4 == symbol { found = 1 }
+              END { exit !found }
+            ' "$RUNNER_TEMP/xtensa-symbols.txt"
+          }
+          require_containing_nonzero_text_symbol() {
+            symbol="$1"
+            awk -v symbol="$symbol" '
+              $2 ~ /^[[:xdigit:]]+$/ && $2 !~ /^0+$/ && $3 ~ /^[TtWw]$/ && index($0, symbol) { found = 1 }
+              END { exit !found }
+            ' "$RUNNER_TEMP/xtensa-symbols.txt"
+          }
+          require_exact_nonzero_text_symbol kittens_render_xtensa_probe::linked_async_reactor_paths
+          require_containing_nonzero_text_symbol kittens_render_xtensa_probe::poll_generated_reactor_once
+          require_exact_nonzero_text_symbol kittens_render_xtensa_probe::linked_async_drop_path
+          awk '$3 ~ /^[TtWw]$/' "$RUNNER_TEMP/xtensa-symbols.txt" > "$RUNNER_TEMP/xtensa-text-symbols.txt"
           if grep -E '[[:space:]](__rust_(alloc|dealloc|realloc|alloc_zeroed)|__(rdl|rg)_(alloc|dealloc|realloc|alloc_zeroed)|malloc|calloc|realloc|free)$|[[:space:]]<?esp_alloc::|[[:space:]]<?alloc::(alloc|vec|raw_vec)::|GlobalAlloc>::(alloc|dealloc|realloc|alloc_zeroed)(::|$)' "$RUNNER_TEMP/xtensa-text-symbols.txt"; then
             echo 'allocator symbol found in the no-allocation Xtensa fixture' >&2
             exit 1

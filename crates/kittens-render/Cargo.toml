@@ -15,6 +15,11 @@ publish = true
 default = []
 embedded-graphics = ["dep:embedded-graphics"]
 esp32s3-sh8601-blocking = ["dep:esp-hal"]
+esp32s3-sh8601-async = [
+    "esp32s3-sh8601-blocking",
+    "esp-hal/rt",
+    "dep:critical-section",
+]
 
 [dependencies]
 embedded-graphics = { workspace = true, optional = true }
@@ -26,6 +31,10 @@ rev = "d48f747ba28accdc51779ba193eba923138e0382"
 optional = true
 default-features = false
 features = ["esp32s3", "unstable"]
+
+[target.'cfg(target_arch = "xtensa")'.dependencies.critical-section]
+version = "1"
+optional = true
 
 [dev-dependencies]
 kittens.workspace = true
