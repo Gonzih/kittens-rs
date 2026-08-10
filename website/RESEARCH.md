@@ -1,6 +1,6 @@
 # Kittens website research ledger
 
-Date: 2026-08-09
+Date: 2026-08-10
 
 This ledger records the evidence used to shape W0. It is not a new product
 contract; [`SPEC.md`](SPEC.md) controls the website and each linked crate spec
@@ -219,6 +219,27 @@ controls its own semantics.
   three-outcome cards and explanatory image overlays. Keep `kittens-code`
   immediately after the hero, state its payoff once, and move implementation
   vocabulary back to repository docs.
+- **Fact —** The operator rejected W0.3's restart, searchable-conversation, and
+  offline-demo positioning on 2026-08-10. Those statements were supported by
+  KC0, but they described incidental harness behavior instead of the Kittens
+  product thesis.
+- **Fact —** The published [FRONTMATTER orientation](https://github.com/Gonzih/kittens-rs/blob/2a2fb0d63e817515bc17514c197260af14046a16/docs/kittens-code/FRONTMATTER.md)
+  defines the full agent as three separable layers: FRONTMATTER (what the human
+  sees and touches), HARNESS (orchestration), and COGNITION (the model). It says
+  each layer may live on a different device and names `kittens-code` as the
+  HARNESS layer.
+- **Fact —** Root SPEC sections 0.1, 1, and 2.1 define Kittens as an
+  agent-first Rust constraint language and compiler, with one shared semantic
+  kernel across runtime/domain profiles and a layered coverage law rather than
+  universal static verification.
+- **Observation —** W0.3 made a truthful subordinate capability sound like the
+  category. The result could have described many coding agents and erased the
+  project-specific system architecture.
+- **Recommendation —** W0.4 should present one idea only: make the whole agent
+  explicit. Name FRONTMATTER, HARNESS, and COGNITION; identify `kittens-code`
+  as the HARNESS profile; state the declared-structure boundary; remove the
+  product-benefit section, install command, second illustration, and dark
+  launch panel.
 
 ## 8. Current developer-tool landing pattern audit
 

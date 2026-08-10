@@ -1,10 +1,11 @@
-# Kittens public website specification (W0.3)
+# Kittens public website specification (W0.4)
 
 - Status: controlling contract for the public Kittens marketing website;
   authorized by the operator on 2026-08-10
 - Public target: `https://gonzih.github.io/kittens-rs/`
 - Parent contracts: root [`SPEC.md`](../SPEC.md), [`K0-REPORT.md`](../K0-REPORT.md),
-  and the controlling specs of represented products
+  the published [`kittens-code` contract](https://github.com/Gonzih/kittens-rs/blob/2a2fb0d63e817515bc17514c197260af14046a16/docs/kittens-code/SPEC.md),
+  and its [FRONTMATTER orientation](https://github.com/Gonzih/kittens-rs/blob/2a2fb0d63e817515bc17514c197260af14046a16/docs/kittens-code/FRONTMATTER.md)
 - Normative boundary: this file governs website source, generated artifacts,
   and publication. It does not change crate APIs or guarantees.
 - Revision 1 (2026-08-09): publication may proceed without browser review when
@@ -13,141 +14,142 @@
 - Revision 2 (2026-08-09): `kittens-code` became the flagship demo.
 - Revision 3 (2026-08-09): internal release and implementation exposition was
   removed from the marketing surface.
-- Revision 4 (2026-08-10): the operator rejected the remaining explanatory
-  chips, proof rows, feature-card grids, captions, and repeated benefit copy as
-  visual noise. W0.3 adopts the dominant current developer-tool pattern: one
-  category claim, one payoff sentence, one action, and one strong visual before
-  minimal product detail.
+- Revision 4 (2026-08-10): explanatory chips, cards, captions, and repeated
+  benefit copy were removed.
+- Revision 5 (2026-08-10): the operator rejected W0.3's generic restart,
+  search, and offline-agent positioning. W0.4 restores the repository's actual
+  thesis: Kittens is the constraint language for the whole agent system;
+  FRONTMATTER, HARNESS, and COGNITION are separate layers; `kittens-code` is the
+  HARNESS profile, not the definition of Kittens.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative within
 this website boundary.
 
 ## 1. Product definition
 
-Kittens gives async Rust clearer coordination rules. `kittens-code` is the
-flagship: an AI coding agent that can keep its work and pick up where it left
-off.
+Kittens is an agent-first, Rust-embedded constraint language and compiler for
+long-lived async orchestration. It exists to make the architecture of an agent
+system explicit and locally checkable instead of leaving critical relations in
+convention, comments, or working memory.
 
-## 2. Audience and conversion
+The public layer model comes from `docs/kittens-code/FRONTMATTER.md`:
 
-The primary visitor is a Rust developer or AI-agent builder. The page MUST be
-understood before it is studied.
+- **FRONTMATTER** — what the human sees and touches;
+- **HARNESS** — the turn loop, tools, context law, persistence, budgets, and
+  cancellation;
+- **COGNITION** — the model and token generation.
 
-The first viewport MUST communicate:
+The full agent is FRONTMATTER + HARNESS + COGNITION. Each layer may live on a
+different device. Kittens supplies shared orchestration law; it does not erase
+the boundaries between the layers.
 
-1. the category: async Rust;
-2. the payoff: fewer coordination surprises;
-3. the flagship: `kittens-code`;
-4. one obvious next action.
+`kittens-code` is the flagship HARNESS profile and the main public demo of this
+architecture.
 
-The primary conversion is trying `kittens-code`. GitHub is the secondary path.
+## 2. Page and conversion contract
 
-## 3. Density and voice
+W0.4 is one idea on one page.
 
-W0.3 is a launch page, not an explainer.
-
-- Visible body copy MUST remain below 300 words, excluding commands and footer
-  labels.
-- The page MUST contain no more than three `section` elements and two `h2`
-  headings.
+- Visible copy MUST remain below 160 words, including navigation and footer.
+- The page MUST contain exactly one `section` and no `h2` headings.
 - The header MUST contain only the brand and one GitHub action.
-- Each section MUST have one idea and at most one action group.
-- Headlines MUST use plain words and short sentences.
-- Paragraphs SHOULD remain under 35 words.
-- One install command is enough; it MUST NOT be repeated.
-- Experimental status belongs quietly in the footer.
+- The body MUST contain one `h1`, one supporting paragraph, one three-layer
+  definition list, one `kittens-code` sentence, and one honest boundary.
+- The canonical two-kitten yarn image MUST be the only visible illustration.
+- The page MUST contain no button cluster, install command, copy control,
+  product banner, feature list, secondary pitch section, or repeated action.
+- The primary conversion is GitHub. The only product link MAY be the
+  `kittens-code` crates.io page.
 
-The visible page MUST NOT contain:
+The visible page MUST NOT contain the W0.3 positioning or close variants:
 
-- floating image labels, image captions, proof chips, stat rows, numbered
-  cards, feature grids, ecosystem matrices, or decorative microcopy;
-- the words `harness`, `topology`, `sans-IO`, `RLM`, `CoreInput`, or
-  `CoreAction`;
-- development branches, commit state, gate identifiers, deferred-work lists,
-  research archives, specs, or release-review language;
-- exhaustive feature lists or multiple restatements of the same benefit.
+- “Async Rust. Fewer surprises.”;
+- “picks up where it left off”;
+- “work survives restarts”;
+- “long conversations stay searchable”;
+- “default demo runs offline”;
+- generic productivity, memory, reliability, or autonomy claims that do not
+  explain the system architecture.
 
-Machine-readable provenance in `build.json` remains required and is not
-marketing copy.
+It also MUST NOT contain development branches, commit state, gate identifiers,
+deferred-work lists, research archives, release-review language, crate
+topology, wire types, or RLM grammar.
 
-## 4. Content contract
+## 3. Exact content contract
 
-### 4.1 Header and hero
+The hero MUST use this `h1`:
 
-The header MUST contain the Kittens mark/name and one GitHub link. It MUST NOT
-contain a navigation-link cluster, release bar, badge, or status label.
+> Make the whole agent explicit.
 
-The hero MUST contain:
+Its single supporting paragraph MUST say, without adding a second pitch:
 
-- one short category-defining `h1`;
-- one supporting paragraph;
-- one primary action leading to `kittens-code`;
-- the canonical two-kitten yarn artwork, large and unobstructed.
+> Kittens is a Rust constraint language for expressing FRONTMATTER, HARNESS,
+> COGNITION, and the async law between them—then checking declared
+> orchestration at compile time.
 
-Nothing may overlay, label, caption, or annotate the hero artwork.
+The layer definition list MUST contain exactly these three terms and meanings:
 
-### 4.2 kittens-code
+- `FRONTMATTER` — what the human sees and touches;
+- `HARNESS` — the loop, tools, context, and control;
+- `COGNITION` — the model and token generation.
 
-The flagship section MUST contain one outcome-led `h2`, one short paragraph,
-one copyable command, and one crates.io link:
+The flagship sentence MUST say:
 
-`cargo install kittens-code-cli --version 0.0.1`
+> `kittens-code` is the HARNESS profile built on Kittens.
 
-The paragraph MAY say that work survives restarts, long conversations remain
-searchable, and the default demo runs offline. These MUST read as one coherent
-payoff, not three cards or slogans.
+The honest boundary MUST say:
 
-The canonical yarn-banner artwork MAY appear once, without caption, labels, or
-overlaid copy.
+> It checks declared structure. Handler behavior, raw Rust, and external event
+> order remain outside that boundary.
 
-### 4.3 Why Kittens
+The footer MUST say “Experimental. APIs may change.” and “No cookies. No
+analytics.”
 
-The final section MUST contain one `h2`, one short explanation, the honest
-boundary in a single sentence, and one GitHub action.
+## 4. Truth boundary
 
-The explanation MAY say that important coordination rules become compiler
-feedback. It MUST NOT teach syntax, list checked declarations, or enumerate
-product-family crates.
+The website MAY say that selected declared orchestration becomes compiler
+input. It MAY present the three-layer decomposition as the stable architecture
+orientation.
 
-## 5. Truth boundary
+It MUST NOT claim:
 
-- The page MAY say that Kittens turns selected coordination rules into compiler
-  feedback.
-- It MUST NOT claim universal race freedom, production stability, formal
-  verification, handler termination, or control of external event order.
-- `kittens-code` durability, searchability, restart recovery, and offline demo
-  claims MUST remain within its implemented contract.
-- The honest sentence MUST make clear that Kittens checks declared
-  coordination, not arbitrary Rust or the outside world.
-- The footer MUST say: “Experimental. APIs may change.”
+- universal compile-time verification;
+- universal race freedom;
+- formal verification;
+- handler termination or handler-interior analysis;
+- control of external event order;
+- completed on-device composition of all three layers;
+- stable production APIs.
 
-## 6. Visual system
+The high-coverage thesis remains layered: ordinary Rust and system architecture
+make some defects inexpressible, Kittens statically rejects selected declared
+relations, and deterministic tests cover named runtime schedules. The page
+expresses only the compile-time slice and its boundary; it MUST NOT compress the
+three mechanisms into “Kittens verifies everything.”
 
-The canonical visible assets remain:
+## 5. Visual system
 
-- [`assets/kittens-logo.webp`](../assets/kittens-logo.webp);
-- [`assets/kittens-yarn-banner.webp`](../assets/kittens-yarn-banner.webp).
+The page MUST be quiet and architectural rather than launch-theater:
 
-The inspected social card remains metadata-only. Visible page art MUST contain
-no added text.
+- one warm cream field;
+- charcoal type with coral used only as a restrained accent;
+- no dark product panel, gradient field, glow, floating label, card, pill,
+  caption, statistic, numbered feature, or decorative microcopy;
+- no decorative motion;
+- the layer model rendered as plain typography and rules, not three cards;
+- generous whitespace, but no headline treatment whose scale obscures the
+  meaning.
 
-The visual hierarchy MUST do the work:
+The canonical visible asset is
+[`assets/kittens-logo.webp`](../assets/kittens-logo.webp). The yarn banner MUST
+NOT appear on the page. The social card is metadata-only and MUST use the W0.4
+headline without additional product claims.
 
-- oversized typography;
-- generous negative space;
-- one warm cream field and one dark product field;
-- the coral, teal, lavender, orange, and charcoal palette;
-- very few borders, shadows, pills, or containers.
-
-Decorative motion MUST be subtle and disabled under
-`prefers-reduced-motion: reduce`. Content MUST remain complete without CSS or
-JavaScript.
-
-## 7. Source and publication
+## 6. Source and publication
 
 - Editable source MUST live under `website/src/` on `main`.
-- Source MUST remain semantic HTML, CSS, and progressive-enhancement JavaScript
-  with no framework, remote font, analytics, or third-party script.
+- Source MUST remain semantic HTML and CSS with no framework, remote font,
+  analytics, third-party script, or unnecessary client JavaScript.
 - `node website/scripts/build.mjs` MUST create ignored `website/dist/` using
   only Node standard-library modules.
 - Relative local URLs MUST work beneath `/kittens-rs/`.
@@ -155,51 +157,50 @@ JavaScript.
 - The generated root of `gh-pages` MUST include `.nojekyll`.
 - GitHub Pages MUST publish `gh-pages:/` with HTTPS.
 
-## 8. Accessibility, privacy, and performance
+## 7. Accessibility, privacy, and performance
 
-- The page MUST have one `h1`, logical headings, semantic landmarks, a
-  visible-on-focus skip link, and useful alternative text.
-- Controls MUST be keyboard reachable with visible focus and SHOULD provide at
-  least 44 by 44 CSS-pixel targets.
+- The page MUST have one `h1`, semantic landmarks, a visible-on-focus skip
+  link, a valid definition list, and useful alternative text.
+- Links MUST be keyboard reachable with visible focus and SHOULD provide at
+  least 44 by 44 CSS-pixel targets where presented as controls.
 - Text and meaningful boundaries MUST meet WCAG 2.2 AA contrast targets.
 - The layout MUST work at 320 CSS pixels and 200% zoom without horizontal page
   scrolling.
-- Motion MUST honor reduced-motion preferences.
-- Below-fold imagery MUST declare dimensions and lazy-load.
 - The page MUST set no cookies, collect no analytics, and make no background
   network requests.
 - The metadata-only social card MUST NOT load into the visible page.
 
-## 9. Enforcement ledger
+## 8. Enforcement ledger
 
 | Property | Enforcement layer | Oracle | Negative control |
 |---|---|---|---|
-| radical copy restraint | structural checker + review | word, section, heading, and forbidden-pattern limits | low word count alone does not create good hierarchy |
-| unannotated visual | semantic HTML + forbidden-class scan | hero art has no sibling labels or caption | image alt text remains available to assistive technology |
-| honest claims | documentation review | required boundary and experimental phrase | concise copy does not prove implementation behavior |
-| accessible static page | semantic HTML/CSS + structural checker | standards and accessibility-marker checks | automation is not full WCAG conformance |
+| one architectural idea | structural checker + review | one section, no h2, word ceiling | low word count alone does not make copy true |
+| three-layer decomposition | semantic definition list | exactly three required terms and meanings | the page does not claim all layers already run together on hardware |
+| honest compile boundary | documentation review + required copy | declared-structure sentence | raw Rust and external order remain legal and unchecked |
+| quiet visual surface | semantic HTML + forbidden-class scan | one visible image, no cards/banner/controls | metadata-only social art may remain richer |
+| accessible static page | semantic HTML/CSS + structural checker | standards and accessibility markers | automation is not full WCAG conformance |
 | exact deployment | `build.json` + Pages commit | live SHA equals merged source SHA | GitHub availability is external |
 | reproducible output | standard-library build | repeated tree hashes match | deployment history is not editable source |
 
-## 10. Required oracles and publication gate
+## 9. Required oracles and publication gate
 
 Before implementation commit or publication:
 
 1. build, structural check, and reproducibility scripts pass;
 2. HTML and sitemap validation pass;
 3. repository format, Clippy, and all-feature tests pass;
-4. a local server returns the page and all local assets successfully;
+4. a local server returns the page and every local asset successfully;
 5. a PR enters `main` after this spec-first commit;
 6. the exact merged build is pushed to `gh-pages`;
 7. Pages reports success and live `build.json` names the merged source commit;
-8. [`CHANGELOG.md`](../CHANGELOG.md) records the user-visible reduction.
+8. [`CHANGELOG.md`](../CHANGELOG.md) records the positioning correction.
 
-The structural checker MUST require the hero, flagship, install command,
-declared-coordination boundary, and experimental footer. It MUST reject extra
-sections, headings, chips, captions, grids, technical jargon, and internal
-development language.
+The structural checker MUST reject extra sections/headings/images, the W0.3
+copy, cards, product banners, install/copy UI, and internal development
+language. It MUST scan both the landing page and custom 404.
 
-## 11. Non-goals
+## 10. Non-goals
 
-The marketing site is not documentation, a tutorial, an architecture map, a
-feature catalog, an evidence archive, or a roadmap. It earns one click.
+The public page is not documentation, a tutorial, a feature catalog, a product
+demo, an architecture whitepaper, an evidence ledger, or a roadmap. It names
+the system clearly and earns one click.

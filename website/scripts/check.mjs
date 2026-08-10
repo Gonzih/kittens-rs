@@ -5,7 +5,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -29,14 +29,20 @@ function occurrences(text, pattern) {
   return [...text.matchAll(pattern)].length;
 }
 
-function visibleWordCount(document) {
-  const text = document
+function visibleText(document) {
+  const body = document.match(/<body(?:\s[^>]*)?>([\s\S]*?)<\/body>/iu)?.[1] ?? document;
+  return body
     .replace(/<!--[\s\S]*?-->/gu, " ")
     .replace(/<script\b[\s\S]*?<\/script>/giu, " ")
     .replace(/<style\b[\s\S]*?<\/style>/giu, " ")
     .replace(/<[^>]+>/gu, " ")
-    .replace(/&(?:[a-z]+|#\d+|#x[0-9a-f]+);/giu, " ");
-  return text.match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)?.length ?? 0;
+    .replace(/&(?:[a-z]+|#\d+|#x[0-9a-f]+);/giu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function visibleWordCount(document) {
+  return visibleText(document).match(/[\p{L}\p{N}][\p{L}\p{N}_-]*/gu)?.length ?? 0;
 }
 
 function linearChannel(value) {
@@ -102,25 +108,27 @@ const requiredArtifacts = [
   "build.json",
   "index.html",
   "robots.txt",
-  "script.js",
   "site.webmanifest",
   "sitemap.xml",
   "styles.css",
   "assets/apple-touch-icon.png",
   "assets/kittens-logo.webp",
   "assets/kittens-social-card.png",
-  "assets/kittens-yarn-banner.webp",
 ];
 
 for (const artifact of requiredArtifacts) {
   check(existsSync(join(targetDirectory, artifact)), `missing required artifact: ${artifact}`);
 }
 
+for (const removedArtifact of ["script.js", "assets/kittens-yarn-banner.webp"]) {
+  check(!existsSync(join(targetDirectory, removedArtifact)), `removed artifact returned: ${removedArtifact}`);
+}
+
 const html = read("index.html");
 const notFound = read("404.html");
 const publicMarkup = `${html}\n${notFound}`;
+const marketingText = visibleText(html);
 const css = read("styles.css");
-const javascript = read("script.js");
 const robots = read("robots.txt");
 const sitemap = read("sitemap.xml");
 const manifestText = read("site.webmanifest");
@@ -136,22 +144,21 @@ check(
 check(html.includes('property="og:image"'), "missing Open Graph social image");
 check(html.includes('name="twitter:card" content="summary_large_image"'), "missing X card metadata");
 check(html.includes('href="site.webmanifest"'), "missing web manifest link");
-check(html.includes('<script src="script.js" defer></script>'), "website script must be deferred");
+check(!/<script(?:\s|>)/u.test(html), "W0.4 must not ship unnecessary client JavaScript");
 check(occurrences(html, /<h1(?:\s|>)/gu) === 1, "index.html must contain exactly one h1");
-check(occurrences(html, /<h2(?:\s|>)/gu) === 2, "marketing page must contain exactly two h2 headings");
-check(occurrences(html, /<section(?:\s|>)/gu) === 3, "marketing page must contain exactly three sections");
-check(visibleWordCount(html) < 300, "visible marketing copy must remain below 300 words");
+check(occurrences(html, /<h2(?:\s|>)/gu) === 0, "marketing page must not contain h2 headings");
+check(occurrences(html, /<section(?:\s|>)/gu) === 1, "marketing page must contain exactly one section");
+check(visibleWordCount(html) < 160, "visible marketing copy must remain below 160 words");
 check(html.includes('<main id="main-content">'), "missing main landmark");
 check(html.includes('class="skip-link" href="#main-content"'), "missing skip link");
-check(occurrences(html, /<nav(?:\s|>)/gu) >= 2, "expected primary and footer navigation landmarks");
-check(html.includes('aria-live="polite"'), "copy feedback must use an aria-live region");
+check(occurrences(html, /<nav(?:\s|>)/gu) === 1, "expected exactly one navigation landmark");
 
 const ids = new Set([...html.matchAll(/\sid="([^"]+)"/gu)].map((match) => match[1]));
 for (const match of html.matchAll(/href="#([^"]+)"/gu)) {
   check(ids.has(match[1]), `fragment link has no target: #${match[1]}`);
 }
 
-for (const match of html.matchAll(/<(?:a|link|script|img)[^>]+(?:href|src)="([^"]+)"/gu)) {
+for (const match of html.matchAll(/<(?:a|link|img)[^>]+(?:href|src)="([^"]+)"/gu)) {
   const url = match[1];
   if (url.startsWith("#") || url.startsWith("https://")) {
     continue;
@@ -161,10 +168,10 @@ for (const match of html.matchAll(/<(?:a|link|script|img)[^>]+(?:href|src)="([^"
   if (!withoutFragment || withoutFragment === "./") {
     continue;
   }
-  const localPath = join(targetDirectory, withoutFragment);
-  check(existsSync(localPath), `local URL does not resolve: ${url}`);
+  check(existsSync(join(targetDirectory, withoutFragment)), `local URL does not resolve: ${url}`);
 }
 
+check(occurrences(html, /<img\b[^>]*>/gu) === 1, "landing page must contain exactly one visible image");
 for (const match of html.matchAll(/<img\b[^>]*>/gu)) {
   const image = match[0];
   check(/\swidth="\d+"/u.test(image), `image is missing width: ${image.slice(0, 90)}`);
@@ -173,36 +180,31 @@ for (const match of html.matchAll(/<img\b[^>]*>/gu)) {
 }
 
 check(
-  html.includes('loading="lazy"') && html.includes('decoding="async"'),
-  "below-fold imagery must be lazy and asynchronously decoded",
-);
-check(
   notFound.includes('<base href="https://gonzih.github.io/kittens-rs/">'),
   "404 page must resolve relative assets from the project root",
 );
 check(occurrences(notFound, /<h1(?:\s|>)/gu) === 1, "404.html must contain exactly one h1");
 
 const requiredCopy = [
-  "Async Rust.",
-  "Fewer surprises.",
-  "The coding agent that picks up where it left off.",
-  "cargo install kittens-code-cli --version 0.0.1",
-  "Make the important order explicit.",
-  "It checks the coordination you declare—not arbitrary Rust or the outside world.",
+  "Make the whole agent explicit.",
+  "Kittens is a Rust constraint language for expressing FRONTMATTER, HARNESS, COGNITION, and the async law between them—then checking declared orchestration at compile time.",
+  "what the human sees and touches",
+  "the loop, tools, context, and control",
+  "the model and token generation",
+  "kittens-code is the HARNESS profile built on Kittens.",
+  "It checks declared structure. Handler behavior, raw Rust, and external event order remain outside that boundary.",
   "Experimental. APIs may change.",
   "No cookies. No analytics.",
 ];
 
 for (const copy of requiredCopy) {
-  check(html.includes(copy), `required evidence-boundary copy is missing: ${copy}`);
+  check(marketingText.includes(copy), `required whole-agent copy is missing: ${copy}`);
 }
 
-const requiredMarketingLinks = [
+for (const url of [
   "https://github.com/Gonzih/kittens-rs",
   "https://crates.io/crates/kittens-code-cli",
-];
-
-for (const url of requiredMarketingLinks) {
+]) {
   check(html.includes(`href="${url}"`), `required marketing link is missing: ${url}`);
 }
 
@@ -219,8 +221,6 @@ for (const internalMarker of [
   "deferred scope",
   "research archive",
   "frozen contract",
-  "frontmatter",
-  "harness",
   "topology",
   "sans-io",
   "rlm",
@@ -239,53 +239,86 @@ for (const internalMarker of [
   );
 }
 
+for (const oldPositioning of [
+  "async rust.",
+  "fewer surprises",
+  "picks up where it left off",
+  "work survives restarts",
+  "long conversations stay searchable",
+  "default demo runs offline",
+  "cargo install",
+  "meet kittens-code",
+  "make the important order explicit",
+]) {
+  check(!publicMarkup.toLowerCase().includes(oldPositioning), `old positioning leaked: ${oldPositioning}`);
+}
+
 for (const noisySurface of [
   "art-chip",
   "hero__proofs",
   "outcome-grid",
   "value-grid",
   "family-list",
+  "product__",
+  "product-art",
+  "install-command",
+  "copy-button",
+  "button--",
+  "class=\"idea",
 ]) {
   check(!html.includes(noisySurface), `forbidden explanatory surface found: ${noisySurface}`);
 }
 
-check(!/<figcaption(?:\s|>)/u.test(html), "visible artwork must not carry a caption");
-check(!/<ol(?:\s|>)/u.test(html), "marketing page must not contain a numbered-card list");
+for (const forbiddenTag of ["button", "figcaption", "form", "h2", "ol", "pre", "script"]) {
+  check(!new RegExp(`<${forbiddenTag}(?:\\s|>)`, "u").test(html), `forbidden marketing tag found: ${forbiddenTag}`);
+}
 
 const heroArt = html.match(/<div class="hero-art">([\s\S]*?)<\/div>/u)?.[1] ?? "";
 check(heroArt.length > 0, "missing hero artwork");
 check(occurrences(heroArt, /<img(?:\s|>)/gu) === 1, "hero artwork must contain exactly one image");
 check(!/<(?:p|span|strong|small|code)(?:\s|>)/u.test(heroArt), "hero artwork must not be annotated");
+check(!html.includes('src="assets/kittens-social-card.png"'), "social card must remain metadata-only");
+
+const layers = html.match(/<dl class="layers"[\s\S]*?>([\s\S]*?)<\/dl>/u)?.[1] ?? "";
+check(layers.length > 0, "missing three-layer definition list");
+check(occurrences(layers, /<dt(?:\s|>)/gu) === 3, "layer model must contain exactly three terms");
+check(occurrences(layers, /<dd(?:\s|>)/gu) === 3, "layer model must contain exactly three definitions");
+for (const layer of ["FRONTMATTER", "HARNESS", "COGNITION"]) {
+  check(occurrences(layers, new RegExp(`<dt>${layer}</dt>`, "gu")) === 1, `layer is missing or duplicated: ${layer}`);
+}
 
 for (const forbiddenClaim of [
   "prevents all race conditions",
   "guarantees all concurrency",
   "production-ready",
   "99.9999% coverage",
+  "verifies everything",
+  "checks everything",
 ]) {
-  check(!html.toLowerCase().includes(forbiddenClaim), `forbidden overclaim found: ${forbiddenClaim}`);
+  check(!publicMarkup.toLowerCase().includes(forbiddenClaim), `forbidden overclaim found: ${forbiddenClaim}`);
 }
 
-check(css.includes("@media (prefers-reduced-motion: reduce)"), "missing reduced-motion override");
+check(css.includes("@media (prefers-reduced-motion: reduce)"), "missing reduced-motion policy");
 check(css.includes(":focus-visible"), "missing visible keyboard focus styling");
-check(css.includes("scroll-padding-top"), "sticky navigation must reserve anchor scroll space");
+check(css.includes("scroll-padding-top"), "header must reserve anchor scroll space");
 check(css.includes("min-height: 44px"), "interactive controls must carry the 44px target policy");
+for (const decorativeMotion of ["@keyframes", "animation:", "transition:"]) {
+  check(!css.includes(decorativeMotion), `decorative motion returned: ${decorativeMotion}`);
+}
+for (const launchEffect of ["gradient(", "box-shadow:", "backdrop-filter:"]) {
+  check(!css.includes(launchEffect), `launch-theater visual effect returned: ${launchEffect}`);
+}
 
 const palette = new Map();
 for (const match of css.matchAll(/--([a-z][a-z-]+):\s*(#[0-9a-f]{6});/gu)) {
   palette.set(match[1], match[2]);
 }
 
-const contrastPairs = [
+for (const [foreground, background, minimum] of [
   ["ink", "paper", 4.5],
   ["ink-soft", "paper", 4.5],
-  ["coral-deep", "coral-soft", 4.5],
-  ["teal", "paper", 4.5],
-  ["night-text", "night", 4.5],
-  ["ink", "coral", 4.5],
-];
-
-for (const [foreground, background, minimum] of contrastPairs) {
+  ["coral-deep", "paper", 4.5],
+]) {
   check(palette.has(foreground), `missing CSS palette token: --${foreground}`);
   check(palette.has(background), `missing CSS palette token: --${background}`);
   if (palette.has(foreground) && palette.has(background)) {
@@ -297,18 +330,7 @@ for (const [foreground, background, minimum] of contrastPairs) {
   }
 }
 
-for (const forbiddenRuntime of [
-  "fetch(",
-  "XMLHttpRequest",
-  "sendBeacon",
-  "localStorage",
-  "sessionStorage",
-  "document.cookie",
-]) {
-  check(!javascript.includes(forbiddenRuntime), `runtime network/tracking surface found: ${forbiddenRuntime}`);
-}
-
-check(!/<form(?:\s|>)/u.test(html), "W0 must not include a form");
+check(!/<form(?:\s|>)/u.test(html), "W0.4 must not include a form");
 check(!/<(?:script|img)[^>]+src="https?:/u.test(html), "remote runtime or image dependency found");
 check(!/<link[^>]+rel="stylesheet"[^>]+href="https?:/u.test(html), "remote stylesheet found");
 
@@ -326,7 +348,7 @@ let build;
 try {
   build = JSON.parse(buildText);
   check(build.schema_version === 1, "unexpected build.json schema version");
-  check(build.site_version === "W0.3", "unexpected site version in build.json");
+  check(build.site_version === "W0.4", "unexpected site version in build.json");
   check(/^[0-9a-f]{40}$/u.test(build.source_commit), "build.json needs a full source commit");
   check(
     build.source_repository === "https://github.com/Gonzih/kittens-rs",
@@ -354,22 +376,12 @@ check(socialRatio >= 1.85 && socialRatio <= 2, `social card ratio ${socialRatio.
 const touchIcon = pngDimensions("assets/apple-touch-icon.png");
 check(touchIcon.width === 180 && touchIcon.height === 180, "apple touch icon must be 180x180");
 
-const initialPaths = [
-  "index.html",
-  "styles.css",
-  "script.js",
-  "assets/kittens-logo.webp",
-];
+const initialPaths = ["index.html", "styles.css", "assets/kittens-logo.webp"];
 const initialBytes = initialPaths.reduce(
   (total, path) => total + (existsSync(join(targetDirectory, path)) ? statSync(join(targetDirectory, path)).size : 0),
   0,
 );
-const scrolledBytes = initialBytes +
-  (existsSync(join(targetDirectory, "assets/kittens-yarn-banner.webp"))
-    ? statSync(join(targetDirectory, "assets/kittens-yarn-banner.webp")).size
-    : 0);
-check(initialBytes < 250 * 1024, `initial page budget is ${initialBytes} bytes; expected under 256000`);
-check(scrolledBytes < 500 * 1024, `full page budget is ${scrolledBytes} bytes; expected under 512000`);
+check(initialBytes < 200 * 1024, `initial page budget is ${initialBytes} bytes; expected under 204800`);
 
 const digest = treeDigest(targetDirectory);
 
@@ -380,6 +392,6 @@ if (failures.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `Website checks passed (${initialBytes} initial bytes, ${scrolledBytes} scrolled bytes, sha256 ${digest.slice(0, 16)})\n`,
+    `Website checks passed (${initialBytes} initial bytes, sha256 ${digest.slice(0, 16)})\n`,
   );
 }
