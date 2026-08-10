@@ -1,7 +1,7 @@
 {
-  "name": "Kittens — async Rust, fewer surprises",
+  "name": "Kittens — make the whole agent explicit",
   "short_name": "Kittens",
-  "description": "Kittens turns async coordination rules into compiler feedback. Meet kittens-code, the coding agent that picks up where it left off.",
+  "description": "A Rust constraint language for FRONTMATTER, HARNESS, COGNITION, and the async law between them.",
   "start_url": "./",
   "scope": "./",
   "display": "browser",

@@ -22,7 +22,6 @@ const requiredSourceFiles = [
   "index.html",
   "404.html",
   "styles.css",
-  "script.js",
   "robots.txt",
   "sitemap.xml",
   "site.webmanifest",
@@ -81,10 +80,6 @@ cpSync(sourceDirectory, outputDirectory, { recursive: true });
 const outputAssets = join(outputDirectory, "assets");
 mkdirSync(outputAssets, { recursive: true });
 cpSync(join(repositoryRoot, "assets/kittens-logo.webp"), join(outputAssets, "kittens-logo.webp"));
-cpSync(
-  join(repositoryRoot, "assets/kittens-yarn-banner.webp"),
-  join(outputAssets, "kittens-yarn-banner.webp"),
-);
 
 const replacements = new Map([
   ["__SOURCE_SHA__", sourceCommit],
@@ -105,7 +100,7 @@ for (const filename of ["index.html", "404.html", "sitemap.xml", "robots.txt"]) 
 const buildMetadata = {
   name: "kittens-public-website",
   schema_version: 1,
-  site_version: "W0.3",
+  site_version: "W0.4",
   source_commit: sourceCommit,
   source_date: sourceDate,
   source_repository: "https://github.com/Gonzih/kittens-rs",

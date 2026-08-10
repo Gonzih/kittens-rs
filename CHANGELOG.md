@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- Strip the public Kittens site to a three-section launch page: remove floating
-  remember/recover labels, proof chips, numbered outcome and value cards,
-  ecosystem lists, image captions, repeated install prompts, and internal
-  implementation language; keep one hero, one `kittens-code` payoff and
-  install, and one statement of the Kittens idea.
+- Restore the public Kittens site to the repository's actual whole-agent
+  thesis: FRONTMATTER, HARNESS, and COGNITION expressed through one Rust
+  constraint language. Remove the generic restart/search/offline agent pitch,
+  install surface, product panel, second illustration, and decorative motion;
+  keep one page, one image, one architecture, and the honest compile boundary.
 - Launch the public Kittens website on GitHub Pages with the canonical
   cat-and-yarn artwork, bespoke `kittens-code` social card, accessible static
   markup, deterministic provenance, and no analytics or cookies.
