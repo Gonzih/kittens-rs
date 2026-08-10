@@ -8,12 +8,21 @@
   contract.
 - Revision 4, 2026-08-09: records the pinned-HAL async-buffer/configuration
   audit that informed SPEC revision 11's additive single-payload adapter.
+- Revision 5, 2026-08-09: reconciles the completed K2R-0A feasibility matrix
+  with K2R-0 freeze and K2R-1 target ownership, and records the normalized-
+  package/registry-HAL compatibility gap selected by SPEC revision 12.
+- Revision 6, 2026-08-09: records the clean committed package-consumer result
+  that closes revision 12's local compatibility row with packaged-source +
+  registry-HAL Xtensa-link scope.
 - Status: research record for the embedded rendering/interaction profile.
-  SPEC revision 10's blocking row is closed with host + exact-Xtensa-link
-  scope. Revision 11's concrete async-region design is implemented and its
-  evidence row is closed with host + exact-Xtensa-reactor-link scope after the
-  exact host and target matrix passed. Target execution, silicon behavior, and
-  the generic capability freeze remain separate gates.
+  K2R-0A is closed with host + portable-link + exact-Xtensa-link scope. SPEC
+  revision 10's blocking row and revision 11's concrete async-region row are
+  closed with their named host + target-link scopes. K2R-0 freeze remains
+  gated on the bilateral seam and generic capability sealing. K2R-1 owns
+  target execution, the board coordinator, silicon behavior, and measurements.
+  Clean packaged-source registry-HAL compatibility is separately **CLOSED WITH
+  PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**; publication remains
+  human-ordered.
 - Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
 - Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
@@ -91,11 +100,12 @@ rearmable `OptionalInlineOneShot<F>` for `F: Future + Unpin`; render's
 conditionally-`Unpin` owning `InFlight` retains one reviewed SPI2 completion
 slot future across polls. The real-reactor host/portable row and the branded
 adapter's host + exact-Xtensa-reactor-link row are closed with their named
-scopes. Target execution and silicon interrupt truth remain gated.
+scopes. This resolves the K2R-0A feasibility question. A real target executor,
+its waker behavior, and silicon interrupt truth remain K2R-1 gates.
 
-**Fact (finding 9):** the FT3168 path has the same shape: a one-bit latch cleared after a multi-transaction I²C read loses or fabricates input under IRQ interleavings. **Recommendation:** ISR-side wake-aware *generation* latch; task-side single contiguous register snapshot; parse count/event/ID from that snapshot; drain while INT is asserted; restore pending state on I²C failure; and the source declares itself as *latest-state-with-coalescing* or *lossless-transitions* — one latch cannot promise both.
+**Fact (finding 9):** the FT3168 path has the same shape: a one-bit latch cleared after a multi-transaction I²C read loses or fabricates input under IRQ interleavings. **Recommendation:** ISR-side wake-aware *generation* latch; task-side single contiguous register snapshot; parse count/event/ID from that snapshot; drain while INT is asserted; restore pending state on I²C failure; and the source declares itself as *latest-state-with-coalescing* or *lossless-transitions* — one latch cannot promise both. K2R-0A selected and tested the host generation/latch protocol; concrete TP_INT wake delivery and the contiguous physical transaction are K2R-1 integration work.
 
-**Fact (finding 10):** shared-I²C arbitration, expander register shadowing, reset epochs, and serialized panel commands (brightness/AOD/sleep interleaved with CASET/PASET/RAMWR) need one owner. **Recommendation:** a board coordinator owns them, or Off/AOD semantics are removed from the initial profile. Initial profile: **removed**; the coordinator is its own later slice with the SH8601 command surface as evidence.
+**Fact (finding 10):** shared-I²C arbitration, expander register shadowing, reset epochs, and serialized panel commands (brightness/AOD/sleep interleaved with CASET/PASET/RAMWR) need one owner. **Recommendation:** a board coordinator owns them, or Off/AOD semantics are removed from the initial profile. Initial profile: **removed**; the real coordinator is K2R-1 work with the SH8601 command surface as evidence.
 
 ## 6. Transport decision that gates everything
 
@@ -104,7 +114,7 @@ scopes. Target execution and silicon interrupt truth remain gated.
 | Option | Cost | Verdict |
 |---|---|---|
 | stock `sh8601-rs`, full PSRAM framebuffer | 329,728 B PSRAM + bandwidth math of section 4; alloc in `partial_flush` | viable for first light (K2R-1 baseline); measured, not assumed |
-| upstream/fork a `write_region(region, pixels)` transport | driver work + review; enables stripes and the owning-DMA path | required for the stripe/DMA architecture; **gate before the SPEC freezes** |
+| upstream/fork a `write_region(region, pixels)` transport | driver work + review; enables stripes and the owning-DMA path | historical gate resolved by SPEC revision 10's profile-owned transaction; upstream disposition remains separate |
 
 **Observation (revision 3 exact-source audit):** `sh8601-rs` 0.1.8 resolves to
 commit `4bcddfd529017135f19a5a9a6e79dd6b8ef1b460`. Its `set_window` rejects the
@@ -154,7 +164,50 @@ implementation as the explicit non-sealed control. Because exact construction
 otherwise owns SPI2 before the still-external panel initializer can run, expose
 one visibly exceptional idle-command closure whose private-field borrowed
 facade exposes command writes but cannot move, replace, or reconfigure the
-underlying bus; do not mislabel those raw commands as part of the stripe proof.
+underlying bus; do not mislabel those raw commands as part of the stripe proof
+or as the K2R-1 coordinator.
+
+**Fact (revision 5 package-source audit):** Cargo's multiple-locations form
+uses the exact git HAL while developing in the repository but normalizes the
+packaged target dependency to registry `esp-hal =1.1.0`. The historical
+package evidence was produced from a dirty tree and verified only the host
+package target. It did not compile an external Xtensa consumer against the
+normalized source identity.
+
+**Recommendation (adopted by SPEC revision 12):** retain the exact-git fixture
+as the source-revision control and add an independent clean packaged-source
+consumer. Extract the candidate archive outside the checkout, compose its
+public constructor with direct registry singleton types, and run direct
+packaged-library plus consumer target Clippy, optimized link, metadata-source,
+undefined-symbol, allocator-symbol, and retained-hook gates. This is locally
+executable package compatibility, not crates.io publication or target runtime.
+
+**Fact (revision 6 clean package-consumer result):** from clean
+implementation commit `c3e234770ce2de9a277e947f8cf8547700abea28`, locked
+Cargo 1.96 packaging produced a 206,609-byte archive with SHA-256
+`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`.
+Its VCS record names that exact commit and `crates/kittens-render`, with no
+dirty marker. The extracted package and standalone consumer resolve exactly
+one registry `esp-hal` 1.1.0, checksum
+`6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`,
+and zero git packages; the staged Xtensa configuration hashes to
+`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`.
+Direct packaged-library and consumer target Clippy pass. The locked optimized
+ELF is 206,248 bytes with SHA-256
+`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`,
+entry `0x403785e8`, and 56,680 bytes of `.bss`; undefined and allocator scans
+are empty, while the exact parts and async-start hooks remain as nonzero text
+symbols of sizes `0x20` and `0x16bd`.
+
+**Observation (revision 6 scope and review):** this closes only **PACKAGED-
+SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**. The async-start hook is retained but
+uncalled, so publication, target execution, interrupt/cancel/drop behavior,
+arbitrary-waker allocation, and silicon truth remain outside the evidence.
+Claude Code 2.1.224 `claude-opus-4-8` at maximum effort reported **SOUND, zero
+P0–P2 defects**; the retained report is
+`reviews/2026-08-09-packaged-registry-implementation-precommit-claude.md`.
+The already published 0.1.1 is immutable older source, and any future correctly
+versioned release remains human-ordered.
 
 ## 7. What kittens-render is (boundary, post-review)
 
@@ -166,9 +219,9 @@ and `embedded-graphics` global-coordinate targets as the composition boundary.
 The profile now owns the one minimal private SH8601 region transaction selected
 by SPEC revision 10 and the board-branded single-payload async composition
 selected by SPEC revision 11, superseding the earlier blanket exclusion of
-display-driver internals. It still does not own a complete driver, panel initialization,
-widgets/layout, HAL, executor, power/AOD (deferred to the board coordinator
-slice), or Slint.
+display-driver internals. It still does not own a complete driver, observed
+panel initialization, widgets/layout, HAL, executor, power/AOD, or the real
+board coordinator (all target ownership is staged in K2R-1), or Slint.
 
 ## 8. Naming
 
@@ -180,19 +233,26 @@ written/unwritten `StripeSettlement`; the async path retains its separate
 
 ## 9. Slice plan and measured gates (replacing revision 1's plan per finding 11)
 
-1. **K2R-0A — pinned-source/completion feasibility spike** against exact pinned HAL SHAs: prove completion wake-up and full resource recovery with no hidden task or allocation; outcome decides kernel pin-admission versus Embassy-boundary delivery.
-2. **K2R-0 — adversarial host protocol suite:** lost-wake interleavings, busy requests, dropped permits, failure/cancellation recovery carrying resources, absolute deadlines, and full-frame versus stripe pixel-equivalence oracles (FrameEpoch reconstruction correctness).
-3. **K2R-1 — V1 board baseline:** stock full-framebuffer path; record exact memory (static, stacks, heap high-water), allocation count after init, TE edge behavior by panel mode, flush latency, and touch latency *during* flush.
+1. **K2R-0A — CLOSED with host + portable-link + exact-Xtensa-link scope:** the pinned-source/completion feasibility spike selected the inline carrier and profile-owned adapter shapes. Its target artifacts are unexecuted link evidence, not runtime/HIL.
+2. **K2R-0 — host protocol evidence passed; freeze GATED on exactly two items:** co-sign the bilateral `kittens-code` seam and pass its foreign fixture; seal `FlightStarter`/`OwnedTransfer` at an authorized breaking API boundary. Publication is not a freeze prerequisite.
+3. **K2R-1 — target runtime and V1 board baseline:** integrate a real executor and minimal board coordinator, TP_INT/FT3168 transaction, panel initialization, and the stock full-framebuffer comparison; record exact memory (static, stacks, heap high-water), allocation count after init, SPI2/touch wake and cancel/drop behavior, TE edge behavior by panel mode, flush latency, and touch latency *during* flush.
 4. **K2R-2 — DMA overlap, conditionally:** only if it improves total frame time or p99 input latency under a fixed workload versus K2R-1, with failure injection at every command/chunk boundary.
 
-Per the review verdict: only the K2R-0A/K2R-0 contract graduates into the first SPEC; board DMA overlap is not specified until its gate has numbers.
+The clean packaged-source registry-HAL link is an orthogonal release-readiness
+row between repository development and any human-ordered publication. It is
+**CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**, but is not a
+K2R acceptance condition and does not authorize publication. Board DMA overlap
+is not specified until its gate has numbers.
 
 ## 10. Review log
 
-External review, 2026-08-08: Codex `gpt-5.6-sol`, ultra reasoning effort, read-only repository access, 14 numbered findings (5 blocking, 8 important, 1 minor), full text retained in the session transcript. Disposition: findings 1–11 adopted as written above; finding 12 adopted (vocabulary split); finding 13's type signatures adopted as the leading candidate pending the K2R-0A prototype; finding 14 (worktree missing `AGENTS.md`/`kittens-tui` SPEC at the reviewed commit) resolved by rebasing this branch onto main once PR #2 merges, before any SPEC graduation. Verdict accepted: **not ready to graduate**; the section 9 gates control.
+External review, 2026-08-08: Codex `gpt-5.6-sol`, ultra reasoning effort, read-only repository access, 14 numbered findings (5 blocking, 8 important, 1 minor), full text retained in the session transcript. Disposition: findings 1–11 adopted as written above; finding 12 adopted (vocabulary split); finding 13's type signatures adopted as the leading candidate pending the K2R-0A prototype; finding 14 (worktree missing `AGENTS.md`/`kittens-tui` SPEC at the reviewed commit) resolved by rebasing this branch onto main once PR #2 merges, before any SPEC graduation. Historical verdict accepted: **not ready to graduate** under the then-current section-9 gates. Subsequent evidence and SPEC revision 12 supersede that prospective status; current acceptance is the explicit SPEC section-11 map.
 
 **Gap: V1 TE measured behavior (edge/mode/safe-phase/tearing) — no data until K2R-1.**
 **Gap: upstream disposition for the local `write_region` transaction — no
 maintainer contact yet; this does not block the profile-owned revision-10
 gate.**
 **Gap: SH8601 blocking-flush duration per full frame under `sh8601-rs` on this board — no data until K2R-1.**
+**Observation: clean packaged-source registry-HAL Xtensa composition — CLOSED
+WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE by the revision-12 local
+gate. crates.io publication remains separate and human-ordered.**

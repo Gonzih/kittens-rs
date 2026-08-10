@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- Close the revision-12 clean local packaged-source + registry-`esp-hal`
+  Xtensa consumer row from implementation commit
+  `c3e234770ce2de9a277e947f8cf8547700abea28`. Locked Cargo 1.96 packaging
+  produced a 206,609-byte archive
+  (`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`)
+  with exact commit/path provenance and no dirty marker; the package and
+  consumer resolve exactly one registry `esp-hal` 1.1.0 with checksum
+  `6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`
+  and zero git packages. The exact staged Xtensa configuration
+  (`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`),
+  direct packaged-library and consumer target Clippy, and locked optimized
+  link pass. The resulting 206,248-byte ELF
+  (`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`)
+  has entry `0x403785e8`, 56,680 bytes of `.bss`, no undefined symbols, zero
+  allocator-filter matches, and retained 0x20-byte parts plus 0x16bd-byte
+  async-start hooks.
+  The external implementation review reports SOUND with zero P0–P2 defects.
+  This closes only **PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**;
+  crates.io publication remains human-ordered, crates.io 0.1.1 remains
+  immutable older source, and K2R-0 freeze, K2R-1 runtime/HIL, arbitrary-waker
+  allocation behavior, and silicon behavior remain separate gates.
+- Run the recurring packaged-source clean-provenance step before the pinned
+  Xtensa installer. The third-party composite action downloads its `espup`
+  archive into the checkout, so installing first correctly tripped the clean-
+  tree guard before packaging; the reordered job preserves that guard instead
+  of weakening it around bootstrap artifacts.
+- Repair the `kittens-render` acceptance map in spec revision 12: K2R-0A is
+  closed with host + portable-link + exact-Xtensa-link scope; K2R-0 freeze is
+  gated on exactly the bilateral seam and generic async capability sealing;
+  K2R-1 owns the target executor, board coordinator, runtime/HIL, and measured
+  budgets. Select, but do not yet claim, a separate clean local packaged-source
+  + registry-`esp-hal` Xtensa compatibility gate. The locally generated 0.1.1
+  archive is package-shape evidence only because crates.io 0.1.1 is older
+  immutable source; any future release remains correctly versioned and human-
+  ordered. No implementation, version change, or publication is claimed by
+  this spec-first entry.
 - Add the spec-first, profile-owned Waveshare V1 async-region adapter with exact
   SPI2/DMA_CH0/GPIO branding, recoverable pre-admission parts, a non-swappable
   idle-command facade, shared CASET/PASET truth, and one owning RAMWR payload
@@ -9,8 +45,9 @@
   controls, direct target Clippy, and locked no-allocator generated-reactor/
   drop-glue Xtensa link and symbol gates pass, closing the named adapter row
   with host + exact-Xtensa-reactor-link scope. Generic trait sealing, async
-  RAMWRC, target execution, arbitrary-waker allocation behavior, publication,
-  and every physical-panel claim remain separate gates.
+  RAMWRC, K2R-0 seam/sealing, K2R-1 target execution and physical truth, the
+  local packaged-source compatibility row, arbitrary-waker allocation
+  behavior, and any future publication remain separate gates.
 - Add the sealed, profile-owned blocking SH8601 region path as the sole
   `StripeTarget::write_region` operation. The exact host matrix proves all
   eight CASET/PASET/RAMWR/RAMWRC calls, all eight injected failure boundaries,
@@ -18,9 +55,10 @@
   poisoning, and eight compile-fail plus one explicit-drop compile-pass
   controls. The exact `esp-hal` revision links a real multichunk SPI2/GDMA
   invocation without undefined or allocator symbols, closing this row with
-  host + exact-Xtensa-link scope only; published-registry Xtensa consumption,
-  async capability sealing, target-side reactor execution, the bilateral seam,
-  and every physical-panel/HIL claim remain open.
+  host + exact-Xtensa-link scope only; the local packaged-source registry-HAL
+  target row, K2R-0 async capability sealing/bilateral seam, K2R-1 target
+  execution and physical-panel/HIL work, and any future publication remain
+  separate.
 - Admit the portable, allocation-free `OptionalInlineOneShot` source for
   `Future + Unpin` and drive render `InFlight` completion through a real
   generated reactor. Deterministic tests cover both selection-loss positions,
@@ -109,7 +147,7 @@
   `Tick::MAX` horizons; add explicit move-only witness controls; and publish
   the safe shared-backing sent-buffer/spare escape.
 - Complete the `kittens-render` exit-review Batch 7 repair: replace the
-  callback starter with seal-at-freeze `FlightStarter` and state target/start
+  callback starter with K2R-0-breaking-freeze `FlightStarter` and state target/start
   structure only for sealed integrations; reject sweep abort while a target is
   outstanding; carry idle invalidation into the next minted sweep; bound the
   flight-drop-plus-abandon escape with the reviewed adapter's synchronous
