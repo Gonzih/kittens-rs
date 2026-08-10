@@ -65,10 +65,11 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
    **profile-owned async adapter — CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK
    SCOPE**: their detailed evidence remains recorded below and in the trace
    manifest.
-5. **Clean packaged-source + registry-HAL Xtensa consumer — OPEN, CONTRACT
-   SELECTED**: revision 12 separates this locally executable compatibility
-   check from a future correctly versioned publication. The already published
-   0.1.1 artifact is older source and cannot represent the current tree.
+5. **Clean packaged-source + registry-HAL Xtensa consumer — CLOSED WITH
+   PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**: the clean committed
+   archive, single registry-HAL graph, direct package/consumer Clippy, and
+   retained-path optimized link pass. The already published 0.1.1 artifact is
+   older source and cannot represent the current tree.
 6. **Future publication — HUMAN-ORDERED, NOT AUTHORIZED HERE**: upload, index
    availability, and exact-version download smoke for a future correctly
    versioned release remain an orthogonal action.
@@ -561,15 +562,19 @@ multiple-locations fallback. That historical run used a dirty worktree and
 compiled only the host package verification target; it is not the revision-12
 clean packaged-source Xtensa consumer gate.
 
-**Observation:** these results close only the blocking `write_region` row with
-**HOST + EXACT-XTENSA-LINK SCOPE**. They do not close the async capability
-sealing gate, target-side reactor execution, the bilateral seam, or any board-
-HIL property. They also do not prove that the normalized package and an
-external Xtensa consumer compile one registry-source HAL type identity.
+**Historical observation:** these results closed only the blocking
+`write_region` row with
+**HOST + EXACT-XTENSA-LINK SCOPE**. Those results did not close the async
+capability sealing gate, target-side reactor execution, the bilateral seam, or
+any board-HIL property. At that point they also did not prove that the
+normalized package and an external Xtensa consumer compiled one registry-
+source HAL type identity.
 
-**Gap — revision-12 local package gate:** clean packaged-source + registry-HAL
-Xtensa consumption remains unverified pending the selected section-9.1 matrix
-(no packaged-target data exists). This gate requires no publication.
+**Historical gap — CLOSED by the revision-12 local package gate:** clean
+packaged-source + registry-HAL Xtensa consumption was not verified by the
+revision-10 artifact. The later clean result recorded below closes that
+separate row with **PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE** and
+requires no publication.
 
 **Gap — future publication:** crates.io upload, index availability, and an
 exact-version Xtensa download smoke for a correctly versioned future release
@@ -655,14 +660,14 @@ controls, target hooks, and CI. The retained report is
 
 This is the pre-revision-9 publication-readiness sequence for the already
 published historical 0.1.1 source. Its `--allow-dirty` archive is not current-
-HEAD provenance and is an explicit non-control for revision 12's local package
-gate.
+HEAD provenance and remains an explicit non-control for revision 12's later
+clean local package result.
 
 **Fact — crates.io dry-run evidence (verbatim):**
 
 > 'cargo publish -p kittens-render --dry-run --allow-dirty' from the workspace root succeeded — 'Packaged 103 files, 436.0KiB (122.1KiB compressed)', packaged crate verified/compiled, upload reached and aborted only by the dry-run flag.
 
-## Revision-12 acceptance reconciliation and package-gate selection (2026-08-09)
+## Revision-12 acceptance reconciliation, package-gate selection, and closure (2026-08-09)
 
 **Observation — acceptance drift:** every literal K2R-0A feasibility criterion
 now has its required design, finite host, portable-link, and exact-HAL target-
@@ -699,13 +704,47 @@ target Clippy, link the locked optimized ELF, and repeat the existing
 undefined/allocator/nonzero-symbol inspections. Keep the exact-git fixture
 independent.
 
-**Gap — selected local package row:** no clean packaged-source registry-HAL
-Xtensa result exists yet. Passing it will close only **PACKAGED-SOURCE +
-REGISTRY-HAL XTENSA-LINK SCOPE**; it cannot prove crates.io upload/index/
-download, target execution, arbitrary-waker allocation, or silicon behavior.
+**Fact — authoritative clean package result:** from clean implementation commit
+`c3e234770ce2de9a277e947f8cf8547700abea28`,
+`cargo +1.96.0 package -p kittens-render --locked` produced a 206,609-byte
+archive with SHA-256
+`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`.
+Its `.cargo_vcs_info.json` names that exact commit and
+`crates/kittens-render`, with no dirty marker. The extracted package and
+standalone consumer locks and metadata contain exactly one registry
+`esp-hal` 1.1.0 with checksum
+`6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`
+and zero git packages. The staged fixture configuration exactly matches the
+committed one and hashes to
+`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`.
+
+**Fact — target inspection:** direct packaged-library and standalone-consumer
+target Clippy pass. The locked optimized Xtensa ELF is 206,248 bytes with
+SHA-256
+`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`,
+entry `0x403785e8`, and 56,680 bytes of `.bss`; its undefined-symbol and
+allocator scans each match zero entries. `nm -S -C` retains the exact
+`linked_packaged_registry_parts` (`0x20`) and
+`linked_packaged_registry_start` (`0x16bd`) text symbols.
+
+**Observation — scoped closure:** the revision-12 local row is **CLOSED WITH
+PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**. It proves that the clean
+normalized package and a standalone direct-registry-HAL consumer share the
+required target type identity and codegen/link successfully. The retained
+async-start hook is uncalled, so this cannot prove crates.io upload/index/
+download, target execution, interrupt/cancel/drop behavior, arbitrary-waker
+allocation, or silicon behavior. The already published 0.1.1 remains immutable
+older source; a future correctly versioned publication remains human-ordered.
 
 **Observation — revision-12 spec review:** Claude Code 2.1.224
 `claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
 after the acceptance/publication wording and fixture-controlled `build-std`
 details were repaired. The retained report is
 `reviews/2026-08-09-packaged-registry-spec-precommit-claude.md`.
+
+**Observation — revision-12 implementation review:** Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after tracing package provenance, source identity, fixture structure, target
+Clippy, retained paths, link inspection, and the negative controls. The
+retained report is
+`reviews/2026-08-09-packaged-registry-implementation-precommit-claude.md`.

@@ -104,15 +104,14 @@ commands, or pixels on silicon. The allocator scan constrains this exact
 noop-waker binary only; an arbitrary executor's `RawWaker` callbacks may
 allocate or perform other unchecked work.
 
-**Observation (selected open row):** this fixture resolves the exact git HAL
-revision and is an explicit non-control for revision 12's clean normalized
-packaged-source + registry-HAL Xtensa consumer gate. That separate local gate
-must compose Cargo's extracted package with one registry `esp-hal =1.1.0`
-identity, cross the packaged board constructor and `start_flight`, then pass
-target Clippy, optimized link, and ELF/symbol inspections. It remains open;
-this fixture's green history cannot substitute for it. Even a future pass
-would not authorize publication. Upload, index availability, and exact-version
-download for a correctly versioned release are human-ordered only.
+**Observation (independent package row):** this fixture resolves the exact git
+HAL revision and remains an explicit non-control for revision 12's normalized
+packaged-source + registry-HAL Xtensa consumer gate. That separate clean local
+matrix is now **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**;
+this fixture's green history did not substitute for it. Neither row authorizes
+publication or provides target-runtime/HIL evidence. Upload, index
+availability, and exact-version download for a correctly versioned release are
+human-ordered only.
 
 **Gap: real target-executor polling, board-coordinator serialization, physical
 panel initialization and command acceptance, SPI2 interrupt delivery, exact

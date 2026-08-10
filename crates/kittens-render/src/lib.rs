@@ -13,12 +13,12 @@
 //! executor, board coordinator, target-runtime observations, and board
 //! HIL/silicon delivery belong to K2R-1.
 //!
-//! The local normalized packaged-source + registry-HAL Xtensa consumer row is
-//! selected but remains open until its clean-package matrix passes. The
-//! repository's exact-git fixture is not a control for that source-identity
-//! boundary. Upload, index availability, and exact-version download for a
-//! future correctly versioned release remain human-ordered publication work;
-//! none is implied by K2R-0A closure.
+//! The local normalized package row is closed with packaged-source + registry-
+//! HAL Xtensa-link scope after its clean external-consumer matrix passed. The
+//! repository's exact-git fixture remains an independent non-control for that
+//! source-identity boundary. This is not target-runtime or HIL evidence.
+//! Upload, index availability, and exact-version download for a future
+//! correctly versioned release remain human-ordered publication work.
 //!
 //! The crate core is `#![no_std]`, no-alloc, `#![forbid(unsafe_code)]`. Host
 //! tests model the HAL boundary. The pinned exact-HAL Xtensa compile/link probe

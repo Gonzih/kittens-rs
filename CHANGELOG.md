@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Close the revision-12 clean local packaged-source + registry-`esp-hal`
+  Xtensa consumer row from implementation commit
+  `c3e234770ce2de9a277e947f8cf8547700abea28`. Locked Cargo 1.96 packaging
+  produced a 206,609-byte archive
+  (`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`)
+  with exact commit/path provenance and no dirty marker; the package and
+  consumer resolve exactly one registry `esp-hal` 1.1.0 with checksum
+  `6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`
+  and zero git packages. The exact staged Xtensa configuration
+  (`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`),
+  direct packaged-library and consumer target Clippy, and locked optimized
+  link pass. The resulting 206,248-byte ELF
+  (`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`)
+  has entry `0x403785e8`, 56,680 bytes of `.bss`, no undefined symbols, zero
+  allocator-filter matches, and retained 0x20-byte parts plus 0x16bd-byte
+  async-start hooks.
+  The external implementation review reports SOUND with zero P0–P2 defects.
+  This closes only **PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**;
+  crates.io publication remains human-ordered, crates.io 0.1.1 remains
+  immutable older source, and K2R-0 freeze, K2R-1 runtime/HIL, arbitrary-waker
+  allocation behavior, and silicon behavior remain separate gates.
 - Repair the `kittens-render` acceptance map in spec revision 12: K2R-0A is
   closed with host + portable-link + exact-Xtensa-link scope; K2R-0 freeze is
   gated on exactly the bilateral seam and generic async capability sealing;

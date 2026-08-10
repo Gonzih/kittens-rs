@@ -17,9 +17,10 @@ freeze is gated on exactly the bilateral `kittens-code` seam/foreign fixture
 and generic async capability sealing at a breaking API boundary. K2R-1 owns a
 real target executor, board coordinator, SPI2/TP_INT delivery, board HIL, and
 measurements. Revision 12 separately selects a clean packaged-source +
-registry-HAL Xtensa consumer gate, which is still **OPEN**. Upload/index/
-download for any future correctly versioned release remains a human-ordered
-action. Revision 10's
+registry-HAL Xtensa consumer gate, which is **CLOSED WITH PACKAGED-SOURCE +
+REGISTRY-HAL XTENSA-LINK SCOPE** from a clean local run. Upload/index/download
+for any future correctly versioned release remains a human-ordered action.
+Revision 10's
 sealed, profile-owned blocking
 `write_region` row is **CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE**. The
 kernel-admitted completion carrier and real `reactor!` integration are
@@ -35,7 +36,7 @@ gates passed. This closure likewise makes no target-runtime or silicon claim.
 |---|---|---|
 | `StripeTarget::start_flight` + `StartPermit` + `FlightStarter` + `OwnedTransfer` + `InFlight` | the only public flight construction invokes the operation-bound starter with that target's exact region and a crate-issued, private-constructor, non-`Clone`, lifetime-bound permit; a reported rejection returns the starter error, spare, and target through `StartFlightError`; resources (transport, sent buffer, spare) return on the driven path; cancel settles at its linearization point and wakes; register-then-recheck completion; `InFlight<X, S>` is `Unpin` exactly for `X: OwnedTransfer + Unpin, S: Unpin` | consuming target + unforgeable dispatch permit + private flight constructor/fields + seal-at-K2R-0-breaking-freeze capability contracts + conditional trait bound + compile-fail and runtime oracles; pairing is structural under sealed integrations, while region honesty and acceptance-atomic rejection remain documented obligations during the current 0.1.x open-trait interval |
 | revision-11 concrete async adapter | the profile-owned Waveshare V1 starter accepts one exact region of at most 16,380 logical bytes, shares the blocking engine's CASET/PASET truth, then owns one RAMWR DMA transfer through the existing `InFlight`/`Settled` path | exact peripheral singleton types + private branded transport/start/transfer state + shared private engine + ordinary resource ownership + reviewed concrete-Waker interrupt slot + exact host failure/lifecycle matrix + three target type failures/one Parts pass + direct target Clippy + generated-reactor/drop-glue exact-HAL link/source/symbol gates. External trait implementations, async RAMWRC, synchronous CASET/PASET blocking inside start, arbitrary executor-waker allocation behavior, target execution, and silicon behavior remain explicit non-guarantees |
-| revision-12 packaged-source compatibility gate | the clean normalized package and a standalone consumer must resolve one registry `esp-hal =1.1.0` type identity and compile the public board constructor/async-start path for Xtensa | **OPEN:** exact embedded VCS HEAD/path/clean provenance + Cargo-normalized manifest metadata + fixed-path standalone consumer + direct packaged-library/consumer target Clippy under the fixture's Xtensa `build-std` config + locked link and undefined/allocator/retained-symbol inspections. Host normalization, copied source, `[patch]`, the exact-git fixture, and publication are explicit non-controls |
+| revision-12 packaged-source compatibility gate | the clean normalized package and a standalone consumer resolve one registry `esp-hal =1.1.0` type identity and compile the public board constructor/async-start path for Xtensa | **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE:** clean committed-package provenance + Cargo-normalized metadata + fixed-path external consumer + direct packaged-library/consumer target Clippy + locked link and ELF/undefined/allocator/retained-symbol inspections. Host normalization, copied source, `[patch]`, the exact-git fixture, publication, target execution, and board HIL are explicit non-controls |
 | `StripeTarget::write_region` + `BlockingWritePermit` + `BlockingRegionWrite` + `BlockingSettled` | the sole blocking spelling consumes the outstanding target, exact mutable pixel slice, and admitted writer; only the profile-owned ESP32-S3/SH8601 adapter may implement the sealed capability; every ordinary return carries the same writer and slice plus one owning-sweep written or failed settlement | sealed trait admission + private permit/engine/result/witness state + ordinary ownership + the exact eight-call host trace, eight injected failure boundaries, ten preflight cases, eight compile-fail controls, one explicit-drop compile-pass control, and the exact-HAL no-allocator Xtensa link/symbol gate; raw HAL access, unbranded bus configuration, result drop, handler blocking, and every physical-panel property remain named non-guarantees |
 | `OptionalInlineOneShot<InFlight<...>>` consumer composition | one allocation-free, locally rearmable kernel source retains the accepted flight across lost arbitration and yields its real owned `Settled`; the source is dormant before its handler rearms it, and graceful shutdown borrows the flight for `begin_drain` before settlement | sealed kernel source admission + ordinary ownership + private `InFlight` state/register-then-recheck oracles + real-reactor selection-loss/rearm/drain tests + external Thumb/wasm links; inner-future honesty, cooperative settlement delivery, raw polling/await, mutable future replacement, whole-source drop, and silicon behavior remain named non-guarantees |
 | `Settled::into_parts` + `StripeSettlement` | every extraction returns exactly one move-only reconciliation witness: only real `Completed` recovery yields `Written(StripeWritten)`, while cancellation/failure yields `Unwritten(StripeUnwritten)` and cannot be relabeled as coverage; delivery to the owning sweep is cooperative | private settlement construction + consuming resource extraction + distinct private-field witness types + forge/rewrite/replay/clone compile-fail controls for witness integrity; documentation + `must_use` for delivery, which Rust cannot force |
@@ -67,8 +68,7 @@ Repository builds pin `esp-hal` revision
 Espressif toolchain, while feature-off portable builds retain the Rust 1.85
 floor and empty normal dependency graph. Cargo packages normalize the target
 dependency to registry `esp-hal =1.1.0`; revision 12's separate package gate
-must exercise that normalized source rather than infer compatibility from the
-repository git build.
+exercises that normalized source independently of the repository git build.
 
 The target binds a sweep's current outstanding `StripeTarget` to an exact
 caller-owned `&mut [u8]` of `region.width * region.height * 2` bytes. It keeps
@@ -120,13 +120,12 @@ scans are empty. Nonzero text symbols retain the generated-reactor hook
 (`0x168`), one-poll shim (`0xaf6`), and armed-source drop hook (`0x137`). The
 hooks are uncalled link evidence, not target execution evidence.
 
-**Observation:** historical host package verification succeeds and Cargo's
-generated registry manifest retains `esp-hal =1.1.0` while dropping the
-repository-only git location, as its multiple-locations rule specifies. That
-dirty-worktree host run verifies only normalization. Revision 12's open local
-gate requires a clean current-HEAD archive and an external Xtensa consumer of
-the unpacked package; no publication is required. A future exact-version
-crates.io download smoke remains separately human-ordered.
+**Fact:** revision 12's clean local package matrix passed, closing that row
+with packaged-source + registry-HAL Xtensa-link scope. The normalized package
+and external consumer resolve one registry `esp-hal =1.1.0` identity and pass
+the target Clippy/link boundary. This is not publication, target execution, or
+board-HIL evidence. A future exact-version crates.io download smoke remains
+separately human-ordered.
 
 ## Runnable lifecycle
 
@@ -219,11 +218,12 @@ non-clearing, so another full repaint remains due.
   minimal board coordination, SPI2 and TP_INT delivery, FT3168 contiguous-read
   integration, physical panel/touch/TE behavior, and latency/memory/bandwidth
   measurements remain open. Uncalled linked hooks are non-controls.
-- **Package compatibility is independently open:** the clean packaged-source
-  + registry-HAL Xtensa consumer matrix must pass. The locally generated 0.1.1
-  archive reflects the workspace declaration but is not eligible for
-  republishing; crates.io 0.1.1 is older immutable source. A correctly
-  versioned future-release registry download smoke is a separate human-ordered
-  action, not a K2R acceptance condition and not authorized by this work.
+- **Package compatibility is independently closed with packaged-source +
+  registry-HAL Xtensa-link scope:** the clean local external-consumer matrix
+  passed. The locally generated 0.1.1 archive reflects the workspace
+  declaration but is not eligible for republishing; crates.io 0.1.1 is older
+  immutable source. A correctly versioned future-release registry download
+  smoke is a separate human-ordered action, not a K2R acceptance condition and
+  not authorized by this work.
 - Async RAMWRC/multichunk operation remains deferred to a later measured
   contract.

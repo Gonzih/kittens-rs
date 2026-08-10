@@ -20,12 +20,13 @@ K2R-0 protocol freeze: bilateral seam co-sign and sealing the generic
 executor, the board coordinator, target-runtime observations, and every HIL
 claim belong to K2R-1.
 
-**Observation (selected open row):** revision 12 specifies a separate local
-clean packaged-source + registry-HAL Xtensa consumer gate. Its matrix has not
-yet passed. The exact-git fixture documented below remains the reviewed
-source-revision gate and is an explicit non-control for the normalized package
-source identity. Upload, index availability, and exact-version download for a
-future correctly versioned release remain human-ordered publication work.
+**Fact (revision-12 package row):** the clean local consumer matrix is
+**CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**. The exact-
+git fixture documented below remains the reviewed source-revision gate and an
+explicit non-control for the normalized package source identity. This closure
+does not execute target code or provide HIL evidence. Upload, index
+availability, and exact-version download for a future correctly versioned
+release remain human-ordered publication work.
 
 ## 1. Toolchain (Fact — executed 2026-08-09)
 
@@ -140,37 +141,42 @@ Dependency pinning: the repository-source probe pins the audited HAL revision
 API surface is behind its `unstable` cargo feature — that is HAL API
 stability, not Rust nightly.
 
-### 2.1 Pending clean packaged-source + registry-HAL gate
+### 2.1 Closed clean packaged-source + registry-HAL gate
 
-**Observation:** earlier host package inspection showed that Cargo's generated
-manifest retains registry `esp-hal =1.1.0` while dropping the repository-only
-git location. That observation does not exercise registry type identity or
-target linking and therefore does not pass revision 12's selected gate.
+**Fact (clean local run, 2026-08-09):** the complete section-9.1 matrix passed
+from clean implementation commit
+`c3e234770ce2de9a277e947f8cf8547700abea28`. Cargo 1.96.0 produced a
+206,609-byte normalized archive with SHA-256
+`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`.
+Its `.cargo_vcs_info.json` names that exact commit and
+`crates/kittens-render`, with no dirty marker. The staged fixture config has
+SHA-256
+`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`.
 
-The pending local gate in `crates/kittens-render/SPEC.md` section 9.1 will:
+**Fact (source and type identity):** package and consumer metadata resolve
+exactly one registry `esp-hal` 1.1.0 package, checksum
+`6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`,
+and zero git packages. Direct packaged-library and consumer Xtensa Clippy both
+passed under the staged fixture config.
 
-1. run `cargo +1.96.0 package -p kittens-render --locked` from a clean,
-   committed checkout without `--allow-dirty`, then require the archive's
-   `.cargo_vcs_info.json` to identify exact `HEAD`, the
-   `crates/kittens-render` path, and no truthy dirty marker;
-2. inspect Cargo's generated manifest and metadata for exact registry
-   `esp-hal =1.1.0` with the required target features and no git source;
-3. stage the extracted package and the standalone
-   `fixtures/render-packaged-xtensa-probe` consumer outside the checkout,
-   requiring exactly one registry-sourced `esp-hal` identity and no `[patch]`;
-4. pass direct packaged-library and consumer target Clippy, an optimized
-   locked Xtensa link, ELF/undefined/allocator inspection, and a nonzero
-   retained hook that crosses the packaged board constructor and
-   `start_flight` spelling.
+**Fact (link evidence):** the optimized locked link produced a 206,248-byte
+ELF with SHA-256
+`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`,
+entry `0x403785e8`, and 56,680 bytes of `.bss`. Undefined-symbol and allocator-
+symbol-filter counts are both zero. `nm -a -S -C` retains
+`linked_packaged_registry_parts` at `0x20` bytes and
+`linked_packaged_registry_start` at `0x16bd` bytes. The linked entrypoint calls
+the typed constructor path, while the retained async-start hook remains
+uncalled. Neither path is executed by the build gate; their retention is link
+evidence, not target execution.
 
-This row remains **OPEN** until that complete clean matrix runs. A dirty
-archive, copied source, host-only package verification, or the exact-git
-fixture is a non-control. Passing it will establish only packaged-source +
-registry-HAL Xtensa-link compatibility; it will not execute the hook, prove a
-target executor or interrupt/wake behavior, provide board/HIL evidence, or
-authorize publication. The current crates.io 0.1.1 artifact is immutable older
-source and cannot stand in for this tree. Any future upload must be correctly
-versioned and explicitly human-ordered.
+The row is therefore **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK
+SCOPE**. A dirty archive, copied source, host-only package verification,
+`[patch]`, or the exact-git fixture remains a non-control. This result does not
+prove a target executor, interrupt/wake behavior, runtime cancellation/drop,
+board/HIL behavior, or publication. The current crates.io 0.1.1 artifact is
+immutable older source and cannot stand in for this tree. Any future upload
+must be correctly versioned and explicitly human-ordered.
 
 Firmware shape: `#![no_std]`, `#![no_main]`, `#[esp_hal::main]`, an
 explicit `#[panic_handler]`, no allocator, `panic = "abort"`, fat LTO. The
@@ -213,6 +219,12 @@ the exact-source link evidence to that matrix; it does not by itself close the
 matrix and it does not close K2R-0. The K2R-0 freeze still requires the
 bilateral seam and generic capability seals. Target execution, the real board
 coordinator, and the physical observations excluded below are K2R-1 work.
+
+The independent revision-12 normalized-package row is closed with packaged-
+source + registry-HAL Xtensa-link scope from the clean local run in section
+2.1. It proves the declared Cargo normalization and cross-source type/link
+composition for that artifact, not publication, target execution, interrupt
+delivery, or board behavior.
 
 For the blocking region row, the host matrix plus exact-HAL link and clean
 symbol inspection close only the declared host + exact-Xtensa-link scope: the
@@ -283,8 +295,11 @@ silicon-behavior gate.
 
 This existing job resolves the exact git HAL revision and is therefore an
 explicit non-control for section 2.1's normalized packaged-source + registry-
-HAL row. Revision 12 selects a separate recurring clean-package job, but that
-job and its evidence remain pending at the status recorded here.
+HAL row. Revision 12 also configures a separate recurring
+`xtensa-packaged-link` job to reproduce the clean-package provenance,
+metadata, target-Clippy, locked-link, and artifact inspections. The scoped row
+is closed by the clean local run recorded in section 2.1; no GitHub execution
+of the newly configured job is claimed here yet.
 
 ## 6. Troubleshooting (Fact — each observed in this repo)
 

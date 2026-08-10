@@ -11,14 +11,18 @@
 - Revision 5, 2026-08-09: reconciles the completed K2R-0A feasibility matrix
   with K2R-0 freeze and K2R-1 target ownership, and records the normalized-
   package/registry-HAL compatibility gap selected by SPEC revision 12.
+- Revision 6, 2026-08-09: records the clean committed package-consumer result
+  that closes revision 12's local compatibility row with packaged-source +
+  registry-HAL Xtensa-link scope.
 - Status: research record for the embedded rendering/interaction profile.
   K2R-0A is closed with host + portable-link + exact-Xtensa-link scope. SPEC
   revision 10's blocking row and revision 11's concrete async-region row are
   closed with their named host + target-link scopes. K2R-0 freeze remains
   gated on the bilateral seam and generic capability sealing. K2R-1 owns
   target execution, the board coordinator, silicon behavior, and measurements.
-  Clean packaged-source registry-HAL compatibility is a separate open release-
-  readiness row; publication remains human-ordered.
+  Clean packaged-source registry-HAL compatibility is separately **CLOSED WITH
+  PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**; publication remains
+  human-ordered.
 - Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
 - Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
@@ -178,6 +182,33 @@ packaged-library plus consumer target Clippy, optimized link, metadata-source,
 undefined-symbol, allocator-symbol, and retained-hook gates. This is locally
 executable package compatibility, not crates.io publication or target runtime.
 
+**Fact (revision 6 clean package-consumer result):** from clean
+implementation commit `c3e234770ce2de9a277e947f8cf8547700abea28`, locked
+Cargo 1.96 packaging produced a 206,609-byte archive with SHA-256
+`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`.
+Its VCS record names that exact commit and `crates/kittens-render`, with no
+dirty marker. The extracted package and standalone consumer resolve exactly
+one registry `esp-hal` 1.1.0, checksum
+`6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`,
+and zero git packages; the staged Xtensa configuration hashes to
+`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`.
+Direct packaged-library and consumer target Clippy pass. The locked optimized
+ELF is 206,248 bytes with SHA-256
+`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`,
+entry `0x403785e8`, and 56,680 bytes of `.bss`; undefined and allocator scans
+are empty, while the exact parts and async-start hooks remain as nonzero text
+symbols of sizes `0x20` and `0x16bd`.
+
+**Observation (revision 6 scope and review):** this closes only **PACKAGED-
+SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**. The async-start hook is retained but
+uncalled, so publication, target execution, interrupt/cancel/drop behavior,
+arbitrary-waker allocation, and silicon truth remain outside the evidence.
+Claude Code 2.1.224 `claude-opus-4-8` at maximum effort reported **SOUND, zero
+P0–P2 defects**; the retained report is
+`reviews/2026-08-09-packaged-registry-implementation-precommit-claude.md`.
+The already published 0.1.1 is immutable older source, and any future correctly
+versioned release remains human-ordered.
+
 ## 7. What kittens-render is (boundary, post-review)
 
 Revision-2 boundary, amended by revisions 3–4: sources (generation-latched touch
@@ -208,9 +239,10 @@ written/unwritten `StripeSettlement`; the async path retains its separate
 4. **K2R-2 — DMA overlap, conditionally:** only if it improves total frame time or p99 input latency under a fixed workload versus K2R-1, with failure injection at every command/chunk boundary.
 
 The clean packaged-source registry-HAL link is an orthogonal release-readiness
-row between repository development and any human-ordered publication; it is
-not a K2R acceptance condition. Board DMA overlap is not specified until its
-gate has numbers.
+row between repository development and any human-ordered publication. It is
+**CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE**, but is not a
+K2R acceptance condition and does not authorize publication. Board DMA overlap
+is not specified until its gate has numbers.
 
 ## 10. Review log
 
@@ -221,6 +253,6 @@ External review, 2026-08-08: Codex `gpt-5.6-sol`, ultra reasoning effort, read-o
 maintainer contact yet; this does not block the profile-owned revision-10
 gate.**
 **Gap: SH8601 blocking-flush duration per full frame under `sh8601-rs` on this board — no data until K2R-1.**
-**Gap: clean packaged-source registry-HAL Xtensa composition — no packaged-target data
-until the revision-12 local package gate runs; crates.io publication is not
-required.**
+**Observation: clean packaged-source registry-HAL Xtensa composition — CLOSED
+WITH PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK SCOPE by the revision-12 local
+gate. crates.io publication remains separate and human-ordered.**

@@ -4,12 +4,13 @@
   **CLOSED WITH HOST + PORTABLE-LINK + EXACT-XTENSA-LINK SCOPE**: the selected
   carrier/completion shape, finite host traces, portable consumer links, and
   exact-HAL Xtensa adapter links all pass. This is a design and compile/link
-  result, not target execution or silicon evidence. Revision 12 also selects
-  one local **normalized packaged-source + registry-HAL Xtensa
-  consumer** gate; that row remains **OPEN** until the clean-package matrix
-  below passes. Upload, index availability, and exact-version download for any
-  future correctly versioned release remain a separate human-ordered
-  publication gate. Revision 11's
+  result, not target execution or silicon evidence. Revision 12 also selected
+  one local **normalized packaged-source + registry-HAL Xtensa consumer**
+  gate; that row is now **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL
+  XTENSA-LINK SCOPE** after the clean-package matrix below passed. Upload,
+  index availability, and exact-version download for any future correctly
+  versioned release remain a separate human-ordered publication gate.
+  Revision 11's
   additive, non-freezing async-region
   contract selects one profile-owned, board-branded ESP32-S3/SH8601 adapter
   before implementation. One accepted flight emits the exact window and one
@@ -33,7 +34,7 @@
   not a protocol freeze. Revision 7 added the optional global-coordinate
   RGB565 stripe target and closed the host pixel-equivalence oracle row.
   Earlier revision history remains in section 12.
-- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 5; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
+- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 6; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6
   became normative in revision 3; revision 9 specifies the kernel-admitted
@@ -52,10 +53,10 @@
   exact-Xtensa-link scope. The revision-11 concrete async adapter row is
   separately closed with host + exact-Xtensa-reactor-link scope. Bilateral seam
   co-sign and async capability sealing gate the K2R-0 freeze. The local
-  normalized-package registry-HAL consumer remains open; actual publication is
-  human-ordered and orthogonal. Board HIL, silicon interrupt delivery, and
-  target-side reactor execution belong to K2R-1 and remain separately named
-  gates below.
+  normalized-package registry-HAL consumer is separately closed with packaged-
+  source + registry-HAL Xtensa-link scope; actual publication is human-ordered
+  and orthogonal. Board HIL, silicon interrupt delivery, and target-side
+  reactor execution belong to K2R-1 and remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -653,11 +654,11 @@ names the matching `=1.1.0` registry version in the same dependency. Cargo's
 uses the git source locally, checks its package version against that
 requirement, and retains the registry version in normalized package output. The
 exact git source and linked ELF remain the repository-development gate. The
-fallback declaration is exercised separately by revision 12's clean packaged-
-source consumer gate; the declaration alone is not evidence. The optional target feature
-requires the Espressif Rust toolchain (the pinned HAL declares Rust 1.88 or
-newer); the feature-off portable crate retains the workspace Rust 1.85 floor
-and empty normal dependency graph.
+fallback declaration is now exercised by revision 12's separately closed clean
+packaged-source consumer gate; the declaration alone is not evidence. The
+optional target feature requires the Espressif Rust toolchain (the pinned HAL
+declares Rust 1.88 or newer); the feature-off portable crate retains the
+workspace Rust 1.85 floor and empty normal dependency graph.
 
 The manifest spelling is exact:
 
@@ -682,11 +683,11 @@ registry `esp-hal =1.1.0` types, and a consumer of that package must use the
 same registry identity. Revision 12 separates two checks that were previously
 conflated: a locally executable clean packaged-source + registry-HAL Xtensa
 consumer gate, and an exact-version crates.io download smoke after a future
-correctly versioned, human-authorized release. The first requires no upload or
-version change and is specified in section 9.1. The second remains human-
-ordered under repository publication policy. The already published 0.1.1
-artifact is older immutable source and is not evidence for the current tree.
-No publication is part of this slice.
+correctly versioned, human-authorized release. The first required no upload or
+version change and is now closed with the scope recorded in section 9.1. The
+second remains human-ordered under repository publication policy. The already
+published 0.1.1 artifact is older immutable source and is not evidence for the
+current tree. No publication is part of this slice.
 
 Enforcement layers: sealed trait admission plus the profile-owned concrete
 adapter exclude external success reporters; private target/result/witness
@@ -1276,8 +1277,28 @@ committed checkout:
    gates, link, and inspection sequence without replacing the repository's
    exact-git fixture job.
 
-Passing this row closes only **PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK
-SCOPE**. It proves that the clean candidate archive's normalized target
+**Fact (clean implementation evidence, 2026-08-09):** from committed
+checkout `c3e234770ce2de9a277e947f8cf8547700abea28`,
+`cargo +1.96.0 package -p kittens-render --locked` produced a 206,609-byte
+clean archive with SHA-256
+`b0bc8d11e477ca4b5f6421bb49db3ada3b45ea1f555af4e5e412dd93dede4ec4`.
+Its VCS record named that exact commit and `crates/kittens-render`, with
+`dirty` omitted. The staged fixture used the exact config SHA-256
+`aa32449e2a38ae9ccac1a7b625a6dff109e3f70fc4c59becab5345b63f27e1e9`;
+both immutable locks resolved exactly one registry `esp-hal` 1.1.0 with
+checksum
+`6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0`
+and zero git packages. Direct packaged-library and consumer target Clippy
+passed. The linked 206,248-byte ELF had SHA-256
+`5ce57e9e9875f900e1c89987d56dc8fa78a383a041235f175cde4686dd5bdf75`,
+entry `0x403785e8`, `.bss` 56,680 bytes, zero undefined symbols, zero allocator-
+filter matches, and retained `linked_packaged_registry_parts` at size `0x20`
+and `linked_packaged_registry_start` at size `0x16bd`. The implementation
+review reported **SOUND, zero P0–P2 defects** and is retained at
+`reviews/2026-08-09-packaged-registry-implementation-precommit-claude.md`.
+
+This row is therefore **CLOSED WITH PACKAGED-SOURCE + REGISTRY-HAL
+XTENSA-LINK SCOPE**. It proves that the clean local archive's normalized target
 manifest and public board constructor compose with the registry HAL source.
 The repository exact-git fixture remains the reviewed source-revision gate;
 the registry package is version/checksum selected rather than git-SHA
@@ -1324,9 +1345,11 @@ This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15)
 - **Single-payload async adapter — CLOSED WITH HOST + EXACT-XTENSA-REACTOR-
   LINK SCOPE**: section 6.8's named implementation and complete host/target
   link matrix pass. Generic sealing, async RAMWRC, and K2R-1 remain open.
-- **Normalized packaged-source consumer — OPEN, CONTRACT SELECTED**: section
-  9.1's clean package, registry-HAL consumer, and exact target matrix have not
-  yet run. This orthogonal local package row is not a K2R freeze prerequisite.
+- **Normalized packaged-source consumer — CLOSED WITH PACKAGED-SOURCE +
+  REGISTRY-HAL XTENSA-LINK SCOPE**: section 9.1's clean package, registry-HAL
+  consumer, direct target Clippy, and exact target link/inspection matrix pass.
+  This orthogonal local package row is not a K2R freeze prerequisite and makes
+  no publication, target-runtime, or HIL claim.
 - **K2R-0 — GATED ON EXACTLY TWO FREEZE ITEMS**: the bilateral seam must be
   co-signed and its foreign fixture pass; and `FlightStarter`/`OwnedTransfer`
   must be sealed at an explicitly authorized breaking API boundary. A version
@@ -1496,9 +1519,9 @@ board coordinator, silicon, and measurements belong to K2R-1; publication is
 orthogonal and human-ordered. The revision also splits the previously
 conflated registry fallback into a locally executable clean packaged-source +
 registry-HAL Xtensa consumer gate and a separate future-release exact-version
-download smoke. The former is selected before implementation and remains open
-until section 9.1's matrix passes; the already published 0.1.1 artifact remains
-historical and cannot stand in for current source.
+download smoke. At that preimplementation point, the former was selected and
+remained open until section 9.1's matrix passed; the already published 0.1.1
+artifact remained historical and could not stand in for current source.
 
 Revision-12 preimplementation review, 2026-08-09: Claude Code 2.1.224
 `claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
@@ -1507,3 +1530,15 @@ VCS provenance, normalized registry-HAL graph, temporary staging topology,
 fixture-controlled Xtensa `build-std`, both target Clippy gates, retained-hook
 scope, and every publication/runtime/HIL non-guarantee. The retained review is
 `reviews/2026-08-09-packaged-registry-spec-precommit-claude.md`.
+
+Revision-12 implementation closure, 2026-08-09: the clean committed-checkout
+package, normalized registry-HAL graph, staged target Clippy/link, and ELF
+inspection matrix passed, closing only **PACKAGED-SOURCE + REGISTRY-HAL
+XTENSA-LINK SCOPE**. Claude Code 2.1.224 `claude-opus-4-8` at maximum effort
+reported **SOUND, zero P0–P2 defects** after reviewing the fixture, recurring CI
+job, package provenance and immutable locks, public-constructor type identity,
+retained hooks, and scope boundaries. The published 0.1.1 remains immutable
+older source; future publication remains human-ordered; K2R-0's two freeze
+items and all K2R-1 target-runtime/HIL obligations remain gated. The retained
+review is
+`reviews/2026-08-09-packaged-registry-implementation-precommit-claude.md`.
