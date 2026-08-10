@@ -137,9 +137,9 @@ check(html.includes('name="twitter:card" content="summary_large_image"'), "missi
 check(html.includes('href="site.webmanifest"'), "missing web manifest link");
 check(html.includes('<script src="script.js" defer></script>'), "website script must be deferred");
 check(occurrences(html, /<h1(?:\s|>)/gu) === 1, "index.html must contain exactly one h1");
-check(occurrences(html, /<h2(?:\s|>)/gu) <= 4, "marketing page must contain no more than four h2 headings");
-check(occurrences(html, /<section(?:\s|>)/gu) <= 5, "marketing page must contain no more than five sections");
-check(visibleWordCount(html) < 700, "visible marketing copy must remain below 700 words");
+check(occurrences(html, /<h2(?:\s|>)/gu) === 2, "marketing page must contain exactly two h2 headings");
+check(occurrences(html, /<section(?:\s|>)/gu) === 3, "marketing page must contain exactly three sections");
+check(visibleWordCount(html) < 300, "visible marketing copy must remain below 300 words");
 check(html.includes('<main id="main-content">'), "missing main landmark");
 check(html.includes('class="skip-link" href="#main-content"'), "missing skip link");
 check(occurrences(html, /<nav(?:\s|>)/gu) >= 2, "expected primary and footer navigation landmarks");
@@ -182,16 +182,12 @@ check(
 check(occurrences(notFound, /<h1(?:\s|>)/gu) === 1, "404.html must contain exactly one h1");
 
 const requiredCopy = [
-  "Build async Rust that stays untangled.",
-  "A coding agent with nine lives.",
-  "Keep the thread.",
-  "Recall what matters.",
-  "Make failure boring.",
-  "Put order in the code.",
-  "Catch tangled changes early.",
-  "Test the truly dynamic parts.",
+  "Async Rust.",
+  "Fewer surprises.",
+  "The coding agent that picks up where it left off.",
   "cargo install kittens-code-cli --version 0.0.1",
-  "Kittens checks the orchestration you declare—not arbitrary Rust or the outside world.",
+  "Make the important order explicit.",
+  "It checks the coordination you declare—not arbitrary Rust or the outside world.",
   "Experimental. APIs may change.",
   "No cookies. No analytics.",
 ];
@@ -203,7 +199,6 @@ for (const copy of requiredCopy) {
 const requiredMarketingLinks = [
   "https://github.com/Gonzih/kittens-rs",
   "https://crates.io/crates/kittens-code-cli",
-  "https://docs.rs/kittens-code-cli/0.0.1/kittens_code_cli/",
 ];
 
 for (const url of requiredMarketingLinks) {
@@ -224,6 +219,10 @@ for (const internalMarker of [
   "research archive",
   "frozen contract",
   "frontmatter",
+  "harness",
+  "topology",
+  "sans-io",
+  "rlm",
   "coreinput",
   "coreaction",
   "ask-each",
@@ -235,6 +234,24 @@ for (const internalMarker of [
 ]) {
   check(!html.toLowerCase().includes(internalMarker), `internal development marker leaked: ${internalMarker}`);
 }
+
+for (const noisySurface of [
+  "art-chip",
+  "hero__proofs",
+  "outcome-grid",
+  "value-grid",
+  "family-list",
+]) {
+  check(!html.includes(noisySurface), `forbidden explanatory surface found: ${noisySurface}`);
+}
+
+check(!/<figcaption(?:\s|>)/u.test(html), "visible artwork must not carry a caption");
+check(!/<ol(?:\s|>)/u.test(html), "marketing page must not contain a numbered-card list");
+
+const heroArt = html.match(/<div class="hero-art">([\s\S]*?)<\/div>/u)?.[1] ?? "";
+check(heroArt.length > 0, "missing hero artwork");
+check(occurrences(heroArt, /<img(?:\s|>)/gu) === 1, "hero artwork must contain exactly one image");
+check(!/<(?:p|span|strong|small|code)(?:\s|>)/u.test(heroArt), "hero artwork must not be annotated");
 
 for (const forbiddenClaim of [
   "prevents all race conditions",
@@ -305,7 +322,7 @@ let build;
 try {
   build = JSON.parse(buildText);
   check(build.schema_version === 1, "unexpected build.json schema version");
-  check(build.site_version === "W0.2", "unexpected site version in build.json");
+  check(build.site_version === "W0.3", "unexpected site version in build.json");
   check(/^[0-9a-f]{40}$/u.test(build.source_commit), "build.json needs a full source commit");
   check(
     build.source_repository === "https://github.com/Gonzih/kittens-rs",

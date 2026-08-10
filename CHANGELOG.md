@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- Refocus the Kittens website as a concise, benefit-led marketing page: remove
-  visible development branches, gate identifiers, release-review framing,
-  architecture walkthroughs, RLM syntax, and evidence ledgers; keep one sharp
-  hero, three `kittens-code` outcomes, three reasons Kittens matters, a compact
-  product-family view, and a direct install action.
+- Strip the public Kittens site to a three-section launch page: remove floating
+  remember/recover labels, proof chips, numbered outcome and value cards,
+  ecosystem lists, image captions, repeated install prompts, and internal
+  implementation language; keep one hero, one `kittens-code` payoff and
+  install, and one statement of the Kittens idea.
 - Launch the public Kittens website on GitHub Pages with the canonical
   cat-and-yarn artwork, bespoke `kittens-code` social card, accessible static
   markup, deterministic provenance, and no analytics or cookies.
