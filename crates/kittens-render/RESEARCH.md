@@ -6,9 +6,13 @@
   informed SPEC revision 10. The normative authorization and evidence gates
   live in the SPEC; this document remains research, not an implementation
   contract.
+- Revision 4, 2026-08-09: records the pinned-HAL async-buffer/configuration
+  audit that informed SPEC revision 11's additive single-payload adapter.
 - Status: research record for the embedded rendering/interaction profile.
-  SPEC revision 10 selects the blocking-region design, but its implementation
-  evidence remains gated until the exact host and target matrix runs.
+  SPEC revision 10's blocking row is closed with host + exact-Xtensa-link
+  scope. Revision 11 selects the concrete async-region design, whose
+  implementation evidence remains gated until its exact host and target matrix
+  runs.
 - Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
 - Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
@@ -109,16 +113,48 @@ public generic interface could do nothing and report success, so sealing a
 wrapper around it would merely move the integration-honesty escape. The stock
 driver is protocol provenance, not a compiled dependency.
 
+**Fact (revision 4 pinned-HAL audit):** `DmaTxBuf` exposes logical-length reset
+only from the beginning of its backing buffer. Its in-progress `BufView` has no
+public safe offset/range constructor and no safe operation that later rejoins
+separately borrowed descriptor/buffer slices into the original owned value.
+Implementing an offset DMA view locally would require the unsafe
+`DmaTxBuffer` trait, forbidden by this crate. Repeatedly shifting unsent bytes
+to the front would mutate the resource contract and add quadratic copying.
+The intended 368×16 RGB565 stripe is 11,776 bytes and fits beneath the existing
+16,380-byte transaction constant, so arbitrary async multichunk support is not
+required to test the selected stripe architecture.
+
+**Fact (revision 4 configuration audit):** esp-hal's public `SpiDma` erases the
+concrete SPI instance, while the reviewed completion slot reads and masks SPI2
+registers directly. A safe public adapter constructor accepting arbitrary
+`SpiDma` could therefore be handed SPI3 and would make the interrupt contract
+dishonest. Exact `SPI2`, `DMA_CH0`, and GPIO singleton types remain available at
+construction and can brand the profile-owned transport before erasure.
+
+**Recommendation (adopted by SPEC revision 11):** add one board-branded
+profile adapter under the existing experiment-open async traits. Share the
+blocking engine's geometry and CASET/PASET encoding, preflight one logical
+pixel buffer of at most 16,380 bytes, then start exactly one owning RAMWR DMA
+transfer. Retain the command scratch inside the transfer so recovery rebuilds
+the same branded transport. Defer async RAMWRC, overlap, and destructive-copy
+semantics to a measured later slice; retain arbitrary external trait
+implementation as the explicit non-sealed control. Because exact construction
+otherwise owns SPI2 before the still-external panel initializer can run, expose
+one visibly exceptional idle-command closure whose private-field borrowed
+facade exposes command writes but cannot move, replace, or reconfigure the
+underlying bus; do not mislabel those raw commands as part of the stripe proof.
+
 ## 7. What kittens-render is (boundary, post-review)
 
-Revision-2 boundary, amended by revision 3: sources (generation-latched touch
+Revision-2 boundary, amended by revisions 3–4: sources (generation-latched touch
 with decoded events, cadence deadline, TE edge where measurement justifies it,
 completion delivery per the K2R-0A outcome); explicit blocking and async
 transport capabilities; frame-demand policy above them sharing only `request`;
 and `embedded-graphics` global-coordinate targets as the composition boundary.
 The profile now owns the one minimal private SH8601 region transaction selected
-by SPEC revision 10, superseding the earlier blanket exclusion of display-
-driver internals. It still does not own a complete driver, panel initialization,
+by SPEC revision 10 and the board-branded single-payload async composition
+selected by SPEC revision 11, superseding the earlier blanket exclusion of
+display-driver internals. It still does not own a complete driver, panel initialization,
 widgets/layout, HAL, executor, power/AOD (deferred to the board coordinator
 slice), or Slint.
 

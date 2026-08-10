@@ -1,10 +1,16 @@
 # kittens-render profile specification (K2R-0A / K2R-0 slices)
 
-- Status: revision 10, 2026-08-09 (blocking-region contract: one sealed,
+- Status: revision 11, 2026-08-09 (the additive, non-freezing async-region
+  contract selects one profile-owned, board-branded ESP32-S3/SH8601 adapter
+  before implementation. One accepted flight emits the exact window and one
+  owning RAMWR payload of at most 16,380 bytes; its host + exact-Xtensa-reactor-
+  link evidence row remains **OPEN** until the matrix below passes. Generic
+  `FlightStarter`/`OwnedTransfer` sealing remains reserved for the breaking
+  freeze boundary). Revision 10's blocking-region contract selected one sealed,
   profile-owned ESP32-S3/SH8601 adapter and its exact command/failure matrix
   were specified before implementation; the gate is now **CLOSED WITH HOST +
   EXACT-XTENSA-LINK SCOPE** after the protocol suite, exact-HAL link, and
-  symbol inspections passed). Published-registry Xtensa consumption and every
+  symbol inspections passed. Published-registry Xtensa consumption and every
   physical-panel claim remain open. Revision 9's kernel-carrier
   contract specifies the one no-allocation source shape and closes its
   real-reactor gate with host + portable-link scope; target execution and
@@ -16,11 +22,12 @@
   not a protocol freeze. Revision 7 added the optional global-coordinate
   RGB565 stripe target and closed the host pixel-equivalence oracle row.
   Earlier revision history remains in section 12.
-- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 3; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
+- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 4; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6
   became normative in revision 3; revision 9 specifies the kernel-admitted
-  source-carrier shape and revision 10 specifies the blocking-region shape.
+  source-carrier shape, revision 10 specifies the blocking-region shape, and
+  revision 11 specifies the concrete single-payload async-region shape.
 - Slice boundary: **K2R-0 host slice** means the host-model protocol surface
   and oracles may land against amended section 6. It does not mean K2R-0A or
   full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
@@ -28,9 +35,11 @@
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
   The kernel-carrier gate is separately closed with host + portable-link scope.
   The revision-10 blocking `write_region` row is separately closed with host +
-  exact-Xtensa-link scope. Bilateral seam co-sign, published-registry Xtensa
-  consumption, board HIL and silicon interrupt delivery, target-side reactor
-  execution, and async capability sealing remain separately named gates below.
+  exact-Xtensa-link scope. The revision-11 concrete async adapter row is open
+  pending host + exact-Xtensa-reactor-link evidence. Bilateral seam co-sign,
+  published-registry Xtensa consumption, board HIL and silicon interrupt
+  delivery, target-side reactor execution, and async capability sealing remain
+  separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -50,8 +59,8 @@ Emittability rule (root 9.4) stands: explicit constructors, stable spellings, no
 
 ## 4. Non-goals
 
-As revision 1 (no widgets; no general display-driver framework beyond section
-6.7's minimal reviewed SH8601 region transaction; not the generic-gate
+As revision 1 (no widgets; no general display-driver framework beyond sections
+6.7–6.8's minimal reviewed SH8601 region transactions; not the generic-gate
 resolution; no power/AOD — board-coordinator slice; no DMA overlap — K2R-2
 gate; no TE synchronization claim), plus review-sharpened exclusions:
 
@@ -99,8 +108,16 @@ gate; no TE synchronization claim), plus review-sharpened exclusions:
    implementation seam can report a fabricated success. This operation is
    synchronous and serialized: it has no spare buffer, future, cancellation,
    reactor source, timeout, or preemption claim.
+9. **One reviewed concrete async region path.** While the generic async traits
+   remain deliberately open, revision 11 selects a profile-owned adapter whose
+   safe constructor brands the exact Waveshare V1 SPI2/GDMA/pin set and whose
+   shared private engine emits the supplied region's CASET/PASET before one
+   owning RAMWR payload. This is implementation-specific evidence, not generic
+   sealing. The 16,380-byte cap, resource-carrying start error, completion slot,
+   cancel/drop cleanup, and target reactor link are named below; multichunk
+   async RAMWRC remains deferred.
 
-## 6. Normative K2R-0 surface (amended through the blocking-region slice)
+## 6. Normative K2R-0 surface (amended through the async-region selection)
 
 Revision 8 retains the mechanism selected by the K2R-0A experiment (C
 completion in the A′ carrier, `K2R0A-LOG.md`) and exit-review round 1
@@ -112,7 +129,9 @@ section is **normative** for the K2R-0 host slice, superseding revision 2's
 provisional candidates. Revision 9 specifies the kernel-admitted completion
 source below. The section-8 real-reactor and portable-link oracles now close
 K2R-0A item 3 with host + portable-link scope; target execution and silicon
-behavior remain outside that closure.
+behavior remain outside that closure. Revision 10 adds the independent blocking
+region operation. Revision 11 selects one additive concrete async integration;
+it does not freeze or seal the experiment-open generic traits.
 
 ### 6.1 Geometry and identity
 
@@ -671,6 +690,309 @@ unexecuted entry path through `SpiDmaBus`, the symmetric fixed scratch policy,
 and `split`; its host + exact-Xtensa-link evidence closes only the scoped
 blocking-region row recorded in sections 9 and 11.
 
+### 6.8 Profile-owned single-payload async region adapter
+
+Revision 11 adds one reviewed concrete implementation beneath the existing
+experiment-open `FlightStarter` / `OwnedTransfer` surface. It does **not** add a
+parallel capability trait, seal either existing trait, or claim that arbitrary
+external implementations are honest. The later 0.2.0 freeze remains the sole
+gate that may make generic pairing structural at a breaking-version boundary.
+
+The default-off, Xtensa-only `esp32s3-sh8601-async` feature depends on
+`esp32s3-sh8601-blocking`, activates the pinned HAL's `rt` support required by
+the concrete interrupt handler, adds a direct optional `critical-section =
+"1"` dependency for the reviewed slot, and exports, from
+`kittens_render::esp32s3_sh8601_async`, exactly these profile-owned roles:
+
+```toml
+[features]
+esp32s3-sh8601-async = [
+    "esp32s3-sh8601-blocking",
+    "esp-hal/rt",
+    "dep:critical-section",
+]
+
+[target.'cfg(target_arch = "xtensa")'.dependencies.critical-section]
+version = "1"
+optional = true
+```
+
+The standalone target fixture removes its former direct `critical-section`
+dependency, enables `esp32s3-sh8601-async` on `kittens-render`, and adds the
+kernel only as the no-default-feature macro consumer:
+
+```toml
+kittens = { path = "../../crates/kittens", default-features = false, features = ["macros"] }
+kittens-render = { path = "../../crates/kittens-render", default-features = false, features = ["esp32s3-sh8601-async"] }
+```
+
+The public construction and recovery spellings are exact (the implementation
+may carry the narrow `clippy::too_many_arguments` and
+`clippy::type_complexity` allowances earned by the one exact board-resource
+constructor and its inverse tuple):
+
+```rust,ignore
+use esp_hal::{
+    Blocking,
+    dma::{DmaRxBuf, DmaTxBuf},
+    peripherals::{DMA_CH0, GPIO4, GPIO5, GPIO6, GPIO7, GPIO11, GPIO12, SPI2},
+    spi::{
+        Error,
+        master::{Address, Command, DataMode},
+    },
+};
+
+impl<'d> Waveshare18V1Sh8601Parts<'d> {
+    pub fn new(
+        spi2: SPI2<'d>,
+        dma_ch0: DMA_CH0<'d>,
+        sio0_gpio4: GPIO4<'d>,
+        sio1_gpio5: GPIO5<'d>,
+        sio2_gpio6: GPIO6<'d>,
+        sio3_gpio7: GPIO7<'d>,
+        sck_gpio11: GPIO11<'d>,
+        cs_gpio12: GPIO12<'d>,
+        rx_scratch: DmaRxBuf,
+        tx_scratch: DmaTxBuf,
+    ) -> Self;
+
+    pub fn into_parts(self) -> (
+        SPI2<'d>, DMA_CH0<'d>,
+        GPIO4<'d>, GPIO5<'d>, GPIO6<'d>, GPIO7<'d>,
+        GPIO11<'d>, GPIO12<'d>,
+        DmaRxBuf, DmaTxBuf,
+    );
+}
+
+impl<'d> Waveshare18V1Sh8601Transport<'d> {
+    pub fn try_new(
+        parts: Waveshare18V1Sh8601Parts<'d>,
+    ) -> Result<Self, Waveshare18V1Sh8601Parts<'d>>;
+
+    pub fn with_idle_commands<R>(
+        &mut self,
+        f: impl FnOnce(&mut Waveshare18V1Sh8601IdleCommands<'_, 'd>) -> R,
+    ) -> R;
+
+    pub fn into_start(
+        self,
+        pixels: DmaTxBuf,
+    ) -> Waveshare18V1Sh8601Start<'d>;
+}
+
+impl<'bus, 'd> Waveshare18V1Sh8601IdleCommands<'bus, 'd> {
+    pub fn half_duplex_write(
+        &mut self,
+        data_mode: DataMode,
+        command: Command,
+        address: Address,
+        dummy_cycles: u8,
+        data: &[u8],
+    ) -> Result<(), Error>;
+}
+
+impl<'d> Waveshare18V1Sh8601StartError<'d> {
+    pub fn failure(&self) -> &Sh8601AsyncStartFailure<Error>;
+    pub fn into_parts(self) -> (
+        Sh8601AsyncStartFailure<Error>,
+        Waveshare18V1Sh8601Transport<'d>,
+        DmaTxBuf,
+    );
+}
+
+impl<'d> FlightStarter for Waveshare18V1Sh8601Start<'d> {
+    type Transfer = Waveshare18V1Sh8601Transfer<'d>;
+    type Error = Waveshare18V1Sh8601StartError<'d>;
+    // `start` has the one canonical trait spelling from section 6.2.
+}
+
+impl<'d> OwnedTransfer for Waveshare18V1Sh8601Transfer<'d> {
+    type Transport = Waveshare18V1Sh8601Transport<'d>;
+    type Buffer = DmaTxBuf;
+    // `poll_done`, `cancel`, and `recover` retain section 6.2's spellings.
+}
+```
+
+The concrete transfer and
+`InFlight<Waveshare18V1Sh8601Transfer<'d>, DmaTxBuf>` MUST be `Unpin`.
+
+- `Waveshare18V1Sh8601Parts<'d>` is a private-field, validation-free
+  construction bundle. Its sole `new(...)` constructor consumes the exact
+  esp-hal singleton types and pins them to one bus role: `SPI2`, `DMA_CH0`,
+  SIO0=GPIO4, SIO1=GPIO5, SIO2=GPIO6, SIO3=GPIO7, SCK=GPIO11, and CS=GPIO12,
+  followed by one `DmaRxBuf` and one `DmaTxBuf` command-scratch reserve.
+  `into_parts` returns that exact tuple in constructor order, so a rejected
+  caller can replace either scratch buffer or repurpose every singleton rather
+  than retrying a guaranteed rejection or dropping resources;
+- `Waveshare18V1Sh8601Transport<'d>::try_new(parts) -> Result<Self,
+  Waveshare18V1Sh8601Parts<'d>>` rejects unless both
+  scratch capacities are at least 16,380 bytes. After both rejection checks it
+  normalizes TX descriptor length to 16,380, configures the fixed Waveshare V1
+  QSPI binding internally as SPI mode 0 at 40 MHz, and owns the resulting
+  `SpiDmaBus<Blocking>`. External code cannot construct this branded transport
+  from an erased `SpiDma`. Scratch rejection occurs before `Spi::new`. The
+  pinned constant configuration is reviewed as infallible; if the consumed
+  HAL constructor nevertheless returns `ConfigError`, the adapter panics as an
+  internal-invariant/non-returning boundary because esp-hal cannot return the
+  consumed SPI2 singleton. That path returns no resources and is not described
+  as ordinary construction rejection;
+- `Waveshare18V1Sh8601IdleCommands<'bus, 'd>` is a public, private-field,
+  borrowed facade with no public constructor.
+  `Waveshare18V1Sh8601Transport::with_idle_commands` is the
+  visibly exceptional board-coordinator escape for panel initialization and
+  other commands outside proof-bearing stripe operations. The private-field
+  borrowed facade exposes only `half_duplex_write(data_mode, command,
+  address, dummy_cycles, data) -> Result<(), esp_hal::spi::Error>` over the
+  owned bus while no transfer exists. It does not expose `&mut SpiDmaBus`, a
+  configuration method, or any operation that can move or replace the bus;
+  safe code therefore cannot swap an erased SPI3 bus into the branded
+  transport. The closure's commands, termination, serialization, and panel-
+  state truth are unchecked, and a synchronous command may block its caller;
+  start reinstalls the reviewed SPI2 interrupt handler. Panic remains a non-
+  returning boundary;
+- `Waveshare18V1Sh8601Transport::into_start(pixels)` is the sole constructor
+  for `Waveshare18V1Sh8601Start<'d>`. The start value owns both the branded
+  transport and one caller-filled `DmaTxBuf` pixel buffer and implements the
+  still-open `FlightStarter` trait;
+- `Waveshare18V1Sh8601Transfer<'d>` implements `OwnedTransfer`, owns the HAL
+  `SpiDmaTransfer`, both command-scratch buffers, and the interrupt-slot
+  registration, and recovers the same branded transport plus the sent pixel
+  buffer; and
+- `Sh8601AsyncStartFailure<E>` is exactly
+  `Region(Sh8601RegionWriteError<E>)`,
+  `AsyncPayloadTooLarge { bytes: u32, max: usize }`, or
+  `RamWriteStart { source: E }`;
+- `Waveshare18V1Sh8601StartError<'d>` has private fields. `failure()` exposes
+  `&Sh8601AsyncStartFailure<esp_hal::spi::Error>`; consuming `into_parts`
+  returns `(failure, transport, pixels)` with the same branded transport and
+  pixel buffer. `StartFlightError::into_parts`
+  separately returns the outer spare and unchanged outstanding target.
+
+An admitted idle transport intentionally has no `into_parts`: the pinned HAL
+builder does not recover the consumed GPIO singleton tokens, and exposing only
+an erased `SpiDma` would weaken the board brand without restoring that tuple.
+The transport is therefore static board ownership. Ordinary transport drop
+loses safe access to its SPI/DMA/pin/scratch resources and makes no peripheral-
+reset or panel-state claim; it is an explicit non-returning teardown boundary.
+Driven `OwnedTransfer::recover` is not that boundary and always rebuilds the
+same branded transport. Raw HAL construction remains the separately named
+escape for applications that choose unbranded ownership from the outset.
+
+The exact peripheral singleton types and private transport constructor are the
+configuration-admission layer for the profile-owned adapter: its SPI2 ISR may
+therefore read and mask only SPI2 registers without accepting an erased SPI3
+driver through safe public code. Raw HAL construction remains a compiling path
+outside this concrete adapter. Panel initialization, reset/power state, command
+serialization with other actors, and physical pin wiring remain board-owner or
+HIL obligations; branded Rust singletons do not prove the board is correctly
+wired or initialized.
+
+Before any bus I/O or interrupt-slot arming, the private shared SH8601 engine
+checks async start in this exact precedence:
+
+1. `EmptyWidth`;
+2. `EmptyHeight`;
+3. checked `u16` X-exclusive-end overflow;
+4. checked `u16` Y-exclusive-end overflow;
+5. `OutOfBounds` against the fixed half-open `0..368 × 0..448` panel;
+6. `AsyncPayloadTooLarge { bytes, max: 16_380 }`; then
+7. `WrongByteLength { expected, actual }`, where `actual` is the pixel
+   `DmaTxBuf`'s logical descriptor length, not its backing capacity.
+
+The geometry and inclusive big-endian window encoding are the same private
+functions used by revision 10; blocking and async paths MUST NOT carry separate
+copies of CASET/PASET truth. A valid async start then performs exactly three
+ordered boundaries:
+
+1. blocking CASET with the revision-10 command envelope and inclusive X ends;
+2. blocking PASET with the revision-10 command envelope and inclusive Y ends;
+3. split the command bus to recover `SpiDma`, arm the reviewed SPI2 completion
+   slot on that driver, and call the owning HAL half-duplex start once with
+   opcode `0x32`, address `0x002C00`
+   (RAMWR), single-line command/address, quad data, zero dummy cycles, and the
+   exact logical pixel-buffer length.
+
+The single-payload cap is deliberate. A 368×16 RGB565 stripe is 11,776 bytes
+and fits; the adapter does not implement async RAMWRC, buffer offset views,
+in-place compaction, or arbitrary-region DMA chaining. The pinned HAL exposes
+no safe offset view that can later rejoin a `DmaTxBuf`, while this crate forbids
+unsafe code. Destructive copying would add a different ownership/performance
+contract. Multichunk async writes and overlap remain a later measured slice;
+the blocking path remains the only reviewed RAMWRC implementation.
+
+Every preflight failure performs zero I/O and returns all start resources. A
+CASET or PASET error stops before every later boundary and returns the branded
+transport and pixels. A successful earlier window command may have changed the
+panel's window registers, but no RAMWR was accepted; retry is safe because
+every admitted attempt reissues both complete windows before pixels. A RAMWR
+start error is acceptance-atomic under the pinned HAL source: the SPI operation
+has not started, the slot is synchronously disarmed, and the returned driver,
+scratch, and pixels rebuild the branded transport. Any path that may still
+write pixels MUST return `Ok(Waveshare18V1Sh8601Transfer)`, never an error.
+
+On accepted start, `InFlight` owns the transfer and caller-supplied spare.
+Completion uses the existing register-then-recheck SPI2 slot: candidate wakers
+are cloned before global exclusion, and every unused/replaced/completed waker
+leaves exclusion before drop or wake. `Completed` is chosen only after the
+RAMWR transfer-done level is observed. `cancel` is idempotent, selects
+`Completed` if completion was already visible and otherwise selects
+`Cancelled` at the false-completion observation before synchronous HAL abort,
+then wakes the registered task. `recover` waits/fences the HAL transfer,
+disarms the listener and slot, rebuilds the branded transport from the exact
+command scratch, and is the sole outcome authority. `Drop` performs the same
+synchronous cancel/wait/disarm cleanup but deliberately returns no resources.
+No stale slot or physical write may survive adapter drop.
+
+After recovery, the caller delivers the one `Settled` witness to the owning
+sweep and may reuse the returned transport and the two recovered pixel buffers
+for the next stripe. The canonical target fixture defines a named
+`#[inline(never)]` `linked_async_reactor_paths` function. Its generated
+`reactor!` contains code paths for settling two 16-row stripes through the same
+`OptionalInlineOneShot<InFlight<...>>`, rearming after each handler recovery,
+then requesting drain of a third accepted flight through `future_mut`. The
+third handler accepts the completion-versus-cancellation race: `Cancelled`
+poisons the owning sweep, while `Completed` advances it; either settlement
+clears the outstanding position and the code path then aborts the poisoned or
+ready sweep. A separate named `#[inline(never)]` poll shim takes the pinned
+generated future through `core::hint::black_box` and performs exactly one poll
+with `Waker::noop`; there is no spin loop or fixture executor. Those handler
+branches are linked code paths, not observed settlements.
+
+A second named `#[inline(never)]` `linked_async_drop_path` function constructs
+one accepted real flight, arms the real carrier, explicitly drops the complete
+`Sources` owner, drops the outstanding sweep, and calls
+`FrameDemand::abandon_active`. It retains the concrete transfer/carrier drop
+glue and recovery spelling without claiming that the uncalled hook ran. The
+firmware entry point passes both outer function pointers through
+`core::hint::black_box` but never calls either. CI uses `nm -S -C` to require
+both nonzero concrete symbols. This deliberately retains the generated
+reactor, adapter, and drop monomorphizations in the locked ELF without
+pretending that the target path executed; it is explicitly **not** a target
+executor, wake-scheduling, IRQ, drop-runtime, or silicon-runtime observation.
+
+The protocol/start decisions and the completion-slot decisions each live in a
+target-neutral, crate-private core that the Xtensa shell actually calls. Host
+traces invoke those same cores; a separate target-only shell maps their actions
+to esp-hal and SPI2 registers. Tests that substitute modeled levels/transport
+remain labeled model-boundary evidence and do not certify the HAL mapping.
+
+Enforcement layers are: exact peripheral singleton types plus private fields
+for concrete configuration admission; the shared crate-private protocol engine
+plus deterministic traces for geometry/window/ordering truth; private adapter
+state plus wake/cancel/drop traces for lifecycle truth; ordinary Rust ownership
+for transport/scratch/sent/spare recovery; and the sealed kernel carrier for
+reactor retention. Negative controls remain mandatory: an arbitrary external
+`FlightStarter`/`OwnedTransfer` still compiles and can lie; direct `.await` or
+manual polling compiles; raw HAL access compiles; the synchronous CASET/PASET
+preamble in `FlightStarter::start` can block every reactor arm when start is
+called from a handler because kernel priorities do not preempt handler
+interiors; same-type sent and spare may share safe interior-mutable backing;
+whole-flight/source drop returns no resources; and a host trace or linked ELF
+proves no panel or silicon behavior. The allocator-symbol-free fixture uses
+only its linked `Waker::noop`; arbitrary executor `RawWaker` clone/drop/wake
+callbacks may allocate or perform other unchecked work, so the ELF does not
+prove a universal post-init allocation bound for future executors.
+
 ## 7. K2R-0A: the feasibility experiment (normative design)
 
 A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists. A host-model selection may authorize the K2R-0 host slice and its section 6 amendment, but K2R-0A itself does not pass until the exact target criteria and open items are discharged.
@@ -753,6 +1075,50 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
   descriptor length, links at the pinned HAL revision, and is inspected for
   allocator symbols. Host traces and a linked ELF remain non-controls for panel
   interpretation, physical delivery, and visible output;
+- the concrete async-region reference trace uses
+  `Region { x: 0, y: 0, width: 368, height: 16 }` and exactly 11,776 logical
+  RGB565 bytes. It records literal CASET `[00 00 01 6f]`, PASET
+  `[00 00 00 0f]`, and one RAMWR envelope in order. Independent failure at
+  each of those three boundaries proves the exact prior prefix, classification,
+  absence of every later call, and transport/command-scratch/pixel identity.
+  Preflight cases cover the shared geometry precedence, a valid in-panel
+  region above 16,380 bytes, short and long logical descriptor lengths, and
+  zero I/O. Positive cases include the first row, exact 16-row reference,
+  nonzero origin, and the largest even payload at or below the cap. The shared
+  target-neutral construction core independently rejects short RX with valid
+  TX and short TX with valid RX before configuration, accepts capacities
+  exactly 16,380, and requests TX descriptor normalization only after both
+  checks. Resource-model traces extract the rejection bundle and prove every
+  token's identity. Separate Xtensa compile-fail controls reject SPI3,
+  DMA_CH1, and swapped GPIO4/GPIO5 role arguments at the branded `Parts::new`
+  boundary; the compile-pass constructor/extractor control uses the exact
+  SPI2/DMA_CH0/GPIO4–7/11/12 order and both rejection branches. A distinct
+  compile-pass control keeps a dishonest external `FlightStarter` and raw HAL
+  construction available, proving that this row reviews only the named
+  profile-owned adapter rather than silently claiming generic sealing;
+- host lifecycle traces run the same target-neutral start and completion-slot
+  cores called by the profile-owned Xtensa shell
+  through register-then-recheck in both completion positions, waker
+  replacement outside exclusion, completion-versus-cancel linearization,
+  start rejection, ordinary drop/disarm, exact recovery, owning-sweep
+  written/cancelled settlement, and sequential transport/buffer reuse. The
+  exact-Xtensa fixture replaces its RAMWR-only fixture-local adapter with the
+  branded profile implementation. Its named `#[inline(never)]` link-only
+  reactor function contains a generated `reactor!` over the real
+  `OptionalInlineOneShot<InFlight<...>>`; handler code paths cover two written
+  settlements with same-carrier rearm and a third-flight drain with honest
+  `Completed`/`Cancelled` branching. A separate `#[inline(never)]` poll shim
+  black-boxes the pinned future and polls it exactly once with `Waker::noop`;
+  there is no manual executor loop and the branches are linked, not observed.
+  A second retained outer hook explicitly drops an armed real `Sources`, its
+  old sweep, and calls `abandon_active`, retaining concrete target drop glue.
+  The entrypoint black-boxes but does not call either outer function pointer.
+  Target Clippy, locked optimized link, HAL-source identity, empty undefined
+  symbols, allocator-symbol absence for this exact noop-waker binary, and
+  nonzero concrete reactor/drop symbols from `nm -S -C` are recurring CI
+  gates. The firmware paths are retained but not executed by CI, so this is
+  explicitly not executor scheduling, IRQ delivery, wake-count, drop-runtime,
+  arbitrary-RawWaker allocation, or panel evidence;
 - sweep-plan coverage: target-consuming start through `FlightStarter::start` with a crate-issued `StartPermit` is the only public flight construction; one target is outstanding per plan position; the cooperative driven path delivers every recovered transfer settlement to its owning `Sweep::settle`; matching written settlements are the only path to `SweepWritten`; matching failed/cancelled settlements poison and force abort; abort rejects outstanding work; dropped or wrong-owner settlements and abandonment are published escapes with drop-plus-`abandon_active` full-repaint recovery and idle-`invalidate` protection when stale work may overlap; full-repaint and sticky-invalidation obligations are set and cleared per the state table;
 - full-frame versus stripe-swept RGB565 pixel equivalence through the real
   target/start/transfer/recover/settle witness chain: ordinary reconstruction,
@@ -783,6 +1149,16 @@ all section-8 traces and controls pass against the single shared engine, the
 real target adapter is invoked in the no-allocator firmware, the locked
 optimized ELF links, and allocator-symbol inspection is clean. That scope does
 not require hardware and does not freeze the still-open async capabilities.
+
+The revision-11 concrete async row may close independently with **host +
+exact-Xtensa-reactor-link scope** only after its section-8 traces run against
+the shared engine and concrete-shaped lifecycle, the branded SPI2 adapter is
+the one used by the target fixture, a generated reactor retains/rearms/drains
+its real `InFlight`, and the locked no-allocator ELF plus source/symbol gates
+pass. This reviews one additive implementation under the open traits. It does
+not seal them, authorize a 0.2.0 version change, prove a target executor, or
+close full K2R-0A.
+
 TE measured behavior, panel initialization/command acceptance, physical region
 placement, RAMWRC interpretation, RGB565 channel/byte fidelity, visible
 output, tearing, latency, and per-backend measured peak memory/bandwidth remain
@@ -800,6 +1176,12 @@ This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15)
   section-8 oracle/control, and section 9's linked/symbol evidence pass. That
   closure does not close K2R-0A target execution, board HIL, the bilateral
   seam, or `FlightStarter`/`OwnedTransfer` sealing.
+- The profile-owned single-payload async row may close independently with
+  **host + exact-Xtensa-reactor-link scope** when section 6.8's branded
+  adapter, every async section-8 trace/control, and section 9's linked/symbol
+  evidence pass. That closure certifies only the named implementation and does
+  not close generic sealing, async RAMWRC/multichunk operation, target runtime,
+  board HIL, registry publication, or the bilateral seam.
 - **K2R-0** is done when: K2R-0A is done; the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds and links through an external `no_std` consumer without alloc; clippy/fmt/doc gates clean.
 - Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
 
@@ -914,3 +1296,25 @@ ELF and synthetic positive/negative symbols, its follow-up verdict was
 descriptor/runtime-wording hygiene findings were also adopted. The retained
 review is
 `reviews/2026-08-09-write-region-implementation-precommit-claude.md`.
+
+Revision 11, 2026-08-09: the next additive async-integration shape is selected
+before implementation. The fixture-local adapter was wake/ownership-feasible
+but region-dishonest: it ignored X/Y and emitted only RAMWR. The selected
+profile-owned replacement brands the exact Waveshare V1 SPI2/DMA_CH0/pin
+construction, shares revision 10's private geometry/window truth, and admits
+one exact region of at most 16,380 bytes through CASET, PASET, and one owning
+RAMWR transfer. Safe multichunk buffer offset/rejoin is unavailable in the
+pinned HAL under crate-wide `forbid(unsafe_code)`, so async RAMWRC is deferred
+rather than implemented through destructive copying or semantic pretense. The
+required evidence adds exact start-boundary/resource traces and a generated-
+reactor Xtensa link. Generic trait sealing, target execution, publication, and
+every silicon property remain separate gates.
+
+Revision-11 spec review, 2026-08-09: Claude Code `claude-opus-4-8` at maximum
+effort reported **SOUND, zero P0–P2 findings** after checking the complete
+contract/diff against the pinned HAL types and methods, exact construction and
+rejection resource graph, idle-facade branding, cancel race, generated-reactor
+and drop-symbol scope, dependency boundary, and non-guarantees. Its changelog
+P3 was adopted; its two implementation watch items remain pinned above. The
+retained review is
+`reviews/2026-08-09-async-region-spec-precommit-claude.md`.

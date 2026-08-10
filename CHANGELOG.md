@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Select the additive, profile-owned Waveshare V1 async-region adapter contract
+  before implementation: exact SPI2/DMA_CH0/GPIO branding, recoverable
+  pre-admission parts, a non-swappable idle-command facade, shared CASET/PASET
+  truth, and one owning RAMWR payload capped at 16,380 bytes. The required host
+  failure/lifecycle matrix and generated-reactor/drop-glue Xtensa symbols remain
+  OPEN; generic trait sealing, async RAMWRC, target execution, arbitrary-waker
+  allocation behavior, publication, and every physical-panel claim remain
+  separate gates.
 - Add the sealed, profile-owned blocking SH8601 region path as the sole
   `StripeTarget::write_region` operation. The exact host matrix proves all
   eight CASET/PASET/RAMWR/RAMWRC calls, all eight injected failure boundaries,

@@ -3,7 +3,7 @@
 Embedded rendering/interaction profile for the [Kittens](../kittens)
 reactor kernel, anchored on the Waveshare ESP32-S3 1.8" AMOLED V1 board
 (SH8601 display, FT3168 touch, 368×448). The controlling contract is
-[`SPEC.md`](SPEC.md) (revision 10: section 6 is the normative K2R-0
+[`SPEC.md`](SPEC.md) (revision 11: section 6 is the normative K2R-0
 surface); [`K2R0A-LOG.md`](K2R0A-LOG.md) is the experiment record and
 [`TRACE-MANIFEST.md`](TRACE-MANIFEST.md) maps every required oracle to its
 status. Reviews are retained under [`reviews/`](reviews/).
@@ -18,13 +18,16 @@ sealing remain open gates. Revision 10's sealed, profile-owned blocking
 `write_region` row is **CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE**. The
 kernel-admitted completion carrier and real `reactor!` integration are
 separately **CLOSED WITH HOST + PORTABLE-LINK SCOPE**. Neither closure makes a
-silicon claim.
+silicon claim. Revision 11 selects a board-branded, single-payload concrete
+async adapter, but its host + exact-Xtensa-reactor-link evidence row remains
+**OPEN** until implementation and the specified matrix pass.
 
 ## What each guarantee rests on
 
 | Component | Guarantee | Enforcement layer |
 |---|---|---|
 | `StripeTarget::start_flight` + `StartPermit` + `FlightStarter` + `OwnedTransfer` + `InFlight` | the only public flight construction invokes the operation-bound starter with that target's exact region and a crate-issued, private-constructor, non-`Clone`, lifetime-bound permit; a reported rejection returns the starter error, spare, and target through `StartFlightError`; resources (transport, sent buffer, spare) return on the driven path; cancel settles at its linearization point and wakes; register-then-recheck completion; `InFlight<X, S>` is `Unpin` exactly for `X: OwnedTransfer + Unpin, S: Unpin` | consuming target + unforgeable dispatch permit + private flight constructor/fields + seal-at-freeze capability contracts + conditional trait bound + compile-fail and runtime oracles; pairing is structural under sealed integrations, while region honesty and acceptance-atomic rejection remain documented obligations during the open-trait experiment |
+| revision-11 concrete async adapter (selected; evidence pending) | the profile-owned Waveshare V1 starter will accept one exact region of at most 16,380 logical bytes, share the blocking engine's CASET/PASET truth, then own one RAMWR DMA transfer through the existing `InFlight`/`Settled` path | exact peripheral singleton types + private branded transport/start/transfer state + shared private engine + ordinary resource ownership + reviewed interrupt slot; closure additionally requires the exact host failure/lifecycle matrix and generated-reactor/drop-glue Xtensa link. External trait implementations, async RAMWRC, synchronous CASET/PASET blocking inside start, arbitrary executor-waker allocation behavior, target execution, and silicon behavior remain explicit non-guarantees |
 | `StripeTarget::write_region` + `BlockingWritePermit` + `BlockingRegionWrite` + `BlockingSettled` | the sole blocking spelling consumes the outstanding target, exact mutable pixel slice, and admitted writer; only the profile-owned ESP32-S3/SH8601 adapter may implement the sealed capability; every ordinary return carries the same writer and slice plus one owning-sweep written or failed settlement | sealed trait admission + private permit/engine/result/witness state + ordinary ownership + the exact eight-call host trace, eight injected failure boundaries, ten preflight cases, eight compile-fail controls, one explicit-drop compile-pass control, and the exact-HAL no-allocator Xtensa link/symbol gate; raw HAL access, unbranded bus configuration, result drop, handler blocking, and every physical-panel property remain named non-guarantees |
 | `OptionalInlineOneShot<InFlight<...>>` consumer composition | one allocation-free, locally rearmable kernel source retains the accepted flight across lost arbitration and yields its real owned `Settled`; the source is dormant before its handler rearms it, and graceful shutdown borrows the flight for `begin_drain` before settlement | sealed kernel source admission + ordinary ownership + private `InFlight` state/register-then-recheck oracles + real-reactor selection-loss/rearm/drain tests + external Thumb/wasm links; inner-future honesty, cooperative settlement delivery, raw polling/await, mutable future replacement, whole-source drop, and silicon behavior remain named non-guarantees |
 | `Settled::into_parts` + `StripeSettlement` | every extraction returns exactly one move-only reconciliation witness: only real `Completed` recovery yields `Written(StripeWritten)`, while cancellation/failure yields `Unwritten(StripeUnwritten)` and cannot be relabeled as coverage; delivery to the owning sweep is cooperative | private settlement construction + consuming resource extraction + distinct private-field witness types + forge/rewrite/replay/clone compile-fail controls for witness integrity; documentation + `must_use` for delivery, which Rust cannot force |
@@ -44,6 +47,10 @@ the canonical integration as
 The default-off `esp32s3-sh8601-blocking` feature is target-only and exports
 the exact-HAL adapter as
 `kittens_render::esp32s3_sh8601::Esp32s3Sh8601BlockingTransport` on Xtensa.
+Revision 11 reserves an additive `esp32s3-sh8601-async` feature, depending on
+that target support, for the board-branded single-payload adapter; it is a
+controlling contract until the implementation gate passes, not a currently
+available export.
 Repository builds pin `esp-hal` revision
 `d48f747ba28accdc51779ba193eba923138e0382`; the feature requires the
 Espressif toolchain, while feature-off portable builds retain the Rust 1.85
@@ -104,7 +111,8 @@ transition and verifies resource recovery without adding a dependency to the
 ## What this crate is not
 
 Not a complete display driver, widget/layout/scene framework, HAL, or executor.
-Revision 10 owns only the minimal section-6.7 SH8601 region transaction; panel
+Revision 10 owns only the minimal section-6.7 SH8601 region transaction, and
+revision 11 selects only section 6.8's single-payload async composition; panel
 initialization, reset/power/brightness, command coordination, and physical
 truth remain outside it. The crate does not claim physical presentation
 (milestones are `StripeWritten` /
@@ -119,6 +127,12 @@ capability boundary;
 construction of the blocking transport from an unbranded same-source HAL bus,
 whose peripheral/pins/mode/frequency and panel initialization remain caller
 obligations;
+revision 11's planned `with_idle_commands` coordinator closure, whose private-
+field borrowed facade prevents moving, replacing, or reconfiguring the branded
+bus but whose arbitrary commands, termination, serialization, blocking, and
+panel-state truth remain unchecked;
+ordinary drop of an idle revision-11 branded transport, which intentionally
+returns no SPI/DMA/pin/scratch resources and proves no hardware reset;
 direct `.await`/manual `poll_complete` instead of reactor admission; wrapping
 an inert or lossy future in the generic kernel carrier; replacing the armed
 future through `future_mut`'s ordinary `&mut F`; dropping an armed carrier,
@@ -177,6 +191,8 @@ seam co-sign with `kittens-code`; target-side reactor execution;
 `FlightStarter`/`OwnedTransfer` sealing before any freeze; and published-
 registry Xtensa consumption of the blocking adapter at the separately human-
 ordered publication gate. The blocking `write_region` row itself is **CLOSED
-WITH HOST + EXACT-XTENSA-LINK SCOPE**. Publishing this experimental 0.1.x
-evidence release is not the async capability freeze and is not authorized by
-this work.
+WITH HOST + EXACT-XTENSA-LINK SCOPE**. The selected concrete async adapter row
+remains **OPEN** until its host + exact-Xtensa-reactor-link matrix passes;
+async RAMWRC/multichunk operation is deferred. Publishing this experimental
+0.1.x evidence release is not the async capability freeze and is not
+authorized by this work.

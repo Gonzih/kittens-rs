@@ -70,7 +70,12 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
    against `esp-hal` rev
    `d48f747ba28accdc51779ba193eba923138e0382`. This supplies no physical-panel
    or published-registry target observation.
-5. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
+5. **Profile-owned exact-region async adapter + generated-reactor Xtensa link —
+   OPEN, CONTRACT SELECTED (revision 11)**: replace the fixture-local RAMWR-only
+   adapter with the branded SPI2 implementation, exact three-boundary host
+   matrix, and linked real reactor. This may close only one concrete-adapter
+   evidence row; it does not seal the generic traits or claim target execution.
+6. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
 ## Toolchain status
@@ -565,6 +570,53 @@ exists).**
 **Gap: panel initialization, physical command acceptance and placement,
 RGB565 fidelity, RAMWRC behavior on silicon, TE/tearing, visible output, and
 latency remain board-HIL gated (no data exists).**
+
+## Concrete async-region contract selection (2026-08-09)
+
+**Fact:** the revision-10 Xtensa adapter is wake- and ownership-feasible but is
+not region-honest: its starter derives only byte count, ignores X/Y, and starts
+RAMWR without CASET/PASET. The public `SpiDma` type also erases the concrete SPI
+instance even though the reviewed completion slot reads and masks SPI2
+registers. Moving that adapter unchanged into the profile would turn two
+documented assumptions into a misleading admission claim.
+
+**Fact:** the pinned HAL's `DmaTxBuf` can reset logical length only from the
+start of its backing buffer. It exposes neither a safe owned offset view that
+can later rejoin the original buffer nor an API from which this crate can build
+one without implementing the unsafe `DmaTxBuffer` trait. A 368×16 RGB565 stripe
+is 11,776 bytes and fits beneath the existing 16,380-byte payload constant.
+
+**Recommendation — adopted by SPEC revision 11:** add one profile-owned,
+board-branded async transport under the still-open generic traits. Its safe
+constructor consumes exact SPI2/DMA_CH0/GPIO singleton types and command
+scratch, its shared private engine preflights and emits CASET/PASET, and one
+accepted transfer owns exactly one RAMWR payload no larger than 16,380 bytes.
+Return every resource on start rejection and driven recovery; retain the
+reviewed register-then-recheck/cancel/drop slot. Defer async RAMWRC rather than
+invent unsafe slicing or destructive-copy semantics.
+
+**Observation:** exact peripheral construction would otherwise strand panel
+initialization after the transport owns SPI2. Revision 11 therefore names an
+idle-only `with_idle_commands` coordinator escape. Its private-field borrowed
+facade exposes command writes but cannot move, replace, or reconfigure the
+underlying bus, and it is not a proof-bearing stripe spelling; arbitrary
+commands, blocking, panel state, serialization, and closure termination remain
+unchecked.
+
+**Recommendation — target evidence:** add a named, `#[inline(never)]` link-only
+driver containing generated-reactor handler paths for two settlement/rearms and
+a third-drain Completed-versus-Cancelled branch. A separate noinline opaque
+shim performs exactly one noop-waker poll; no spin executor observes those
+paths. Retain a second noinline hook that drops an armed real source owner and
+records the drop-plus-abandon spelling. The firmware entrypoint black-boxes
+both outer function pointers but never calls them; `nm -S -C` must retain both
+nonzero symbols. CI therefore proves code generation, target drop glue, and
+link only, not executor scheduling, ISR delivery, wake counts, arbitrary-waker
+allocation behavior, drop execution, or silicon behavior.
+
+**Gap: the exact host start/failure/lifecycle matrix and branded generated-
+reactor Xtensa link remain pending (no revision-11 implementation data
+exists).**
 
 ## Publication mechanics evidence (2026-08-09)
 
