@@ -44,50 +44,42 @@ settlement; (7) `Failed` documented
 as abstract-boundary-only — the esp-hal adapter never produces it; (8)
 waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
 
-## Current gate status before freeze
+## Stage ownership and current status (revision 12)
 
-1. **Xtensa compile probe — CLOSED WITH SCOPE (2026-08-09)**: the
-   post-revision-8 `fixtures/render-xtensa-probe` artifact linked for
-   `xtensa-esp32s3-none-elf` with real SPI2 + GDMA_CH0 + two `DmaTxBuf`s, the
-   monomorphized SH8601 `half_duplex_write`, concrete `Unpin` assertions, and
-   second-transfer reuse. It includes revision 8's corrected source waker
-   boundary. The link closes feasibility only; item 2 remains the silicon
-   gate.
-2. **Board HIL**: silicon interrupt delivery (pending → one wake → ready;
-   completion-before-first-poll level visibility; cancel-and-drain returns
-   transport + sent buffer + spare).
-3. **Kernel-admitted completion source + `reactor!` fixture — CLOSED WITH
-   HOST + PORTABLE-LINK SCOPE (2026-08-09)**: one sealed
-   `OptionalInlineOneShot<InFlight<...>>` now carries real settlements through
-   both selection-loss positions, same-carrier rearm, graceful drain, and
-   post-exit drop/disarm. The external generated-reactor consumer links on
-   Thumb and wasm. This supplies no Xtensa-runtime or silicon observation.
-4. **Blocking `write_region` — CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE
-   (2026-08-09)**: the exact command/failure/preflight matrix, proof controls,
-   resource and owning-sweep reconciliation, a linked real SPI2/GDMA
-   multichunk call path,
-   locked optimized ELF, and undefined/allocator-symbol inspections pass
-   against `esp-hal` rev
-   `d48f747ba28accdc51779ba193eba923138e0382`. This supplies no physical-panel
-   or published-registry target observation.
-5. **Profile-owned exact-region async adapter + generated-reactor Xtensa link —
-   CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK SCOPE (2026-08-09)**: the
-   fixture-local RAMWR-only adapter is replaced by the branded SPI2
-   implementation. The exact three-boundary host matrix, concrete-Waker slot
-   lifecycle, target singleton controls, direct target Clippy, and locked
-   generated-reactor/drop-glue ELF source/symbol scans pass. This closes only
-   one concrete-adapter evidence row; it does not seal the generic traits or
-   claim target execution.
-6. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
-   any freeze.
+1. **K2R-0A feasibility — CLOSED WITH HOST + PORTABLE-LINK + EXACT-XTENSA-
+   LINK SCOPE (2026-08-09)**: mechanism C in the A-prime carrier, finite host
+   completion/cancel/resource traces, the real-reactor Thumb/wasm consumer,
+   exact-HAL compile/link feasibility, and both concrete target adapter rows
+   pass. The experiment selected the normative shape; it never claimed target
+   executor or silicon execution.
+2. **K2R-0 freeze — GATED on exactly the bilateral seam and generic capability
+   sealing**: the `kittens-code` owner must co-sign the mirrored seam and its
+   foreign fixture; `FlightStarter` and `OwnedTransfer` must be sealed at an
+   authorized breaking API boundary. Publication is not a protocol-freeze
+   prerequisite.
+3. **K2R-1 target runtime/board — GATED, no target-runtime/HIL data**: a real executor,
+   minimal board coordinator, SPI2 and TP_INT delivery, wake/cancel/drop,
+   contiguous FT3168 reads, panel/touch/TE, latency, and memory/bandwidth
+   measurements remain open. Uncalled linked hooks are explicit non-controls.
+4. **Blocking `write_region` — CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE** and
+   **profile-owned async adapter — CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK
+   SCOPE**: their detailed evidence remains recorded below and in the trace
+   manifest.
+5. **Clean packaged-source + registry-HAL Xtensa consumer — OPEN, CONTRACT
+   SELECTED**: revision 12 separates this locally executable compatibility
+   check from a future correctly versioned publication. The already published
+   0.1.1 artifact is older source and cannot represent the current tree.
+6. **Future publication — HUMAN-ORDERED, NOT AUTHORIZED HERE**: upload, index
+   availability, and exact-version download smoke for a future correctly
+   versioned release remain an orthogonal action.
 
 ## Toolchain status
 
 ESP32-S3 is Xtensa LX7: target probes need the Espressif Rust toolchain
 (`espup`). The `esp` toolchain is installed and the post-revision-8 target
 probe linked on 2026-08-09. This removes the basic toolchain/compile-link
-feasibility blocker; it does not supply the board-HIL observations in open
-item 2.
+feasibility blocker; it does not supply the target-runtime/HIL observations in
+open item 3.
 
 ## Exit review round 1 (2026-08-08)
 
@@ -440,8 +432,9 @@ API, vector-binding, language, ownership, no-allocation, and no-self-reference
 feasibility result with the corrected software waker boundary. It is not
 evidence of behavior on silicon.
 
-**Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
-visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
+**Gap — K2R-1 target runtime/HIL:** SPI2 interrupt delivery, exact wake counts,
+completion-before-first-poll visibility, and physical cancel/drain behavior
+remain unobserved (no runtime/HIL data exists).
 
 ## Kernel-admitted completion carrier (2026-08-09)
 
@@ -484,8 +477,12 @@ concrete flight; revision 11 instead links a generated-reactor path but never
 calls its retained outer hooks, so target-side reactor execution is still not
 claimed.
 
-**Gap: SPI2 silicon wake delivery and target-side executor behavior remain
-board-HIL gated (no data exists).**
+**Gap — K2R-1 target runtime:** repeated generated-reactor polling by a real
+target executor and its waker behavior remain unobserved (no target-runtime
+data exists).
+
+**Gap — K2R-1 board HIL:** SPI2 silicon interrupt delivery, wake counts, and
+physical cancel/drop behavior remain unobserved (no HIL data exists).
 
 **Observation:** the revision-9 artifact in the preceding section remained a
 non-control for blocking `write_region`. Revision 10 closes that separate row
@@ -560,21 +557,28 @@ and allocator-symbol conditions.
 **Fact — package mechanics:** host `cargo package` verification succeeds. In
 the generated registry manifest Cargo removes the repository-only git URL/rev
 and retains target dependency `esp-hal =1.1.0`, which is the intended
-multiple-locations fallback.
+multiple-locations fallback. That historical run used a dirty worktree and
+compiled only the host package verification target; it is not the revision-12
+clean packaged-source Xtensa consumer gate.
 
 **Observation:** these results close only the blocking `write_region` row with
 **HOST + EXACT-XTENSA-LINK SCOPE**. They do not close the async capability
 sealing gate, target-side reactor execution, the bilateral seam, or any board-
-HIL property. They also do not prove that a published crate and consumer
-compile the registry-source HAL type identity for Xtensa.
+HIL property. They also do not prove that the normalized package and an
+external Xtensa consumer compile one registry-source HAL type identity.
 
-**Gap: published registry-source Xtensa consumption remains unverified and is
-gated on the separately human-ordered publication workflow (no target data
-exists).**
+**Gap — revision-12 local package gate:** clean packaged-source + registry-HAL
+Xtensa consumption remains unverified pending the selected section-9.1 matrix
+(no packaged-target data exists). This gate requires no publication.
 
-**Gap: panel initialization, physical command acceptance and placement,
+**Gap — future publication:** crates.io upload, index availability, and an
+exact-version Xtensa download smoke for a correctly versioned future release
+remain unverified and human-ordered. The local package gate cannot close them;
+the already published 0.1.1 artifact is historical source.
+
+**Gap — K2R-1 board HIL:** panel initialization, physical command acceptance and placement,
 RGB565 fidelity, RAMWRC behavior on silicon, TE/tearing, visible output, and
-latency remain board-HIL gated (no data exists).**
+latency remain unobserved (no HIL data exists).
 
 ## Concrete async-region contract selection (2026-08-09)
 
@@ -647,8 +651,61 @@ after tracing the pinned HAL, protocol/preflight, slot races, resource paths,
 controls, target hooks, and CI. The retained report is
 `reviews/2026-08-09-async-region-implementation-precommit-claude.md`.
 
-## Publication mechanics evidence (2026-08-09)
+## Historical 0.1.1 publication mechanics evidence (2026-08-09)
+
+This is the pre-revision-9 publication-readiness sequence for the already
+published historical 0.1.1 source. Its `--allow-dirty` archive is not current-
+HEAD provenance and is an explicit non-control for revision 12's local package
+gate.
 
 **Fact — crates.io dry-run evidence (verbatim):**
 
 > 'cargo publish -p kittens-render --dry-run --allow-dirty' from the workspace root succeeded — 'Packaged 103 files, 436.0KiB (122.1KiB compressed)', packaged crate verified/compiled, upload reached and aborted only by the dry-run flag.
+
+## Revision-12 acceptance reconciliation and package-gate selection (2026-08-09)
+
+**Observation — acceptance drift:** every literal K2R-0A feasibility criterion
+now has its required design, finite host, portable-link, and exact-HAL target-
+link evidence. Target execution and board HIL were named non-guarantees, not
+K2R-0A pass criteria. Keeping K2R-0A open on those later observations would
+therefore make the status map disagree with the normative matrix.
+
+**Recommendation — adopted by SPEC revision 12:** close K2R-0A with **HOST +
+PORTABLE-LINK + EXACT-XTENSA-LINK SCOPE**. Gate the K2R-0 protocol freeze on
+exactly the bilateral `kittens-code` seam/foreign fixture and generic
+`FlightStarter`/`OwnedTransfer` sealing at an authorized breaking API boundary.
+Assign a real target executor, minimal board coordinator, SPI2/TP_INT delivery,
+contiguous FT3168 reads, panel/touch/TE truth, and measurements to K2R-1.
+Publication is orthogonal to every K2R stage.
+
+**Fact — package-source distinction:** the repository target fixture compiles
+the exact git `esp-hal` revision, while Cargo normalizes a packaged
+`kittens-render` manifest to registry `esp-hal =1.1.0`. The earlier dirty host
+package verification proves only that normalization occurred; it does not
+prove that the normalized package and a standalone registry-HAL Xtensa
+consumer share one target type identity or link. Version 0.1.1 is already an
+immutable crates.io artifact from older source; the locally generated archive
+is package-shape evidence, not a candidate to republish that version.
+
+**Recommendation — selected before implementation:** create a separate
+standalone package-consumer fixture and recurring CI job. From a clean
+committed checkout, run full locked packaging without `--allow-dirty`, verify
+the archive's exact HEAD and `path_in_vcs` plus an absent-or-false dirty flag,
+extract it outside the checkout into the fixture's fixed relative layout, and
+assert structurally that the generated target dependency is registry-only.
+Pass direct registry singleton types through the packaged public constructor,
+retain an uncalled async-start hook, run direct packaged-library and consumer
+target Clippy, link the locked optimized ELF, and repeat the existing
+undefined/allocator/nonzero-symbol inspections. Keep the exact-git fixture
+independent.
+
+**Gap — selected local package row:** no clean packaged-source registry-HAL
+Xtensa result exists yet. Passing it will close only **PACKAGED-SOURCE +
+REGISTRY-HAL XTENSA-LINK SCOPE**; it cannot prove crates.io upload/index/
+download, target execution, arbitrary-waker allocation, or silicon behavior.
+
+**Observation — revision-12 spec review:** Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after the acceptance/publication wording and fixture-controlled `build-std`
+details were repaired. The retained report is
+`reviews/2026-08-09-packaged-registry-spec-precommit-claude.md`.

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Repair the `kittens-render` acceptance map in spec revision 12: K2R-0A is
+  closed with host + portable-link + exact-Xtensa-link scope; K2R-0 freeze is
+  gated on exactly the bilateral seam and generic async capability sealing;
+  K2R-1 owns the target executor, board coordinator, runtime/HIL, and measured
+  budgets. Select, but do not yet claim, a separate clean local packaged-source
+  + registry-`esp-hal` Xtensa compatibility gate. The locally generated 0.1.1
+  archive is package-shape evidence only because crates.io 0.1.1 is older
+  immutable source; any future release remains correctly versioned and human-
+  ordered. No implementation, version change, or publication is claimed by
+  this spec-first entry.
 - Add the spec-first, profile-owned Waveshare V1 async-region adapter with exact
   SPI2/DMA_CH0/GPIO branding, recoverable pre-admission parts, a non-swappable
   idle-command facade, shared CASET/PASET truth, and one owning RAMWR payload
@@ -9,8 +19,9 @@
   controls, direct target Clippy, and locked no-allocator generated-reactor/
   drop-glue Xtensa link and symbol gates pass, closing the named adapter row
   with host + exact-Xtensa-reactor-link scope. Generic trait sealing, async
-  RAMWRC, target execution, arbitrary-waker allocation behavior, publication,
-  and every physical-panel claim remain separate gates.
+  RAMWRC, K2R-0 seam/sealing, K2R-1 target execution and physical truth, the
+  local packaged-source compatibility row, arbitrary-waker allocation
+  behavior, and any future publication remain separate gates.
 - Add the sealed, profile-owned blocking SH8601 region path as the sole
   `StripeTarget::write_region` operation. The exact host matrix proves all
   eight CASET/PASET/RAMWR/RAMWRC calls, all eight injected failure boundaries,
@@ -18,9 +29,10 @@
   poisoning, and eight compile-fail plus one explicit-drop compile-pass
   controls. The exact `esp-hal` revision links a real multichunk SPI2/GDMA
   invocation without undefined or allocator symbols, closing this row with
-  host + exact-Xtensa-link scope only; published-registry Xtensa consumption,
-  async capability sealing, target-side reactor execution, the bilateral seam,
-  and every physical-panel/HIL claim remain open.
+  host + exact-Xtensa-link scope only; the local packaged-source registry-HAL
+  target row, K2R-0 async capability sealing/bilateral seam, K2R-1 target
+  execution and physical-panel/HIL work, and any future publication remain
+  separate.
 - Admit the portable, allocation-free `OptionalInlineOneShot` source for
   `Future + Unpin` and drive render `InFlight` completion through a real
   generated reactor. Deterministic tests cover both selection-loss positions,
@@ -109,7 +121,7 @@
   `Tick::MAX` horizons; add explicit move-only witness controls; and publish
   the safe shared-backing sent-buffer/spare escape.
 - Complete the `kittens-render` exit-review Batch 7 repair: replace the
-  callback starter with seal-at-freeze `FlightStarter` and state target/start
+  callback starter with K2R-0-breaking-freeze `FlightStarter` and state target/start
   structure only for sealed integrations; reject sweep abort while a target is
   outstanding; carry idle invalidation into the next minted sweep; bound the
   flight-drop-plus-abandon escape with the reviewed adapter's synchronous

@@ -1,18 +1,28 @@
-# kittens-render profile specification (K2R-0A / K2R-0 slices)
+# kittens-render profile specification (K2R-0A / K2R-0 / K2R-1 staging)
 
-- Status: revision 11, 2026-08-09 (the additive, non-freezing async-region
+- Status: revision 12, 2026-08-09. The K2R-0A feasibility experiment is now
+  **CLOSED WITH HOST + PORTABLE-LINK + EXACT-XTENSA-LINK SCOPE**: the selected
+  carrier/completion shape, finite host traces, portable consumer links, and
+  exact-HAL Xtensa adapter links all pass. This is a design and compile/link
+  result, not target execution or silicon evidence. Revision 12 also selects
+  one local **normalized packaged-source + registry-HAL Xtensa
+  consumer** gate; that row remains **OPEN** until the clean-package matrix
+  below passes. Upload, index availability, and exact-version download for any
+  future correctly versioned release remain a separate human-ordered
+  publication gate. Revision 11's
+  additive, non-freezing async-region
   contract selects one profile-owned, board-branded ESP32-S3/SH8601 adapter
   before implementation. One accepted flight emits the exact window and one
   owning RAMWR payload of at most 16,380 bytes; its evidence row is now
   **CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK SCOPE** after the host matrix,
   exact-HAL target Clippy/link, and source/symbol inspections passed. Generic
   `FlightStarter`/`OwnedTransfer` sealing remains reserved for the breaking
-  freeze boundary). Revision 10's blocking-region contract selected one sealed,
+  freeze boundary. Revision 10's blocking-region contract selected one sealed,
   profile-owned ESP32-S3/SH8601 adapter and its exact command/failure matrix
   were specified before implementation; the gate is now **CLOSED WITH HOST +
   EXACT-XTENSA-LINK SCOPE** after the protocol suite, exact-HAL link, and
-  symbol inspections passed. Published-registry Xtensa consumption and every
-  physical-panel claim remain open. Revision 9's kernel-carrier
+  symbol inspections passed. Every physical-panel claim remains open.
+  Revision 9's kernel-carrier
   contract specifies the one no-allocation source shape and closes its
   real-reactor gate with host + portable-link scope; target execution and
   silicon remain open.
@@ -23,24 +33,29 @@
   not a protocol freeze. Revision 7 added the optional global-coordinate
   RGB565 stripe target and closed the host pixel-equivalence oracle row.
   Earlier revision history remains in section 12.
-- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 4; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
+- Parent contracts: root [`SPEC.md`](../../SPEC.md); [`RESEARCH.md`](RESEARCH.md) revision 5; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10 (generic-gate comparison, unresolved here); the sibling harness contract `docs/kittens-code/SPEC.md` (seam obligations, section 10 below).
 - Hardware anchor: **Waveshare ESP32-S3 1.8" AMOLED Touch, V1 — SH8601 display, FT3168 touch, 368×448** (`LCD_TE` GPIO13, `TP_INT` GPIO21, schematic-confirmed).
 - Normativity: **MUST/SHOULD** language binds sections 5 through 11. Section 6
   became normative in revision 3; revision 9 specifies the kernel-admitted
   source-carrier shape, revision 10 specifies the blocking-region shape, and
   revision 11 specifies the concrete single-payload async-region shape.
+  Revision 12 specifies the normalized packaged-source target-consumer gate
+  and repairs the K2R-0A/K2R-0/K2R-1 acceptance staging.
 - Slice boundary: **K2R-0 host slice** means the host-model protocol surface
-  and oracles may land against amended section 6. It does not mean K2R-0A or
-  full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
+  and oracles may land against amended section 6. K2R-0A's selected design and
+  compile/link experiment is now closed with the scope above; that closure does
+  not mean full K2R-0 acceptance. The exact Xtensa compile/link feasibility probe is
   **CLOSED WITH SCOPE**: it establishes HAL/API/language/ownership,
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
   The kernel-carrier gate is separately closed with host + portable-link scope.
   The revision-10 blocking `write_region` row is separately closed with host +
   exact-Xtensa-link scope. The revision-11 concrete async adapter row is
   separately closed with host + exact-Xtensa-reactor-link scope. Bilateral seam
-  co-sign, published-registry Xtensa consumption, board HIL and silicon
-  interrupt delivery, target-side reactor execution, and async capability
-  sealing remain separately named gates below.
+  co-sign and async capability sealing gate the K2R-0 freeze. The local
+  normalized-package registry-HAL consumer remains open; actual publication is
+  human-ordered and orthogonal. Board HIL, silicon interrupt delivery, and
+  target-side reactor execution belong to K2R-1 and remain separately named
+  gates below.
 
 ## 1. One-sentence definition
 
@@ -80,7 +95,7 @@ gate; no TE synchronization claim), plus review-sharpened exclusions:
    Recovery on cancellation therefore REQUIRES an explicit cancel-and-drain
    transition that is driven to settlement (finding 3).
 2. **Capability admission.** `OwnedTransfer` and `FlightStarter` will be
-   sealed to reviewed backend adapters before any freeze, because ownership
+   sealed to reviewed backend adapters at the K2R-0 breaking freeze, because ownership
    alone cannot distinguish an honest region start, acceptance-atomic
    rejection, or drop cancellation from a dishonest implementation (finding
    8; exit-review round-4 finding 1). During the experiment they are
@@ -90,7 +105,13 @@ gate; no TE synchronization claim), plus review-sharpened exclusions:
    experiment-phase downstream implementors, so it is sealed from day one.
    Raw backend access remains the documented compiling escape surface.
 3. **Epoch discipline.** One sweep-owned snapshot per sweep, exposed only through `&S`; every transmitted stripe is fully reconstructed from that logically immutable state. Ordinary ownership enforces the owned/shared-reference boundary, but unconstrained `S` can contain interior mutability or handles to shared external state: keeping those stable for the epoch is a documented caller obligation and compiling escape surface. On the cooperative driven path, callers deliver every recovered `StripeSettlement` to its owning `Sweep::settle`; a matching failed or cancelled settlement poisons that sweep, so it can mint no further target or finish and only abort remains. Rust ownership makes settlements unforgeable, move-only, and non-relabelable, but cannot force delivery: dropping a settlement or misapplying it to another sweep consumes the witness and leaves its owner outstanding. Recovery from either escape is to drop the old sweep and any remaining target/flight, call `abandon_active` (which retains demand and forces a full repaint), and call idle `invalidate` before replacement when stale physical work or external invalidation may overlap; its sticky latch makes the next epoch non-clearing so another full repaint remains due. Ordinary flight drop is the related non-returning escape: the reviewed adapter MUST synchronously cancel/disarm on `Drop`; no settlement witness or resources return. Sweep completion itself is still decided **only** by consuming matching, in-order written settlements over a fixed, validated full-panel plan — never by caller assertion — but settlement delivery is a cooperative contract, not a linear-type guarantee (finding 9; exit-review round-3 findings 2–3; exit-review rounds 4–5 finding 3).
-4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced report is complete and untorn; intermediate transitions may coalesce; an atomic `produced_generation`/`serviced_generation` state machine with a bounded number of snapshot services per activation and re-latch on generation change, asserted INT, or failure (findings 11, 12). The ISR-side wake-capable producer handle is part of the K2R-0A admission question, not assumed.
+4. **Honest touch semantics.** Latest-state-with-coalescing: every surfaced
+   report is complete and untorn; intermediate transitions may coalesce; an
+   atomic `produced_generation`/`serviced_generation` state machine with a
+   bounded number of snapshot services per activation and re-latch on
+   generation change, asserted INT, or failure (findings 11, 12). K2R-0A
+   selected the host generation/admission shape; a concrete FT3168 ISR producer
+   and its silicon delivery are K2R-1 work, not assumed.
 5. **Milestone honesty.** `StripeWritten` and `SweepWritten` only (finding 17).
 6. **Board anchor facts** of RESEARCH section 2, revision-keyed.
 7. **Optional draw integration.** With the default-off `embedded-graphics`
@@ -129,8 +150,9 @@ compile/link result and the reviewed waker/critical-section boundary. This
 section is **normative** for the K2R-0 host slice, superseding revision 2's
 provisional candidates. Revision 9 specifies the kernel-admitted completion
 source below. The section-8 real-reactor and portable-link oracles now close
-K2R-0A item 3 with host + portable-link scope; target execution and silicon
-behavior remain outside that closure. Revision 10 adds the independent blocking
+K2R-0A item 3 with host + portable-link scope; revision 12 records the complete
+feasibility experiment closed with its combined host/portable/exact-link scope.
+Target execution and silicon behavior remain outside that closure. Revision 10 adds the independent blocking
 region operation. Revision 11 selects one additive concrete async integration;
 it does not freeze or seal the experiment-open generic traits.
 
@@ -145,7 +167,7 @@ exhaustion message before mutating demand state.
 
 ### 6.2 Transfer boundary
 
-`OwnedTransfer` (sealed-before-freeze; open during the experiment so probes
+`OwnedTransfer` (sealed at the K2R-0 freeze; open during the experiment so probes
 and models implement it): `poll_done(&mut self, cx) -> Poll<()>` —
 **register-then-recheck mandatory** (the check-then-register order has a
 lost-wake race; the suite carries a deliberately broken negative control);
@@ -170,7 +192,7 @@ The type is public only so experiment-phase integrations can name the
 lifetime prevents a starter from returning the received permit inside its
 non-lifetime-parameterized `Error` for later direct use.
 
-`FlightStarter` (sealed-before-freeze on exactly the same schedule as
+`FlightStarter` (sealed at the K2R-0 freeze on exactly the same schedule as
 `OwnedTransfer`; open during the experiment): an operation-bound capability
 whose consuming `start(self, Region, StartPermit<'_>) -> Result<Transfer,
 Error>` is invoked by the crate, never by caller-supplied callback code. The
@@ -629,9 +651,10 @@ and fixture builds compile the concrete adapter against `esp-hal` git revision
 names the matching `=1.1.0` registry version in the same dependency. Cargo's
 [documented multiple-locations rule](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#multiple-locations)
 uses the git source locally, checks its package version against that
-requirement, and retains the registry version as the publication fallback. The
-exact git source and linked ELF, not the fallback declaration, are the
-repository gate. The optional target feature
+requirement, and retains the registry version in normalized package output. The
+exact git source and linked ELF remain the repository-development gate. The
+fallback declaration is exercised separately by revision 12's clean packaged-
+source consumer gate; the declaration alone is not evidence. The optional target feature
 requires the Espressif Rust toolchain (the pinned HAL declares Rust 1.88 or
 newer); the feature-off portable crate retains the workspace Rust 1.85 floor
 and empty normal dependency graph.
@@ -654,12 +677,16 @@ features = ["esp32s3", "unstable"]
 The standalone repository fixture enables this profile feature and depends on
 the identical git URL/revision (with `rt` additionally enabled for firmware),
 so its `SpiDma` resource has the same Cargo source identity as the public
-constructor expects. A future published crate instead exposes registry
-`esp-hal =1.1.0` types, and its consumer must use that registry identity. The
-repository's exact-git link does not validate that publication fallback;
-packaged-registry target consumption remains unverified and MUST be gated at
-the separately human-ordered publication step. No publication is part of this
-slice.
+constructor expects. Cargo's normalized package manifest instead exposes
+registry `esp-hal =1.1.0` types, and a consumer of that package must use the
+same registry identity. Revision 12 separates two checks that were previously
+conflated: a locally executable clean packaged-source + registry-HAL Xtensa
+consumer gate, and an exact-version crates.io download smoke after a future
+correctly versioned, human-authorized release. The first requires no upload or
+version change and is specified in section 9.1. The second remains human-
+ordered under repository publication policy. The already published 0.1.1
+artifact is older immutable source and is not evidence for the current tree.
+No publication is part of this slice.
 
 Enforcement layers: sealed trait admission plus the profile-owned concrete
 adapter exclude external success reporters; private target/result/witness
@@ -841,7 +868,7 @@ The concrete transfer and
 - `Waveshare18V1Sh8601IdleCommands<'bus, 'd>` is a public, private-field,
   borrowed facade with no public constructor.
   `Waveshare18V1Sh8601Transport::with_idle_commands` is the
-  visibly exceptional board-coordinator escape for panel initialization and
+  visibly exceptional temporary board-command escape for panel initialization and
   other commands outside proof-bearing stripe operations. The private-field
   borrowed facade exposes only `half_duplex_write(data_mode, command,
   address, dummy_cycles, data) -> Result<(), esp_hal::spi::Error>` over the
@@ -851,7 +878,9 @@ The concrete transfer and
   transport. The closure's commands, termination, serialization, and panel-
   state truth are unchecked, and a synchronous command may block its caller;
   start reinstalls the reviewed SPI2 interrupt handler. Panic remains a non-
-  returning boundary;
+  returning boundary. A real board coordinator, its serialization protocol,
+  and observed initialization belong to K2R-1; this closure is not that
+  coordinator;
 - `Waveshare18V1Sh8601Transport::into_start(pixels)` is the sole constructor
   for `Waveshare18V1Sh8601Start<'d>`. The start value owns both the branded
   transport and one caller-filled `DmaTxBuf` pixel buffer and implements the
@@ -995,9 +1024,18 @@ only its linked `Waker::noop`; arbitrary executor `RawWaker` clone/drop/wake
 callbacks may allocate or perform other unchecked work, so the ELF does not
 prove a universal post-init allocation bound for future executors.
 
-## 7. K2R-0A: the feasibility experiment (normative design)
+## 7. K2R-0A: the feasibility experiment (normative design; closed with scope)
 
-A **non-freezing experiment**; its deliverable is a selected-and-demonstrated shape plus an amendment to this spec, or the honest result that no viable shape exists. A host-model selection may authorize the K2R-0 host slice and its section 6 amendment, but K2R-0A itself does not pass until the exact target criteria and open items are discharged.
+K2R-0A was a **non-freezing experiment** whose deliverable was a selected-and-
+demonstrated shape plus an amendment to this spec, or the honest result that no
+viable shape existed. Revision 12 records it **CLOSED WITH HOST + PORTABLE-LINK
++ EXACT-XTENSA-LINK SCOPE**: mechanism C in the A-prime carrier, the finite
+host wake/cancel/resource traces, the real-reactor portable consumer, and the
+exact target compile/link criteria all pass. It selected and demonstrated the
+section-6 shapes without freezing the open capabilities. Target executor
+scheduling, silicon interrupt/wake/cancel/drop behavior, and physical display
+or touch truth were never pass criteria for this feasibility experiment; they
+are K2R-1 runtime/HIL work.
 
 **Candidate matrix (exhaustive per finding 4):**
 
@@ -1024,14 +1062,23 @@ Revision 9 selects the remaining kernel carrier shape:
 `OptionalInlineOneShot<InFlight<...>>`, with the future stored inline under the
 already-demonstrated outer-`Unpin` bounds. The section-8 real-`reactor!` traces
 and external no-std consumer links on both required portable targets have now
-run, closing item 3 with host + portable-link scope. The manual Xtensa probe
-does not extend that result to target-side reactor execution or silicon.
+run, closing item 3 with host + portable-link scope. The recorded revision-9
+manual Xtensa probe and revision-11 uncalled generated-reactor hooks do not
+extend that result to target-side reactor execution or silicon.
 
-**Touch admission** is decided in the same experiment (finding 12): the ISR-side wake-capable generation handle is a kernel-admission question of the same kind, answered by the same matrix.
+**Touch admission** was decided in the same experiment (finding 12): the ISR-
+side wake-capable generation handle is a kernel-admission question of the same
+kind, answered by the same matrix. A concrete FT3168 transaction and its
+silicon delivery remain K2R-1 work.
 
 ## 8. K2R-0: protocol suite (host slice amended; full acceptance gated)
 
-The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's host-model-selected shapes. Full K2R-0 acceptance additionally requires K2R-0A's exact target gate and every acceptance item in section 11. The host suite is built as a **named trace matrix** (finding 14) — each trace enumerated, each state transition and transport boundary independently observable — covering at minimum:
+The K2R-0 host suite did not begin until this spec was amended with K2R-0A's
+host-model-selected shapes. Revision 12 records that feasibility prerequisite
+closed with scope. Full K2R-0 acceptance still requires every freeze item in
+section 11. The host suite is built as a **named trace matrix** (finding 14) —
+each trace enumerated, each state transition and transport boundary
+independently observable — covering at minimum:
 
 - both selection-loss positions for completion; completion before first poll; completion during waker registration;
 - a real `kittens::reactor!` fixture whose source is
@@ -1135,7 +1182,7 @@ The K2R-0 host suite MUST NOT begin until this spec is amended with K2R-0A's hos
 
 Negative controls published beside them, as always.
 
-## 9. Board anchor obligations
+## 9. Board anchor, package readiness, and K2R-1 obligations
 
 Revision 10 resolves the `write_region` upstream/fork decision: Kittens owns a
 minimal reviewed SH8601 region transaction whose protocol provenance is exact
@@ -1159,7 +1206,7 @@ the one used by the target fixture, a generated reactor retains/rearms/drains
 its real `InFlight`, and the locked no-allocator ELF plus source/symbol gates
 pass. This reviews one additive implementation under the open traits. It does
 not seal them, authorize a 0.2.0 version change, prove a target executor, or
-close full K2R-0A.
+close the K2R-0 freeze.
 
 That matrix now passes for the named adapter: the host protocol, failure,
 scratch-admission, completion-slot, cancellation, recovery, reuse, and drop
@@ -1170,31 +1217,131 @@ undefined table, allocator-symbol absence, and retained reactor/poll/drop
 symbols pass. The scoped row is therefore closed. None of those observations
 execute the retained target hooks or broaden the exclusions above.
 
+### 9.1 Orthogonal local packaged-source + registry-HAL Xtensa consumer
+
+Revision 12 adds one local target gate for the current workspace source as
+Cargo places it in a crate archive. This is a package-shape/registry-HAL
+compatibility row, not a K2R protocol-stage prerequisite or a claim that the
+current declared version may be republished. Version 0.1.1 is already an
+immutable crates.io artifact from older source; any future release must be
+human-authorized and correctly versioned. The local gate MUST run from a clean
+committed checkout:
+
+1. The workspace-pinned Cargo 1.96.0 runs
+   `cargo +1.96.0 package -p kittens-render --locked` and produces the current
+   locally generated `kittens-render-0.1.1.crate` without `--allow-dirty`.
+   This filename reflects the current workspace declaration only and is not a
+   publish candidate. The archive's
+   `.cargo_vcs_info.json` MUST report the exact current `git rev-parse HEAD`
+   and no truthy dirty marker; Cargo versions that omit `git.dirty` for a clean
+   tree satisfy that rule. Its `path_in_vcs` MUST be exactly
+   `crates/kittens-render`. Neither the archive nor its extracted directory is
+   committed.
+2. The generated manifest MUST contain target dependency
+   `esp-hal = "=1.1.0"` with `esp32s3` and `unstable`, and MUST contain no git
+   URL or revision for that dependency. CI MUST inspect the generated manifest
+   structurally through Cargo metadata rather than depending on TOML rendering.
+   This checks Cargo's normalized package output, not `Cargo.toml.orig` or a
+   hand-copied manifest.
+3. The standalone `fixtures/render-packaged-xtensa-probe` crate MUST have an
+   empty `[workspace]`, depend on the extracted normalized package at exact
+   relative path `../../target/package/kittens-render-0.1.1` with exact
+   declared version `=0.1.1`, and depend
+   directly on registry `esp-hal = "=1.1.0"` with no git source and no
+   `[patch]`. It has no direct `kittens` or `critical-section` dependency. It
+   enables `esp32s3-sh8601-async`, which includes the blocking adapter, and its
+   locked metadata MUST contain exactly one `esp-hal` 1.1.0
+   package whose source is the crates.io registry and zero git-sourced
+   `esp-hal` packages. CI MUST extract the archive and copy the fixture into a
+   matching `$RUNNER_TEMP` directory layout outside the checkout; it MUST NOT
+   edit the fixture or generated manifest to make them compose. Its committed
+   `.cargo/config.toml` MUST retain the exact-git fixture's Xtensa target,
+   `build-std = ["core"]`, linker script, and `-nostartfiles` configuration.
+4. The consumer MUST pass direct registry-HAL `SPI2`, `DMA_CH0`, and exact GPIO
+   singleton values to the packaged
+   `Waveshare18V1Sh8601Parts::new`. A named `#[inline(never)]` retained hook
+   MUST cross `try_new`, construct the packaged async starter, and reach the
+   target-owned `start_flight` spelling. This makes registry type identity and
+   target adapter code generation real rather than inferring them from a
+   manifest diff. The entrypoint black-boxes but does not call the hook.
+5. From the staged fixture working directory, so its committed
+   `.cargo/config.toml` governs `build-std`, exact-target Clippy MUST run once
+   directly against the extracted packaged library via `--manifest-path` with
+   `esp32s3-sh8601-async`, and once against the standalone consumer. A locked
+   optimized consumer Xtensa link MUST pass. The ELF MUST be
+   a statically linked Tensilica executable, have an empty undefined table,
+   contain zero matches under the established allocator-symbol filter, and
+   retain the named hook as a nonzero text symbol. A separate recurring CI job
+   repeats the clean package, provenance, normalized metadata, both Clippy
+   gates, link, and inspection sequence without replacing the repository's
+   exact-git fixture job.
+
+Passing this row closes only **PACKAGED-SOURCE + REGISTRY-HAL XTENSA-LINK
+SCOPE**. It proves that the clean candidate archive's normalized target
+manifest and public board constructor compose with the registry HAL source.
+The repository exact-git fixture remains the reviewed source-revision gate;
+the registry package is version/checksum selected rather than git-SHA
+selected. Host package verification alone, the exact-git fixture, a dirty
+archive, a copied source tree, or any `[patch]` is an explicit non-control.
+The retained hook is not target execution, interrupt, wake, cancellation/drop,
+or panel evidence. The row does not upload `kittens-render`, wait for an index,
+download an exact published `kittens-render` version, authorize publication or
+a version bump, or prove arbitrary executor-waker allocation behavior. Those
+boundaries remain separately named below.
+
+K2R-1 owns the first real target-runtime and board evidence. Its gate requires:
+a named no-allocation-after-init target executor that repeatedly polls the
+generated reactor with its real `Waker`; a minimal board coordinator that
+serializes panel initialization/commands against stripe starts; observed SPI2
+interrupt registration, both completion positions, wake counts, cancellation,
+recovery, and drop; a concrete TP_INT wake producer plus one contiguous FT3168
+snapshot transaction and failure re-latch; panel command acceptance, physical
+region/color output, TE behavior, touch reports, latency, and measured static,
+stack, heap, and bandwidth budgets. The executor's `RawWaker` allocation and
+critical-section behavior MUST be measured/reviewed rather than inferred from
+the noop-waker link fixture. Uncalled hooks, host models, and linked symbols are
+explicit non-controls for every item in this paragraph.
+
 TE measured behavior, panel initialization/command acceptance, physical region
 placement, RAMWRC interpretation, RGB565 channel/byte fidelity, visible
 output, tearing, latency, and per-backend measured peak memory/bandwidth remain
 K2R-1 board-HIL obligations. No host byte trace or linked ELF discharges them.
 
-## 10. The bilateral seam (merge with the harness workstream) — gates full K2R-0 acceptance, not this host slice
+## 10. The bilateral seam (merge with the harness workstream) — gates the K2R-0 freeze, not K2R-0A closure
 
-This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. Acceptance of either spec's slice is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. Until co-signed, neither spec claims the merge. The render-owned carrier fixture from section 8 is necessary kernel-admission evidence but is not that foreign harness-style consumer and does not close the bilateral seam.
+This spec proposes and the sibling `kittens-code` spec must co-sign (finding 15): a single seam section, mirrored verbatim in both documents, defining — construction of render sources by the harness's reactor owner; the typed facts (`StripeWritten`, `SweepWritten`, touch reports) as ordinary arm events; ordering/starvation declarations recommended for them; task ownership for Outcome B if selected; and teardown order. The K2R-0 protocol freeze of both workstreams is gated on an external-consumer fixture: a canonical reactor owned by *harness-style* code that consumes this profile end to end. This does not reopen the scoped K2R-0A feasibility closure. Until co-signed, neither spec claims the merge. The render-owned carrier fixture from section 8 is necessary kernel-admission evidence but is not that foreign harness-style consumer and does not close the bilateral seam.
 
 ## 11. Slice acceptance
 
-- **K2R-0A** is done when: the matrix has run against recorded SHAs, one candidate is selected by the ordered rule (or ∅ is recorded), the exact target compile/link probe passes, the kernel-carrier reactor/portable-link oracles pass, and this spec is amended with the demonstrated shapes (section 6 re-issued as normative). The current host-model selection is not this full acceptance.
-- The blocking `write_region` row may close independently with **host +
-  exact-Xtensa-link scope** when section 6.7's sealed concrete adapter, every
-  section-8 oracle/control, and section 9's linked/symbol evidence pass. That
-  closure does not close K2R-0A target execution, board HIL, the bilateral
-  seam, or `FlightStarter`/`OwnedTransfer` sealing.
-- The profile-owned single-payload async row may close independently with
-  **host + exact-Xtensa-reactor-link scope** when section 6.8's branded
-  adapter, every async section-8 trace/control, and section 9's linked/symbol
-  evidence pass. That closure certifies only the named implementation and does
-  not close generic sealing, async RAMWRC/multichunk operation, target runtime,
-  board HIL, registry publication, or the bilateral seam.
-- **K2R-0** is done when: K2R-0A is done; the amended trace matrix passes in CI; runtime cancel/drop oracles and negative controls are published; the demand/sweep/touch state tables are complete; the seam fixture passes; the crate builds and links through an external `no_std` consumer without alloc; clippy/fmt/doc gates clean.
-- Only then does K2R-1 (V1 board bring-up) graduate into this document, and the merge proceeds on frozen protocols.
+- **K2R-0A — CLOSED WITH HOST + PORTABLE-LINK + EXACT-XTENSA-LINK
+  SCOPE**: the matrix ran against recorded SHAs; mechanism C in the A-prime
+  carrier was selected; the exact target compile/link probe and kernel-carrier
+  reactor/portable-link oracles pass; and section 6 contains the demonstrated
+  normative shapes. This closes feasibility, not target execution or HIL.
+- **Blocking region — CLOSED WITH HOST + EXACT-XTENSA-LINK SCOPE**: section
+  6.7's sealed adapter, every host oracle/control, and the linked/symbol matrix
+  pass. This does not close the seam, async generic seals, or K2R-1.
+- **Single-payload async adapter — CLOSED WITH HOST + EXACT-XTENSA-REACTOR-
+  LINK SCOPE**: section 6.8's named implementation and complete host/target
+  link matrix pass. Generic sealing, async RAMWRC, and K2R-1 remain open.
+- **Normalized packaged-source consumer — OPEN, CONTRACT SELECTED**: section
+  9.1's clean package, registry-HAL consumer, and exact target matrix have not
+  yet run. This orthogonal local package row is not a K2R freeze prerequisite.
+- **K2R-0 — GATED ON EXACTLY TWO FREEZE ITEMS**: the bilateral seam must be
+  co-signed and its foreign fixture pass; and `FlightStarter`/`OwnedTransfer`
+  must be sealed at an explicitly authorized breaking API boundary. A version
+  bump or publication is not itself required to implement/review the seal, but
+  no release may mis-version the breaking change. All other K2R-0 host,
+  portable, cancel/drop, state-table, external-`no_std`, clippy/fmt/doc, and
+  negative-control evidence is closed.
+- **K2R-1 — GATED, NO TARGET-RUNTIME/HIL DATA**: after the K2R-0 protocol
+  freeze, it owns target executor scheduling, board coordinator/init, SPI2 and
+  TP_INT delivery, wake/cancel/drop observations, TE, physical pixels/touch,
+  latency, and measured memory/bandwidth. Link-only hooks cannot satisfy it.
+- **Publication — HUMAN-ORDERED, NOT AUTHORIZED BY THIS SPEC**: it is
+  orthogonal to K2R stages. After a future correctly versioned authorized
+  release, an exact-version Xtensa download smoke may validate that registry
+  index artifact but cannot substitute for K2R-1 HIL.
 
 ## 12. Review log
 
@@ -1215,7 +1362,7 @@ finding 5 remained partial; full text is retained in
 `reviews/2026-08-08-exit-review-4-codex.md`, and the agreed batch-7 resolution
 is recorded in `K2R0A-LOG.md`. Revision 5 incorporates the controlling
 contract changes before implementation: `FlightStarter` replaces the
-unsealable callback and shares `OwnedTransfer`'s seal-at-freeze gate; pairing
+unsealable callback and shares `OwnedTransfer`'s K2R-0 breaking-freeze gate; pairing
 is claimed only under sealed integrations, with experiment-phase honesty
 published as an escape; abort rejects an outstanding target until settlement;
 idle invalidation sticks to the next minted epoch; and the remaining
@@ -1340,3 +1487,23 @@ only the named adapter's host + exact-Xtensa-reactor-link row; generic sealing,
 async RAMWRC, target execution, arbitrary-executor waker behavior, publication,
 the bilateral seam, and silicon remain open. The retained review is
 `reviews/2026-08-09-async-region-implementation-precommit-claude.md`.
+
+Revision 12, 2026-08-09: acceptance staging is repaired after the revision-11
+evidence closed every literal K2R-0A feasibility criterion. K2R-0A is now
+closed with host + portable-link + exact-Xtensa-link scope; the bilateral seam
+and generic capability sealing gate the K2R-0 protocol freeze; target executor,
+board coordinator, silicon, and measurements belong to K2R-1; publication is
+orthogonal and human-ordered. The revision also splits the previously
+conflated registry fallback into a locally executable clean packaged-source +
+registry-HAL Xtensa consumer gate and a separate future-release exact-version
+download smoke. The former is selected before implementation and remains open
+until section 9.1's matrix passes; the already published 0.1.1 artifact remains
+historical and cannot stand in for current source.
+
+Revision-12 preimplementation review, 2026-08-09: Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after checking the acceptance map, immutable-0.1.1 distinction, clean embedded
+VCS provenance, normalized registry-HAL graph, temporary staging topology,
+fixture-controlled Xtensa `build-std`, both target Clippy gates, retained-hook
+scope, and every publication/runtime/HIL non-guarantee. The retained review is
+`reviews/2026-08-09-packaged-registry-spec-precommit-claude.md`.
