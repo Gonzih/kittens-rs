@@ -118,6 +118,7 @@ for (const artifact of requiredArtifacts) {
 
 const html = read("index.html");
 const notFound = read("404.html");
+const publicMarkup = `${html}\n${notFound}`;
 const css = read("styles.css");
 const javascript = read("script.js");
 const robots = read("robots.txt");
@@ -232,7 +233,10 @@ for (const internalMarker of [
   "g10",
   "formal k0",
 ]) {
-  check(!html.toLowerCase().includes(internalMarker), `internal development marker leaked: ${internalMarker}`);
+  check(
+    !publicMarkup.toLowerCase().includes(internalMarker),
+    `internal development marker leaked: ${internalMarker}`,
+  );
 }
 
 for (const noisySurface of [
