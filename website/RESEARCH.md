@@ -215,12 +215,29 @@ controls its own semantics.
 - **Observation —** W0.1 preserved technical truth but made visitors process
   the internal development structure before reaching the product payoff. The
   volume turned evidence into friction.
-- **Recommendation —** Keep `kittens-code` immediately after the hero, but sell
-  only three outcomes—durable work, recall beyond the live window, and
-  predictable recovery. Move crate topology, RLM grammar, evidence ledgers,
-  branch state, and deferred gates back to repository docs.
+- **Recommendation —** After the operator's W0.2 review, remove even the
+  three-outcome cards and explanatory image overlays. Keep `kittens-code`
+  immediately after the hero, state its payoff once, and move implementation
+  vocabulary back to repository docs.
 
-## 8. Gaps and decisions deliberately not invented
+## 8. Current developer-tool landing pattern audit
+
+- **Fact —** [Cursor](https://www.cursor.com/) leads with “The AI Code Editor,”
+  one short payoff, one primary download action, and a dominant product visual.
+- **Fact —** [Resend](https://resend.com/home) leads with “Email for
+  developers,” one payoff sentence, and two actions before product detail.
+- **Fact —** [Linear](https://linear.app/homepage) opens with a category claim,
+  a short AI-era payoff, and a dominant product visual before deeper material.
+- **Fact —** [Vercel](https://vercel.com/home) uses a bold category line, one
+  supporting sentence, and a very small action set before elaboration.
+- **Observation —** Their impact comes from hierarchy, restraint, and the
+  product visual. Floating explanations and repeated benefit cards are not what
+  makes the first viewport feel current.
+- **Recommendation —** W0.3 should use one headline, one sentence, one action,
+  and unannotated art in the hero, followed only by a minimal flagship block and
+  a minimal statement of the underlying idea.
+
+## 9. Gaps and decisions deliberately not invented
 
 - **Gap: no visitor research, search-query data, or analytics baseline exists
   for Kittens (no data exists).** W0 uses the audiences already named in the

@@ -1,7 +1,7 @@
 {
-  "name": "Kittens — async Rust, untangled",
+  "name": "Kittens — async Rust, fewer surprises",
   "short_name": "Kittens",
-  "description": "Kittens makes async orchestration explicit in Rust, with kittens-code as its durable, recoverable coding-agent flagship.",
+  "description": "Kittens turns async coordination rules into compiler feedback. Meet kittens-code, the coding agent that picks up where it left off.",
   "start_url": "./",
   "scope": "./",
   "display": "browser",
