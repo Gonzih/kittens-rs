@@ -1,7 +1,7 @@
 {
-  "name": "Kittens + kittens-code — explicit async orchestration",
+  "name": "Kittens — async Rust, untangled",
   "short_name": "Kittens",
-  "description": "Experimental no_std Rust SDK for compiler-checked async orchestration, with kittens-code as its flagship coding-agent demo.",
+  "description": "Kittens makes async orchestration explicit in Rust, with kittens-code as its durable, recoverable coding-agent flagship.",
   "start_url": "./",
   "scope": "./",
   "display": "browser",
