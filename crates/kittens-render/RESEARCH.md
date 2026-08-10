@@ -2,7 +2,13 @@
 
 - Date: 2026-08-08
 - Revision 2, same day: incorporates the full 14-finding external review (Codex `gpt-5.6-sol`, ultra effort, read-only repository access). Five findings were blocking; one exposed a factual error in revision 1. Corrections are recorded explicitly per house rules — drift is a first-class defect, never silently patched.
-- Status: research pass for the embedded rendering/interaction profile; **not ready to graduate into a SPEC** until the section 9 gates run. No implementation is authorized by this document.
+- Revision 3, 2026-08-09: records the exact-source blocking-region audit that
+  informed SPEC revision 10. The normative authorization and evidence gates
+  live in the SPEC; this document remains research, not an implementation
+  contract.
+- Status: research record for the embedded rendering/interaction profile.
+  SPEC revision 10 selects the blocking-region design, but its implementation
+  evidence remains gated until the exact host and target matrix runs.
 - Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
 - Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
@@ -33,7 +39,9 @@ First dev board: **Waveshare ESP32-S3 1.8" AMOLED Touch, SH8601 display, FT3168 
 
 **Superseded (revision-1 hypothesis, rejected by findings 1 and 8):** revision 1 proposed a single ownership-returning `Surface` spanning blocking flush and owning-DMA. The review showed the two APIs do not share a boundary — a façade equating them would let "start" block to completion, making the completion ceremonial — and an indivisible surface *contradicts* two-buffer overlap: if the transfer owns everything, the renderer has no spare buffer to fill.
 
-**Recommendation (adopting the reviewer's design as the leading candidate):** two explicit capabilities with resource-carrying results, and typestates for overlap:
+**Superseded recommendation (revision 2; blocking half replaced by revision 3
+and SPEC revision 10):** two explicit capabilities with resource-carrying
+results, and typestates for overlap:
 
 ```rust
 pub trait BlockingRegionWrite<B>: Sized {
@@ -82,15 +90,45 @@ pub struct StripeInFlight<C, B> { completion: C /* pin before polling */, spare:
 | stock `sh8601-rs`, full PSRAM framebuffer | 329,728 B PSRAM + bandwidth math of section 4; alloc in `partial_flush` | viable for first light (K2R-1 baseline); measured, not assumed |
 | upstream/fork a `write_region(region, pixels)` transport | driver work + review; enables stripes and the owning-DMA path | required for the stripe/DMA architecture; **gate before the SPEC freezes** |
 
-**Recommendation:** decide by measurement at K2R-1: bring the board up on the stock full-framebuffer path first (fastest path to a running app and to flush/TE/touch-latency numbers), develop the `write_region` transport in parallel as the architectural target.
+**Observation (revision 3 exact-source audit):** `sh8601-rs` 0.1.8 resolves to
+commit `4bcddfd529017135f19a5a9a6e79dd6b8ef1b460`. Its `set_window` rejects the
+valid first-row endpoint `y_end == 0`, does not bound both inclusive ends to
+the panel, and its public `partial_flush` allocates and copies through the
+driver's private framebuffer. The stock type exposes neither the private
+interface nor an ownership-returning handoff, so it cannot accept Kittens'
+external stripe buffer or compose with the pinned HAL transport without a
+fork.
+
+**Recommendation (adopted by SPEC revision 10):** keep stock full-framebuffer
+bring-up only as a later first-light baseline. For the architectural region
+gate, own the minimal CASET/PASET/RAMWR/RAMWRC transaction in this profile,
+derived from the exact audited commit, and compile its one sealed production
+adapter against `esp-hal` revision
+`d48f747ba28accdc51779ba193eba923138e0382`. Keep the wire seam private; a
+public generic interface could do nothing and report success, so sealing a
+wrapper around it would merely move the integration-honesty escape. The stock
+driver is protocol provenance, not a compiled dependency.
 
 ## 7. What kittens-render is (boundary, post-review)
 
-Unchanged in spirit, corrected in structure: sources (generation-latched touch with decoded events, cadence deadline, TE edge where measurement justifies it, completion delivery per the K2R-0A outcome); the two transport capabilities of section 3 with typestate overlap; frame-demand policy above them sharing only `request`; `embedded-graphics` global-coordinate targets as the composition boundary; explicitly not owned: widgets/layout, the display driver internals, HAL, executor, power/AOD (deferred to the board coordinator slice), Slint.
+Revision-2 boundary, amended by revision 3: sources (generation-latched touch
+with decoded events, cadence deadline, TE edge where measurement justifies it,
+completion delivery per the K2R-0A outcome); explicit blocking and async
+transport capabilities; frame-demand policy above them sharing only `request`;
+and `embedded-graphics` global-coordinate targets as the composition boundary.
+The profile now owns the one minimal private SH8601 region transaction selected
+by SPEC revision 10, superseding the earlier blanket exclusion of display-
+driver internals. It still does not own a complete driver, panel initialization,
+widgets/layout, HAL, executor, power/AOD (deferred to the board coordinator
+slice), or Slint.
 
 ## 8. Naming
 
-`kittens-render` stands. The gate is no longer one `Surface`; the public nouns follow the corrected ownership topology (`PreparedStripe`, `StripeInFlight`, `Returned`, `Failed`, `FrameEpoch`).
+`kittens-render` stands. The gate is no longer one `Surface`. Revision 3
+supersedes the provisional blocking `Returned`/`Failed` nouns with the exact
+SPEC surface: target-owned `write_region`, opaque `BlockingSettled`, and one
+written/unwritten `StripeSettlement`; the async path retains its separate
+`InFlight`/`Settled` vocabulary.
 
 ## 9. Slice plan and measured gates (replacing revision 1's plan per finding 11)
 
@@ -106,5 +144,7 @@ Per the review verdict: only the K2R-0A/K2R-0 contract graduates into the first 
 External review, 2026-08-08: Codex `gpt-5.6-sol`, ultra reasoning effort, read-only repository access, 14 numbered findings (5 blocking, 8 important, 1 minor), full text retained in the session transcript. Disposition: findings 1–11 adopted as written above; finding 12 adopted (vocabulary split); finding 13's type signatures adopted as the leading candidate pending the K2R-0A prototype; finding 14 (worktree missing `AGENTS.md`/`kittens-tui` SPEC at the reviewed commit) resolved by rebasing this branch onto main once PR #2 merges, before any SPEC graduation. Verdict accepted: **not ready to graduate**; the section 9 gates control.
 
 **Gap: V1 TE measured behavior (edge/mode/safe-phase/tearing) — no data until K2R-1.**
-**Gap: `write_region` transport upstream viability — no maintainer contact yet.**
+**Gap: upstream disposition for the local `write_region` transaction — no
+maintainer contact yet; this does not block the profile-owned revision-10
+gate.**
 **Gap: SH8601 blocking-flush duration per full frame under `sh8601-rs` on this board — no data until K2R-1.**

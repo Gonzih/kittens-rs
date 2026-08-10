@@ -3,7 +3,7 @@
 Embedded rendering/interaction profile for the [Kittens](../kittens)
 reactor kernel, anchored on the Waveshare ESP32-S3 1.8" AMOLED V1 board
 (SH8601 display, FT3168 touch, 368×448). The controlling contract is
-[`SPEC.md`](SPEC.md) (revision 9: section 6 is the normative K2R-0
+[`SPEC.md`](SPEC.md) (revision 10: section 6 is the normative K2R-0
 surface); [`K2R0A-LOG.md`](K2R0A-LOG.md) is the experiment record and
 [`TRACE-MANIFEST.md`](TRACE-MANIFEST.md) maps every required oracle to its
 status. Reviews are retained under [`reviews/`](reviews/).
@@ -13,9 +13,12 @@ protocols are not frozen. The linked Xtensa compile/link feasibility probe is
 **CLOSED WITH SCOPE**; post-revision-8 artifact metadata is recorded in the
 trace manifest, and CI repeats the linked-ELF gate. Board HIL and silicon
 interrupt delivery, K2R-1 measurements, bilateral seam co-sign with
-`kittens-code`, blocking `write_region`, and capability sealing remain open
-gates. The kernel-admitted completion carrier and real `reactor!` integration
-are **CLOSED WITH HOST + PORTABLE-LINK SCOPE**; they make no silicon claim.
+`kittens-code`, blocking `write_region` evidence, and async capability sealing
+remain open gates. Revision 10 selects the sealed, profile-owned blocking
+adapter contract, but does not close it before its host matrix and exact-HAL
+Xtensa link pass. The kernel-admitted completion carrier and real `reactor!`
+integration are **CLOSED WITH HOST + PORTABLE-LINK SCOPE**; they make no
+silicon claim.
 
 ## What each guarantee rests on
 
@@ -65,15 +68,21 @@ transition and verifies resource recovery without adding a dependency to the
 
 ## What this crate is not
 
-Not a display driver, widget/layout/scene framework, HAL, or executor. It
-does not claim physical presentation (milestones are `StripeWritten` /
+Not a complete display driver, widget/layout/scene framework, HAL, or executor.
+Revision 10 owns only the minimal section-6.7 SH8601 region transaction; panel
+initialization, reset/power/brightness, command coordination, and physical
+truth remain outside it. The crate does not claim physical presentation
+(milestones are `StripeWritten` /
 `SweepWritten` only), TE synchronization, power/AOD management, or DMA
 overlap — each is a named gate in the SPEC. The optional stripe target's host
-oracles establish byte-exact model reconstruction, not a future adapter's
+oracles establish byte-exact model reconstruction, not the selected adapter's
 `write_region`, DMA/wire delivery, physical RGB channel/byte interpretation,
 or panel color fidelity; those remain exact-adapter and board-HIL questions.
 Escape surfaces that compile by design: raw transport access outside the
 capability boundary;
+construction of the blocking transport from an unbranded same-source HAL bus,
+whose peripheral/pins/mode/frequency and panel initialization remain caller
+obligations;
 direct `.await`/manual `poll_complete` instead of reactor admission; wrapping
 an inert or lossy future in the generic kernel carrier; replacing the armed
 future through `future_mut`'s ordinary `&mut F`; dropping an armed carrier,
@@ -84,6 +93,10 @@ reports rejection (pairing becomes structural only after reviewed integrations
 are sealed);
 ordinary drop of `Settled`/`StripeSettlement`, or consuming a settlement in a
 wrong-owner `Sweep::settle` rejection (the owning sweep remains outstanding);
+dropping the opaque `BlockingSettled` before extraction, which loses its
+writer/returned slice value and settlement while leaving the owning sweep
+outstanding (drop that sweep, call `abandon_active`, and retain the underlying
+pixel storage for full repaint);
 `FrameDemand::abandon_active`, which cannot revoke retained old sweeps, targets,
 or flights;
 `PanelGeometry::custom_unvalidated_panel`; interior-mutability or shared
@@ -124,6 +137,7 @@ downstream generated-reactor fixture links on Thumb and wasm, but the Xtensa
 firmware still serves only its scoped compile/link role. Remaining gates are
 board HIL (hardware in transit), including silicon interrupt delivery and
 physical RGB565/channel/byte fidelity, before K2R-1 measurements; bilateral
-seam co-sign with `kittens-code`; the blocking `write_region` upstream/fork
-decision; and `FlightStarter`/`OwnedTransfer` sealing before any freeze.
-Publishing this experimental 0.1.x evidence release is not that freeze.
+seam co-sign with `kittens-code`; implementation evidence for revision 10's
+selected sealed, profile-owned blocking `write_region`; and
+`FlightStarter`/`OwnedTransfer` sealing before any freeze. Publishing this
+experimental 0.1.x evidence release is not that freeze.

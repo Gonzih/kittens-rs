@@ -473,6 +473,42 @@ board-HIL gated (no data exists).**
 probe compiles the raw SH8601 pixel phase, not a complete display-driver
 transaction (no data exists).**
 
+## Blocking-region contract selection (2026-08-09)
+
+**Fact:** the exact-source audit found that `sh8601-rs` 0.1.8 corresponds to
+commit `4bcddfd529017135f19a5a9a6e79dd6b8ef1b460`. Its public partial-flush path
+allocates and copies through a private framebuffer, while `set_window` rejects
+the valid first-row endpoint `y_end == 0` and does not validate both inclusive
+ends against panel bounds. The stock driver exposes no external-buffer region
+operation or ownership-returning interface handoff.
+
+**Observation:** a sealed public wrapper over an open caller-implemented wire
+trait would not close the honesty boundary: a safe downstream wire could emit
+nothing and return success. The only honest no-HIL admission available now is
+a private command engine behind a profile-owned concrete HAL adapter. Sealing
+that adapter controls admission; deterministic traces and exact-target linking
+review what the admitted implementation actually does.
+
+**Recommendation — adopted by SPEC revision 10:** implement the minimal
+CASET/PASET/RAMWR/RAMWRC transaction locally, derived from the audited driver
+commit but not claiming the stock crate as a dependency. Admit only the
+target-gated `Esp32s3Sh8601BlockingTransport`, compiled against exact
+`esp-hal` revision `d48f747ba28accdc51779ba193eba923138e0382`. Route its
+proof-bearing operation through the consumed `StripeTarget` and an
+unconstructible dispatch permit; every ordinary error conservatively produces
+an unwritten settlement and poisons the sweep. Keep the existing async
+`FlightStarter` gate separate: its Xtensa model still issues only RAMWR and is
+not region-honest enough to seal.
+
+**Gap: implementation evidence remains pending until the exact host command
+and per-boundary failure matrix, compile controls, resource identities,
+owning-sweep settlement, real SPI2/GDMA no-allocator call, locked optimized
+Xtensa link, and allocator-symbol inspection pass (no data exists).**
+
+**Gap: panel initialization, physical command acceptance and placement,
+RGB565 fidelity, RAMWRC behavior on silicon, TE/tearing, visible output, and
+latency remain board-HIL gated (no data exists).**
+
 ## Publication mechanics evidence (2026-08-09)
 
 **Fact — crates.io dry-run evidence (verbatim):**
