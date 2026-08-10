@@ -250,6 +250,45 @@ pub(crate) enum Sh8601WireMode {
     Quad,
 }
 
+/// One SH8601 half-duplex command envelope without its borrowed payload.
+///
+/// Keeping the envelope independent from the payload lets the blocking engine
+/// borrow a slice while the async adapter gives ownership of its DMA buffer to
+/// esp-hal. Both paths therefore consume the same opcode/address/mode truth.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Sh8601WireCommand {
+    /// Semantic stage retained for deterministic traces and error mapping.
+    pub stage: Sh8601WriteStage,
+    /// Eight-bit command opcode.
+    pub opcode: u8,
+    /// Twenty-four-bit command address, stored in the low 24 bits.
+    pub address: u32,
+    /// Command line mode.
+    pub command_mode: Sh8601WireMode,
+    /// Address line mode.
+    pub address_mode: Sh8601WireMode,
+    /// Payload line mode.
+    pub data_mode: Sh8601WireMode,
+    /// Dummy cycles before the payload.
+    pub dummy_cycles: u8,
+}
+
+impl Sh8601WireCommand {
+    /// Attaches a synchronous payload borrow to this shared command envelope.
+    pub(crate) const fn with_data(self, data: &[u8]) -> Sh8601WireTransfer<'_> {
+        Sh8601WireTransfer {
+            stage: self.stage,
+            opcode: self.opcode,
+            address: self.address,
+            command_mode: self.command_mode,
+            address_mode: self.address_mode,
+            data_mode: self.data_mode,
+            dummy_cycles: self.dummy_cycles,
+            data,
+        }
+    }
+}
+
 /// One exact half-duplex write at the crate-private wire boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Sh8601WireTransfer<'a> {
@@ -282,6 +321,70 @@ pub(crate) trait Sh8601Wire {
     fn write(&mut self, transfer: Sh8601WireTransfer<'_>) -> Result<(), Self::Error>;
 }
 
+/// Validated SH8601 geometry, byte count, and inclusive window bytes.
+///
+/// This is the sole source of geometry and CASET/PASET encoding truth for the
+/// blocking engine and the profile-owned async adapter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Sh8601RegionPlan {
+    columns: [u8; 4],
+    pages: [u8; 4],
+    expected_bytes: u32,
+}
+
+impl Sh8601RegionPlan {
+    /// Exact RGB565 payload byte count for the validated region.
+    pub(crate) const fn expected_bytes(self) -> u32 {
+        self.expected_bytes
+    }
+
+    /// Shared CASET envelope paired with its inclusive big-endian payload.
+    pub(crate) const fn column_transfer(&self) -> Sh8601WireTransfer<'_> {
+        Sh8601WireCommand {
+            stage: Sh8601WriteStage::ColumnAddress,
+            opcode: SH8601_WRITE_OPCODE,
+            address: SH8601_CASET_ADDRESS,
+            command_mode: Sh8601WireMode::Single,
+            address_mode: Sh8601WireMode::Single,
+            data_mode: Sh8601WireMode::Single,
+            dummy_cycles: 0,
+        }
+        .with_data(&self.columns)
+    }
+
+    /// Shared PASET envelope paired with its inclusive big-endian payload.
+    pub(crate) const fn page_transfer(&self) -> Sh8601WireTransfer<'_> {
+        Sh8601WireCommand {
+            stage: Sh8601WriteStage::PageAddress,
+            opcode: SH8601_WRITE_OPCODE,
+            address: SH8601_PASET_ADDRESS,
+            command_mode: Sh8601WireMode::Single,
+            address_mode: Sh8601WireMode::Single,
+            data_mode: Sh8601WireMode::Single,
+            dummy_cycles: 0,
+        }
+        .with_data(&self.pages)
+    }
+
+    /// Shared single-payload RAMWR envelope.
+    pub(crate) const fn ram_write_command(self) -> Sh8601WireCommand {
+        Sh8601WireCommand {
+            stage: Sh8601WriteStage::Pixel {
+                command: Sh8601PixelCommand::RamWriteStart,
+                chunk: 0,
+                offset: 0,
+                len: self.expected_bytes as usize,
+            },
+            opcode: SH8601_PIXEL_OPCODE,
+            address: SH8601_RAMWR_ADDRESS,
+            command_mode: Sh8601WireMode::Single,
+            address_mode: Sh8601WireMode::Single,
+            data_mode: Sh8601WireMode::Quad,
+            dummy_cycles: 0,
+        }
+    }
+}
+
 fn wire_write<W: Sh8601Wire>(
     wire: &mut W,
     transfer: Sh8601WireTransfer<'_>,
@@ -291,10 +394,9 @@ fn wire_write<W: Sh8601Wire>(
         .map_err(|source| Sh8601RegionWriteError::Io { stage, source })
 }
 
-fn validate_region<E>(
+pub(crate) fn plan_sh8601_region<E>(
     region: Region,
-    actual: usize,
-) -> Result<(u16, u16), Sh8601RegionWriteError<E>> {
+) -> Result<Sh8601RegionPlan, Sh8601RegionWriteError<E>> {
     if region.width == 0 {
         return Err(Sh8601RegionWriteError::EmptyWidth);
     }
@@ -321,12 +423,27 @@ fn validate_region<E>(
         return Err(Sh8601RegionWriteError::OutOfBounds { region });
     }
 
-    let expected = u32::from(region.width) * u32::from(region.height) * 2;
+    let expected_bytes = u32::from(region.width) * u32::from(region.height) * 2;
+    Ok(Sh8601RegionPlan {
+        columns: inclusive_window(region.x, x_end),
+        pages: inclusive_window(region.y, y_end),
+        expected_bytes,
+    })
+}
+
+/// Applies the blocking path's exact-length check after shared geometry.
+pub(crate) fn validate_sh8601_exact_len<E>(
+    plan: Sh8601RegionPlan,
+    actual: usize,
+) -> Result<(), Sh8601RegionWriteError<E>> {
     let actual_u64 = u64::try_from(actual).unwrap_or(u64::MAX);
-    if u64::from(expected) != actual_u64 {
-        return Err(Sh8601RegionWriteError::WrongByteLength { expected, actual });
+    if u64::from(plan.expected_bytes) != actual_u64 {
+        return Err(Sh8601RegionWriteError::WrongByteLength {
+            expected: plan.expected_bytes,
+            actual,
+        });
     }
-    Ok((x_end, y_end))
+    Ok(())
 }
 
 fn inclusive_window(start: u16, exclusive_end: u16) -> [u8; 4] {
@@ -346,37 +463,12 @@ pub(crate) fn write_sh8601_region<W: Sh8601Wire>(
     region: Region,
     pixels: &[u8],
 ) -> Result<(), Sh8601RegionWriteError<W::Error>> {
-    let (x_end, y_end) = validate_region::<W::Error>(region, pixels.len())?;
+    let plan = plan_sh8601_region::<W::Error>(region)?;
+    validate_sh8601_exact_len::<W::Error>(plan, pixels.len())?;
 
-    let columns = inclusive_window(region.x, x_end);
-    wire_write(
-        wire,
-        Sh8601WireTransfer {
-            stage: Sh8601WriteStage::ColumnAddress,
-            opcode: SH8601_WRITE_OPCODE,
-            address: SH8601_CASET_ADDRESS,
-            command_mode: Sh8601WireMode::Single,
-            address_mode: Sh8601WireMode::Single,
-            data_mode: Sh8601WireMode::Single,
-            dummy_cycles: 0,
-            data: &columns,
-        },
-    )?;
+    wire_write(wire, plan.column_transfer())?;
 
-    let pages = inclusive_window(region.y, y_end);
-    wire_write(
-        wire,
-        Sh8601WireTransfer {
-            stage: Sh8601WriteStage::PageAddress,
-            opcode: SH8601_WRITE_OPCODE,
-            address: SH8601_PASET_ADDRESS,
-            command_mode: Sh8601WireMode::Single,
-            address_mode: Sh8601WireMode::Single,
-            data_mode: Sh8601WireMode::Single,
-            dummy_cycles: 0,
-            data: &pages,
-        },
-    )?;
+    wire_write(wire, plan.page_transfer())?;
 
     for (chunk, payload) in pixels.chunks(SH8601_DMA_CHUNK_BYTES).enumerate() {
         let offset = chunk * SH8601_DMA_CHUNK_BYTES;
@@ -392,7 +484,7 @@ pub(crate) fn write_sh8601_region<W: Sh8601Wire>(
         };
         wire_write(
             wire,
-            Sh8601WireTransfer {
+            Sh8601WireCommand {
                 stage: Sh8601WriteStage::Pixel {
                     command,
                     chunk,
@@ -405,8 +497,8 @@ pub(crate) fn write_sh8601_region<W: Sh8601Wire>(
                 address_mode: Sh8601WireMode::Single,
                 data_mode: Sh8601WireMode::Quad,
                 dummy_cycles: 0,
-                data: payload,
-            },
+            }
+            .with_data(payload),
         )?;
     }
 

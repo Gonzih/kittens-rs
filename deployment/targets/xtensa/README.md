@@ -57,11 +57,14 @@ Build command, from inside the firmware crate directory:
 ```sh
 . "$HOME/export-esp.sh"
 cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf -- -D warnings
+cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf \
+  --manifest-path ../../crates/kittens-render/Cargo.toml \
+  --no-default-features --features esp32s3-sh8601-async --lib -- -D warnings
 cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
 file target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
 xtensa-esp32s3-elf-readelf -h \
   target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
-xtensa-esp32s3-elf-nm -a -C \
+xtensa-esp32s3-elf-nm -a -S -C \
   target/xtensa-esp32s3-none-elf/release/kittens-render-xtensa-probe
 ```
 
@@ -92,6 +95,21 @@ allocator symbols listed below. The linked entry path deliberately shortens the
 TX descriptor-chain length to 1 before constructor admission restores it to
 16,380.
 
+**Fact (revision-11 run, 2026-08-09):** the standalone source removes its local
+async adapter and enables the profile-owned `esp32s3-sh8601-async`
+implementation.
+Its entrypoint preserves the executable revision-10 blocking path and retains,
+without calling, two function pointers: one generated-reactor path that rearms
+two completed 368×16 flights and drains a third, and one armed-source drop path
+that exercises drop-plus-`abandon_active` glue. A dedicated shim performs
+exactly one opaque `Waker::noop` poll; it is not an executor. The fresh locked
+optimized ELF is 214,352 bytes with SHA-256
+`30cd240176d206d6483e04fd0f2384ced2b101491ff6e516ec635a4bbd98664a`,
+entry `0x403785e8`, and 115,492 bytes of `.bss`. Its undefined-symbol and
+allocator scans are empty. Nonzero `nm -S -C` text symbols retain the reactor
+hook (`0x168`), one-poll shim (`0xaf6`), and armed-drop hook (`0x137`). These
+values supersede neither the revision-9 nor revision-10 chronology above.
+
 For every no-allocator gate, inspect the complete demangled `nm` output and
 require no allocator entry points or Rust allocation-module symbols. The
 revision-10 blocking-region evidence checks at least `__rust_alloc`,
@@ -114,9 +132,9 @@ resolve that registry source identity; its Xtensa compile/link remains
 unverified and publication-gated.
 
 Firmware shape: `#![no_std]`, `#![no_main]`, `#[esp_hal::main]`, an
-explicit `#[panic_handler]`, no allocator, `panic = "abort"`, fat LTO.
-Application/adapter modules stay under `#![forbid(unsafe_code)]`; only the
-HAL boundary is trusted.
+explicit `#[panic_handler]`, no allocator, `panic = "abort"`, fat LTO. The
+application stays under `#![forbid(unsafe_code)]`; the target-only profile
+adapter is the reviewed HAL boundary.
 
 ## 3. Deploying to the board (Hypothesis — hardware in transit, not yet executed)
 
@@ -158,6 +176,16 @@ board-HIL gates listed in
 `crates/kittens-render/TRACE-MANIFEST.md` and the K2R-1 checklist in
 `crates/kittens-render/SPEC.md`. Do not claim them from a build log.
 
+For the revision-11 async row, a green source/type/link gate can additionally
+show that the branded constructor rejects SPI3, DMA_CH1, and swapped
+GPIO4/GPIO5 roles; the real profile transfer fits the admitted inline carrier;
+generated rearm/drain and armed-drop code survive optimized linking; the exact
+HAL source identity remains pinned; and the noop-waker binary has no matched
+allocator symbols. The retained outer hooks are never called. Consequently a
+green build is **not** evidence for a target executor, IRQ delivery, wake
+counts, completion-versus-cancellation behavior, runtime drop, arbitrary
+executor-waker allocation, or physical panel behavior.
+
 ## 5. CI link gate (Fact — configured 2026-08-09)
 
 The `xtensa-link` GitHub Actions job runs the section-2 release build for
@@ -169,6 +197,18 @@ Tensilica Xtensa executable. Revision 10 additionally requires `nm -u` to be
 empty, the concrete blocking wire symbol to remain present, and the section-2
 allocator-symbol scan to have zero matches; `cargo check` is not a substitute
 for this link and symbol evidence.
+
+Revision 11 adds fail-closed source checks for the profile feature, macro-only
+kernel dependency, removed fixture adapter, one-poll shim, and uncalled outer
+function-pointer spelling. Three target-only bins must fail with E0308 for
+SPI3, DMA_CH1, and swapped SIO0/SIO1 singleton arguments. The optimized ELF is
+paired with a positive constructor/extractor target check, then inspected with
+`nm -S -C`: the generated-reactor hook, its single-poll shim, and armed-drop
+hook must each have a nonzero text symbol, while the undefined and allocator
+scans remain clean. The parent-owned revision-11 run passed all three intended
+E0308 controls, the Parts compile-pass control, direct exact-target profile
+Clippy, fixture Clippy/link, source identity, undefined/allocator scans, and
+all three nonzero-symbol assertions with the artifact recorded above.
 
 The job pins `esp-rs/xtensa-toolchain` v1.7.0 by commit SHA, selects Xtensa Rust
 1.95.0.0, limits the installed GCC targets to ESP32-S3, and asserts the full

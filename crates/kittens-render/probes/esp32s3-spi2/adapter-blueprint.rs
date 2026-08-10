@@ -1,7 +1,8 @@
 //! **SUPERSEDED HISTORICAL PSEUDOCODE — NOT IMPLEMENTATION EVIDENCE.**
 //!
 //! The current compile-ready adapter is
-//! `fixtures/render-xtensa-probe/src/adapter.rs`. This retained fragment
+//! `crates/kittens-render/src/esp32s3_sh8601_async.rs`, and
+//! `fixtures/render-xtensa-probe/src/main.rs` links it. This retained fragment
 //! predates SPEC revision 8's waker correction and MUST NOT be copied: the
 //! current implementation clones the candidate waker before entering the
 //! global critical section and moves every replaced/unused waker out for drop.

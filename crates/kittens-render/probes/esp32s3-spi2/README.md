@@ -2,8 +2,9 @@
 
 > **SUPERSEDED.** This directory retains the pre-implementation engineering
 > verdict and pseudocode for audit history. The current compile-ready adapter
-> and linked-firmware source live in
-> [`fixtures/render-xtensa-probe`](https://github.com/Gonzih/kittens-rs/tree/main/fixtures/render-xtensa-probe).
+> lives in [`src/esp32s3_sh8601_async.rs`](../../src/esp32s3_sh8601_async.rs);
+> the linked-firmware source lives in
+> [`fixtures/render-xtensa-probe`](../../../../fixtures/render-xtensa-probe).
 > Nothing in this directory is current implementation evidence or guidance.
 
 The HAL-fidelity verdict and its historical adapter blueprint live in
@@ -30,7 +31,8 @@ with the target's exact region and a crate-issued `StartPermit<'_>`, and
 that witness to its owning `Sweep::settle`; Rust cannot force delivery or
 prevent a consuming wrong-owner rejection. The
 verdict text is retained unedited as the historical record; the subsequently
-landed exact Xtensa probe implements the corrected signatures and lifecycle.
+landed profile adapter and exact Xtensa fixture implement the corrected
+signatures and lifecycle.
 Pairing is structural under integrations reviewed and sealed at freeze; while both
 capability traits remain open for the experiment, region honesty and
 acceptance-atomic rejection remain explicit integration obligations:

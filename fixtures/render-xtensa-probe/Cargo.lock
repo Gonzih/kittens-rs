@@ -747,9 +747,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "kittens"
+version = "0.1.1"
+dependencies = [
+ "kittens-macros",
+]
+
+[[package]]
+name = "kittens-macros"
+version = "0.1.1"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "kittens-render"
 version = "0.1.1"
 dependencies = [
+ "critical-section",
  "esp-hal",
 ]
 
@@ -757,8 +775,8 @@ dependencies = [
 name = "kittens-render-xtensa-probe"
 version = "0.0.0"
 dependencies = [
- "critical-section",
  "esp-hal",
+ "kittens",
  "kittens-render",
 ]
 

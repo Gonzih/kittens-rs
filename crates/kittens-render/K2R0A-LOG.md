@@ -71,10 +71,13 @@ waker-replacement/late-IRQ/reuse traces added; (9) sealing recorded below.
    `d48f747ba28accdc51779ba193eba923138e0382`. This supplies no physical-panel
    or published-registry target observation.
 5. **Profile-owned exact-region async adapter + generated-reactor Xtensa link —
-   OPEN, CONTRACT SELECTED (revision 11)**: replace the fixture-local RAMWR-only
-   adapter with the branded SPI2 implementation, exact three-boundary host
-   matrix, and linked real reactor. This may close only one concrete-adapter
-   evidence row; it does not seal the generic traits or claim target execution.
+   CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK SCOPE (2026-08-09)**: the
+   fixture-local RAMWR-only adapter is replaced by the branded SPI2
+   implementation. The exact three-boundary host matrix, concrete-Waker slot
+   lifecycle, target singleton controls, direct target Clippy, and locked
+   generated-reactor/drop-glue ELF source/symbol scans pass. This closes only
+   one concrete-adapter evidence row; it does not seal the generic traits or
+   claim target execution.
 6. **Seal `FlightStarter` and `OwnedTransfer`** to reviewed integrations before
    any freeze.
 
@@ -476,8 +479,10 @@ consumer produced an 11,880-byte statically linked Thumb ELF (SHA-256
 **Observation:** this closes K2R-0A item 3 with host + portable-link scope. It
 does not certify an arbitrary inner future, force owning-sweep delivery, or
 turn raw `.await`, manual polling, `future_mut` replacement, or whole-source
-drop into rejected programs. The Xtensa fixture still manually polls its
-concrete flight, so target-side reactor execution is not claimed.
+drop into rejected programs. The revision-9 Xtensa fixture manually polled its
+concrete flight; revision 11 instead links a generated-reactor path but never
+calls its retained outer hooks, so target-side reactor execution is still not
+claimed.
 
 **Gap: SPI2 silicon wake delivery and target-side executor behavior remain
 board-HIL gated (no data exists).**
@@ -614,9 +619,33 @@ nonzero symbols. CI therefore proves code generation, target drop glue, and
 link only, not executor scheduling, ISR delivery, wake counts, arbitrary-waker
 allocation behavior, drop execution, or silicon behavior.
 
-**Gap: the exact host start/failure/lifecycle matrix and branded generated-
-reactor Xtensa link remain pending (no revision-11 implementation data
-exists).**
+**Observation — implementation evidence (2026-08-09):** the host suite records
+the literal 368×16 CASET/PASET/RAMWR trace, every one of its three independent
+failure boundaries, cap-before-length preflight, positive windows, independent
+RX/TX scratch rejection and post-admission normalization, both register/recheck
+positions, waker replacement outside exclusion, completion/cancel/disarm/reuse,
+resource-carrying rejection/recovery, written/cancelled owning-sweep settlement,
+and ordinary drop. Three exact-target bins reject SPI3, DMA_CH1, and swapped
+SIO0/SIO1 with their intended E0308 diagnostics; the exact Parts roundtrip
+control passes.
+
+**Observation — exact target evidence (2026-08-09):** direct profile-library
+and standalone-fixture target Clippy pass against `esp-hal` revision
+`d48f747ba28accdc51779ba193eba923138e0382`; the locked optimized ELF is
+214,352 bytes with SHA-256
+`30cd240176d206d6483e04fd0f2384ced2b101491ff6e516ec635a4bbd98664a`,
+entry `0x403785e8`, and 115,492 bytes of `.bss`. Its undefined-symbol table and
+allocator scan are empty. Nonzero text symbols retain
+`linked_async_reactor_paths` (`0x168`), `poll_generated_reactor_once`
+(`0xaf6`), and `linked_async_drop_path` (`0x137`). The hooks are black-boxed
+but uncalled, so this is link evidence, not executor, IRQ, cancellation/drop
+runtime, arbitrary-waker allocation, or silicon evidence.
+
+**Observation — implementation review (2026-08-09):** Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after tracing the pinned HAL, protocol/preflight, slot races, resource paths,
+controls, target hooks, and CI. The retained report is
+`reviews/2026-08-09-async-region-implementation-precommit-claude.md`.
 
 ## Publication mechanics evidence (2026-08-09)
 

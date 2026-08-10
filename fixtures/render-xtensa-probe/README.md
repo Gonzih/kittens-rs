@@ -1,82 +1,101 @@
 # kittens-render Xtensa compile/link probe
 
-This standalone firmware crate links both profile-owned ESP32-S3 SPI2 paths
-against the exact audited `esp-hal` revision
-`d48f747ba28accdc51779ba193eba923138e0382`: the sealed blocking SH8601 region
-transport, followed by the interrupt-driven owning-completion adapter. Its
-empty `[workspace]` table is intentional: the fixture must use the Espressif
-`esp` toolchain and a git dependency rather than inherit the root workspace.
-The direct dependency and `kittens-render`'s target-only dependency use the
-same git URL and revision, so the `SpiDma` resource has one Cargo source
+This standalone firmware crate links the sealed blocking SH8601 region writer
+and the branded single-payload async adapter against audited `esp-hal` revision
+`d48f747ba28accdc51779ba193eba923138e0382`. Its empty `[workspace]` table is
+intentional: the fixture needs the Espressif `esp` toolchain and git-pinned HAL
+without joining the stock-Rust root workspace. The direct HAL dependency and
+`kittens-render`'s target-only dependency therefore resolve to one Cargo source
 identity.
 
 Build from this directory:
 
 ```sh
-. "$HOME/export-esp.sh" && cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
+. "$HOME/export-esp.sh"
+cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf -- -D warnings
+cargo +esp clippy --release --locked --target xtensa-esp32s3-none-elf \
+  --manifest-path ../../crates/kittens-render/Cargo.toml \
+  --no-default-features --features esp32s3-sh8601-async --lib -- -D warnings
+cargo +esp build --release --locked --target xtensa-esp32s3-none-elf
 ```
 
-**Fact:** the linked path is `#![no_std]`/`#![no_main]`, defines no allocator,
-uses `#[esp_hal::main]`, and binds real SPI2 plus GDMA channel 0 to the
-Waveshare V1 QSPI pins (SIO0–3 GPIO4–7, SCK GPIO11, CS GPIO12) at 40 MHz mode
-0. The profile transport first owns exact 16,380-byte RX and TX DMA scratch
-buffers, restores a deliberately caller-shortened TX descriptor-chain length
-from 1 to 16,380, and links a 368×112 region call over separate static
-82,432-byte pixel storage. The retained path necessarily invokes the shared
-engine's CASET, PASET, RAMWR, and five RAMWRC HAL calls, including the final
-532-byte chunk.
+**Fact (source boundary):** the firmware is `#![no_std]`/`#![no_main]`, defines
+no allocator, uses `#[esp_hal::main]`, and keeps the revision-10 blocking path
+on the executable entry path. That path binds SPI2 plus GDMA channel 0 to the
+Waveshare V1 QSPI roles (SIO0–3 GPIO4–7, SCK GPIO11, CS GPIO12) at 40 MHz mode
+0. It gives the sealed blocking transport symmetric 16,380-byte command
+scratch, restores a deliberately shortened TX descriptor chain, and retains a
+368×112 write over separate 82,432-byte pixel storage: CASET, PASET, RAMWR,
+four full RAMWRC chunks, and a final 532-byte RAMWRC chunk.
 
-**Fact:** after `BlockingSettled::into_parts`, the fixture verifies the pixel
-pointer and sweep settlement, then `SpiDmaBus::split` recovers the exact
-`SpiDma`, `DmaRxBuf`, and `DmaTxBuf` identities. The recovered `SpiDma` is the
-one moved into the existing asynchronous probe; the blocking path is therefore
-part of the entry-point ownership path retained in the linked firmware, not an
-unused generic instantiation. A separately named helper accepts arbitrary
-same-source `SpiDma` and scratch parts, pinning the documented configuration-
-honesty escape.
+**Fact (source boundary):** the superseded fixture-local RAMWR-only adapter is
+gone. The standalone manifest enables `kittens-render`'s
+`esp32s3-sh8601-async` feature, depends on `kittens` only for its no-default
+`macros` feature, and has no direct `critical-section` dependency. The profile
+now owns the exact SPI2 completion slot, HAL mapping, branded constructor,
+window preamble, start-error recovery, cancel/recover, and drop behavior.
 
-**Fact:** the asynchronous adapter module forbids unsafe code and implements
-the current `kittens_render::transfer::OwnedTransfer` contract:
-`poll_done -> Poll<()>`,
-register-then-recheck, cancellation linearization plus progress wake, outcome
-authority in consuming `recover`, candidate-waker clone before the global
-critical section with replaced/unused wakers dropped after exclusion,
-`wait()` recovery, and synchronous cancel/wait/disarm cleanup on ordinary
-drop. The firmware statically checks
-the concrete wrapper and its `InFlight` carrier are `Unpin`, identity-checks
-the outer spare, and starts a second transfer with the recovered driver.
+**Fact (source boundary):** `linked_async_reactor_paths` constructs a real
+branded 368×16 flight and a generated `kittens::reactor!` over
+`OptionalInlineOneShot<InFlight<...>>`. Its linked handler paths recover and
+settle two completed stripes, rearm the same carrier after each, then borrow
+the accepted third flight through `future_mut` for drain. The final handler
+keeps distinct `Completed` and `Cancelled` reconciliation branches and aborts
+the ready or poisoned sweep. A separate `#[inline(never)]` shim pins and
+black-boxes the generated future and performs exactly one `Waker::noop` poll;
+there is no fixture executor or manual polling loop.
 
-**Observation:** a successful link and clean allocator-symbol inspection close
-only the exact HAL API, vector-binding, Rust ownership, no-allocation, safe
-`SpiDmaBus` construction/split, and no-self-reference questions named by the
-profile contract. This fixture manually polls `InFlight`; it does not
-establish target-side generated-reactor execution or behavior on silicon.
+**Fact (source boundary):** `linked_async_drop_path` constructs one accepted
+real flight, arms the complete source owner, explicitly drops that owner,
+drops the outstanding sweep, then calls `FrameDemand::abandon_active`. The
+entry point coerces both outer hooks to function pointers and black-boxes the
+pointers without calling either. The hooks therefore retain target
+monomorphizations without claiming observed settlement, cancellation, or drop.
 
-**Fact (revision-10 run, 2026-08-09):** a fresh locked optimized link produced
-a statically linked, unstripped 32-bit little-endian Tensilica Xtensa
-executable; `readelf -h` identified `EXEC` and entry point `0x403785e8`. The
-final artifact was 208,496 bytes with SHA-256
-`648e43a0c03d89d71737d7dd20ff0390d6275b08b4f1f297d15d443af6c68513`;
-`xtensa-esp32s3-elf-size -A` reported 116,988 bytes of `.bss`. The complete
-demangled symbol table contained the concrete `Sh8601Wire::write`
-implementation and contained none of the allocator entry points or Rust
-allocation-module symbols listed in the deployment target procedure;
-`nm -u -C` was empty.
+Three target-only compile-fail bins pin configuration admission at the public
+`Waveshare18V1Sh8601Parts::new` boundary:
 
-**Fact:** the post-revision-8 replacement command output and linked artifact
-metadata are recorded in `TRACE-MANIFEST.md` and `K2R0A-LOG.md`. The
-`xtensa-link` CI job repeats the release link from an uncached target directory
-and inspects the resulting Xtensa executable. It requires an empty undefined-
-symbol table, retains the concrete wire symbol, and rejects allocator symbols;
-it does not substitute `cargo check` for linking.
+- `compile-fail-spi3` substitutes SPI3 for SPI2;
+- `compile-fail-dma-ch1` substitutes DMA_CH1 for DMA_CH0; and
+- `compile-fail-swapped-sio` swaps the GPIO4/GPIO5 SIO roles.
 
-**Gap: SPI2 interrupt delivery, exact wake counts, completion-before-first-poll
-visibility, and cancel/drain behavior remain board-HIL gated (no data exists).**
+CI requires each command to fail with E0308 in its own fixture and checks the
+expected and actual singleton names. These are negative controls for the
+profile-owned brand, not claims about raw HAL calls, which still compile
+outside the adapter. The `compile-pass-parts` control separately constructs,
+extracts, and reconstructs the exact SPI2/DMA_CH0/GPIO4–7/11/12 tuple and
+type-checks both public `try_new` result arms.
 
-**Fact:** the separate kernel-admitted completion-source gate is closed with
-host + portable-link scope by the real-reactor host oracles and the Thumb/wasm
-downstream fixture. This Xtensa probe is an explicit non-control for that row.
+**Fact (revision-11 run, 2026-08-09):** the direct profile-library target
+Clippy, standalone fixture target Clippy, and optimized locked link passed. The
+ELF is 214,352 bytes with SHA-256
+`30cd240176d206d6483e04fd0f2384ced2b101491ff6e516ec635a4bbd98664a`,
+entry `0x403785e8`, and 115,492 bytes of `.bss`. The undefined-symbol table and
+allocator scan are empty. `nm -S -C` retains nonzero text symbols for
+`linked_async_reactor_paths` (`0x168`), `poll_generated_reactor_once`
+(`0xaf6`), and `linked_async_drop_path` (`0x137`), plus the blocking wire
+symbol. The three branded target failures reach their intended E0308
+diagnostics and the Parts roundtrip control passes.
 
-**Gap: panel initialization and command acceptance, physical region placement,
-RAMWRC interpretation, RGB565 channel/byte fidelity, visible output, tearing,
-and timing remain board-HIL gated (no data exists).**
+**Fact (revision-10 run, 2026-08-09):** the previous blocking-region fixture
+produced a statically linked, unstripped 32-bit little-endian Tensilica Xtensa
+executable. `readelf -h` identified `EXEC` and entry point `0x403785e8`; the
+artifact was 208,496 bytes with SHA-256
+`648e43a0c03d89d71737d7dd20ff0390d6275b08b4f1f297d15d443af6c68513`,
+and `.bss` was 116,988 bytes. Its undefined-symbol table was empty, the
+blocking wire implementation was retained, and the documented allocator scan
+was clean. That chronology remains evidence only for revision 10.
+
+**Observation:** the revision-11 link closes only exact HAL API, vector
+binding, Rust ownership, branded type rejection, retained generated code, and
+allocator-symbol questions. Because the async hooks are not called,
+it is explicitly not evidence for executor scheduling, SPI2 interrupt
+delivery, wake counts, completion/cancellation races, drop at runtime, panel
+commands, or pixels on silicon. The allocator scan constrains this exact
+noop-waker binary only; an arbitrary executor's `RawWaker` callbacks may
+allocate or perform other unchecked work.
+
+**Gap: physical panel initialization and command acceptance, SPI2 interrupt
+delivery, exact wake counts, async cancellation/drop behavior on silicon,
+region placement, RGB565 fidelity, visible output, tearing, and timing (no data
+exists).** These remain board-HIL gates.

@@ -1,14 +1,14 @@
 #![no_std]
 #![no_main]
-
-mod adapter;
+#![forbid(unsafe_code)]
 
 use core::{
+    convert::Infallible,
+    future::Future,
     panic::PanicInfo,
     task::{Context, Poll, Waker},
 };
 
-use adapter::{Spi2RegionStart, Spi2TxTransfer, StartError};
 use esp_hal::{
     Blocking,
     dma::{DmaRxBuf, DmaTxBuf},
@@ -18,30 +18,45 @@ use esp_hal::{
     },
     time::Rate,
 };
+use kittens::{reactor::Control, source::OptionalInlineOneShot};
 use kittens_render::{
     blocking::SH8601_DMA_CHUNK_BYTES,
     demand::{FrameDemand, Tick},
     esp32s3_sh8601::Esp32s3Sh8601BlockingTransport,
+    esp32s3_sh8601_async::{
+        Waveshare18V1Sh8601Parts, Waveshare18V1Sh8601StartError, Waveshare18V1Sh8601Transfer,
+        Waveshare18V1Sh8601Transport,
+    },
     geometry::PanelGeometry,
-    sweep::SweepPlan,
+    sweep::{Sweep, SweepPlan},
     transfer::{InFlight, StartFlightError, TransferOutcome},
 };
 
-const STRIPE_HEIGHT: u16 = 1;
-const STRIPE_BYTES: usize = 368 * STRIPE_HEIGHT as usize * 2;
+const ASYNC_STRIPE_HEIGHT: u16 = 16;
+const ASYNC_STRIPE_BYTES: usize = 368 * ASYNC_STRIPE_HEIGHT as usize * 2;
 const BLOCKING_STRIPE_HEIGHT: u16 = 112;
 const BLOCKING_REGION_BYTES: usize = 368 * BLOCKING_STRIPE_HEIGHT as usize * 2;
 
-fn assert_unpin<T: Unpin>() {}
+type AsyncFlight = InFlight<Waveshare18V1Sh8601Transfer<'static>, DmaTxBuf>;
+type AsyncCompletion = OptionalInlineOneShot<AsyncFlight>;
+type AsyncReactorHook =
+    fn(Waveshare18V1Sh8601Parts<'static>, DmaTxBuf, DmaTxBuf) -> Poll<Result<(), Infallible>>;
+type AsyncDropHook = fn(Waveshare18V1Sh8601Parts<'static>, DmaTxBuf, DmaTxBuf);
 
-fn assert_probe_types_are_unpin() {
-    assert_unpin::<Spi2TxTransfer<'static, DmaTxBuf>>();
-    assert_unpin::<InFlight<Spi2TxTransfer<'static, DmaTxBuf>, DmaTxBuf>>();
+struct AsyncSources {
+    transfer_done: AsyncCompletion,
 }
 
-/// Pins the documented configuration-honesty escape: admission accepts any
-/// same-source blocking SPI DMA driver and suitably sized scratch buffers.
-fn admit_unbranded_transport<'d>(
+fn assert_unpin<T: Unpin>() {}
+
+fn assert_async_types_are_unpin() {
+    assert_unpin::<Waveshare18V1Sh8601Transfer<'static>>();
+    assert_unpin::<AsyncFlight>();
+}
+
+/// Pins the documented blocking configuration-honesty escape: admission
+/// accepts any same-source SPI DMA driver with suitably sized scratch.
+fn admit_unbranded_blocking_transport<'d>(
     spi: SpiDma<'d, Blocking>,
     rx: DmaRxBuf,
     tx: DmaTxBuf,
@@ -49,56 +64,224 @@ fn admit_unbranded_transport<'d>(
     Esp32s3Sh8601BlockingTransport::try_new(spi, rx, tx)
 }
 
-fn observe_start_failure<'d>(failure: StartFlightError<StartError<'d>, DmaTxBuf>) -> ! {
+fn admit_branded_async_transport(
+    parts: Waveshare18V1Sh8601Parts<'static>,
+) -> Waveshare18V1Sh8601Transport<'static> {
+    match Waveshare18V1Sh8601Transport::try_new(parts) {
+        Ok(transport) => transport,
+        Err(parts) => {
+            // This is a compile/link witness for the exact inverse tuple. The
+            // retained hook is never invoked, so it records no runtime branch.
+            core::hint::black_box(parts.into_parts());
+            panic!("exact async command scratch was rejected")
+        }
+    }
+}
+
+fn start_async_flight(
+    sweep: &mut Sweep<()>,
+    transport: Waveshare18V1Sh8601Transport<'static>,
+    sent: DmaTxBuf,
+    spare: DmaTxBuf,
+) -> AsyncFlight {
+    let target = sweep.next_target().expect("another 16-row stripe target");
+    match target.start_flight(spare, transport.into_start(sent)) {
+        Ok(flight) => flight,
+        Err(failure) => observe_async_start_failure(failure),
+    }
+}
+
+fn observe_async_start_failure(
+    failure: StartFlightError<Waveshare18V1Sh8601StartError<'static>, DmaTxBuf>,
+) -> ! {
     let (error, spare, target) = failure.into_parts();
-
-    match error {
-        StartError::RegionTooLarge { spi, buffer } => {
-            core::hint::black_box(spi);
-            core::hint::black_box(buffer);
-        }
-        StartError::Hal { error, spi, buffer } => {
-            core::hint::black_box(error);
-            core::hint::black_box(spi);
-            core::hint::black_box(buffer);
-        }
-    }
-
-    core::hint::black_box(spare);
-    core::hint::black_box(target);
-    panic!("SH8601 transfer rejected before acceptance")
+    core::hint::black_box(error.failure());
+    let (failure, transport, pixels) = error.into_parts();
+    core::hint::black_box((failure, transport, pixels, spare, target));
+    panic!("profile async transfer rejected before acceptance")
 }
 
-fn poll_to_settlement<'d>(
-    flight: &mut InFlight<Spi2TxTransfer<'d, DmaTxBuf>, DmaTxBuf>,
-) -> kittens_render::transfer::Settled<SpiDma<'d, Blocking>, DmaTxBuf, DmaTxBuf> {
+/// Polls a generated reactor exactly once with the allocation-free noop waker.
+///
+/// This is a link shim, not an executor: a pending result is returned directly
+/// and no loop invents scheduling or target-runtime evidence.
+#[inline(never)]
+fn poll_generated_reactor_once<F: Future>(future: F) -> Poll<F::Output> {
+    let mut future = core::pin::pin!(future);
     let mut cx = Context::from_waker(Waker::noop());
-    loop {
-        match flight.poll_complete(&mut cx) {
-            Poll::Ready(settled) => break settled,
-            Poll::Pending => core::hint::spin_loop(),
-        }
-    }
+    core::hint::black_box(future.as_mut()).poll(&mut cx)
 }
 
-/// Links one multichunk blocking region write, then two owning transfers.
+/// Retains real generated-reactor handler paths for two completed stripes,
+/// same-carrier rearm, and an honestly raced third-flight drain.
+///
+/// The firmware entry point only retains this function pointer. Even if a
+/// board owner called it, the shim would poll once and return; this function is
+/// deliberately not a target executor.
+#[inline(never)]
+fn linked_async_reactor_paths(
+    parts: Waveshare18V1Sh8601Parts<'static>,
+    mut sent: DmaTxBuf,
+    mut spare: DmaTxBuf,
+) -> Poll<Result<(), Infallible>> {
+    sent.set_length(ASYNC_STRIPE_BYTES);
+    spare.set_length(ASYNC_STRIPE_BYTES);
+
+    let transport = admit_branded_async_transport(parts);
+    let plan = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, ASYNC_STRIPE_HEIGHT)
+        .expect("admitted 16-row async plan");
+    let mut demand = FrameDemand::new(0, plan);
+    demand.request();
+    let mut sweep = Some(
+        demand
+            .begin_sweep(Tick(0), ())
+            .expect("requested async sweep starts"),
+    );
+    let first_flight = start_async_flight(
+        sweep.as_mut().expect("active async sweep"),
+        transport,
+        sent,
+        spare,
+    );
+    let mut sources = AsyncSources {
+        transfer_done: AsyncCompletion::from_future(first_flight),
+    };
+    let mut completed_stripes = 0_u8;
+    let mut drain_requested = false;
+
+    let future = async {
+        kittens::reactor! {
+            policy {
+                selection: biased;
+                required_phases: [before_poll];
+            }
+
+            /// The third accepted flight must settle through the same carrier;
+            /// cancellation is requested in place so ownership still returns
+            /// through the completion handler.
+            before_poll {
+                if completed_stripes == 2 && !drain_requested {
+                    let flight = sources
+                        .transfer_done
+                        .future_mut()
+                        .expect("third accepted flight remains armed");
+                    flight.begin_drain();
+                    drain_requested = true;
+                }
+                Ok(())
+            }
+
+            /// Each settlement owns transport, sent buffer, spare, and the
+            /// move-only sweep witness before the same carrier can be rearmed.
+            #[source(transfer_done)]
+            #[readiness(quiescent)]
+            settled = sources.transfer_done => {
+                let outcome = settled.outcome();
+                let (transport, sent, spare, witness) = settled.into_parts();
+                let reconciled = sweep
+                    .as_mut()
+                    .expect("active async sweep")
+                    .settle(witness)
+                    .expect("settlement belongs to the active stripe");
+
+                if completed_stripes < 2 {
+                    if outcome != TransferOutcome::Completed
+                        || reconciled != TransferOutcome::Completed
+                    {
+                        panic!("the first two linked paths require completed writes");
+                    }
+
+                    completed_stripes += 1;
+                    let next_flight = start_async_flight(
+                        sweep.as_mut().expect("active async sweep"),
+                        transport,
+                        spare,
+                        sent,
+                    );
+                    if let Err(already_armed) = sources.transfer_done.arm(next_flight) {
+                        core::hint::black_box(already_armed.into_inner());
+                        panic!("completion carrier remained armed in its handler");
+                    }
+                    Ok(Control::Continue)
+                } else {
+                    match outcome {
+                        TransferOutcome::Completed => {
+                            if reconciled != TransferOutcome::Completed {
+                                panic!("completed drain settlement changed classification");
+                            }
+                        }
+                        TransferOutcome::Cancelled => {
+                            if reconciled != TransferOutcome::Cancelled
+                                || !sweep.as_ref().expect("active async sweep").is_poisoned()
+                            {
+                                panic!("cancelled drain must poison its owning sweep");
+                            }
+                        }
+                        TransferOutcome::Failed => {
+                            panic!("the concrete SPI2 adapter has no post-start fault source");
+                        }
+                    }
+
+                    let (aborted, ()) = sweep
+                        .take()
+                        .expect("active async sweep")
+                        .abort()
+                        .expect("third settlement clears the outstanding stripe");
+                    let _retained_resources =
+                        core::hint::black_box((transport, sent, spare, aborted));
+                    Ok(Control::Stop(()))
+                }
+            }
+        }
+    };
+
+    poll_generated_reactor_once(future)
+}
+
+/// Retains the explicit resource-losing escape and concrete transfer drop
+/// glue for an armed profile flight.
+///
+/// The required recovery order is visible: drop the complete source owner,
+/// drop the old outstanding sweep, then abandon the active demand epoch.
+#[inline(never)]
+#[allow(clippy::drop_non_drop)] // Explicit old-owner drop is the recovery protocol boundary.
+fn linked_async_drop_path(
+    parts: Waveshare18V1Sh8601Parts<'static>,
+    mut sent: DmaTxBuf,
+    mut spare: DmaTxBuf,
+) {
+    sent.set_length(ASYNC_STRIPE_BYTES);
+    spare.set_length(ASYNC_STRIPE_BYTES);
+
+    let transport = admit_branded_async_transport(parts);
+    let plan = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, ASYNC_STRIPE_HEIGHT)
+        .expect("admitted 16-row async plan");
+    let mut demand = FrameDemand::new(0, plan);
+    demand.request();
+    let mut sweep = demand
+        .begin_sweep(Tick(0), ())
+        .expect("requested async drop sweep starts");
+    let flight = start_async_flight(&mut sweep, transport, sent, spare);
+    let sources = AsyncSources {
+        transfer_done: AsyncCompletion::from_future(flight),
+    };
+
+    drop(sources);
+    drop(sweep);
+    demand.abandon_active();
+    core::hint::black_box(demand);
+}
+
+/// Executes the previously closed multichunk blocking-region gate and retains
+/// the two uncalled async evidence hooks in the same linked image.
 #[esp_hal::main]
 fn main() -> ! {
-    assert_probe_types_are_unpin();
+    assert_async_types_are_unpin();
 
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    // These two macro invocations instantiate distinct static descriptor arrays
-    // and static DMA storage, then the explicit constructors create both owned
-    // DmaTxBuf values without an allocator.
-    let (_rx_a, _rx_descriptors_a, tx_a, tx_descriptors_a) = esp_hal::dma_buffers!(0, STRIPE_BYTES);
-    let (_rx_b, _rx_descriptors_b, tx_b, tx_descriptors_b) = esp_hal::dma_buffers!(0, STRIPE_BYTES);
-    let mut sent = DmaTxBuf::new(tx_descriptors_a, tx_a).expect("first DMA buffer");
-    let mut spare = DmaTxBuf::new(tx_descriptors_b, tx_b).expect("second DMA buffer");
-
     // The blocking adapter owns symmetric fixed DMA scratch reserves. The
-    // separate pixel storage is larger than one scratch chunk so the real HAL
-    // path must issue RAMWR followed by five RAMWRC calls.
+    // separate pixel storage spans six pixel commands (RAMWR + five RAMWRC).
     let (blocking_rx_bytes, blocking_rx_descriptors, blocking_tx_bytes, blocking_tx_descriptors) =
         esp_hal::dma_buffers!(SH8601_DMA_CHUNK_BYTES, SH8601_DMA_CHUNK_BYTES);
     let (_pixel_rx, _pixel_rx_descriptors, blocking_pixels, _pixel_tx_descriptors) =
@@ -107,24 +290,17 @@ fn main() -> ! {
         DmaRxBuf::new(blocking_rx_descriptors, blocking_rx_bytes).expect("blocking RX scratch");
     let mut blocking_tx =
         DmaTxBuf::new(blocking_tx_descriptors, blocking_tx_bytes).expect("blocking TX scratch");
-    // Pin the capacity-only admission regression: the public constructor must
-    // restore a caller-shortened descriptor chain before the first HAL write.
+    // Capacity admission must restore a deliberately shortened descriptor
+    // chain before the first HAL write.
     blocking_tx.set_length(1);
-
-    sent.as_mut_slice().fill(0x5a);
-    spare.as_mut_slice().fill(0xc3);
     blocking_pixels.fill(0x96);
-    sent.set_length(STRIPE_BYTES);
-    spare.set_length(STRIPE_BYTES);
 
-    let sent_identity = sent.as_slice().as_ptr();
-    let spare_identity = spare.as_slice().as_ptr();
     let blocking_rx_identity = blocking_rx.as_slice().as_ptr();
     let blocking_tx_identity = blocking_tx.as_slice().as_ptr();
     let blocking_pixels_identity = blocking_pixels.as_ptr();
 
     // Waveshare ESP32-S3 1.8-inch AMOLED V1 QSPI routing: SPI2/GDMA_CH0,
-    // SIO0..3 GPIO4..7, SCK GPIO11, and CS GPIO12 at the audited 40 MHz mode.
+    // SIO0..3 GPIO4..7, SCK GPIO11, and CS GPIO12 at 40 MHz mode 0.
     let spi = Spi::new(
         peripherals.SPI2,
         SpiConfig::default()
@@ -140,9 +316,7 @@ fn main() -> ! {
     .with_sck(peripherals.GPIO11)
     .with_dma(peripherals.DMA_CH0);
 
-    // Exercise the complete admitted region operation before handing the
-    // recovered SpiDma to the pre-existing interrupt-driven async probe.
-    let blocking_writer = match admit_unbranded_transport(spi, blocking_rx, blocking_tx) {
+    let blocking_writer = match admit_unbranded_blocking_transport(spi, blocking_rx, blocking_tx) {
         Ok(writer) => writer,
         Err((_spi, _rx, _tx)) => panic!("exact blocking scratch was rejected"),
     };
@@ -182,70 +356,20 @@ fn main() -> ! {
     {
         panic!("blocking scratch identity or admitted TX length changed");
     }
-    core::hint::black_box(returned_pixels);
-    core::hint::black_box(blocking_rx);
-    core::hint::black_box(blocking_tx);
-    core::hint::black_box(blocking_sweep);
+    core::hint::black_box((
+        spi,
+        returned_pixels,
+        blocking_rx,
+        blocking_tx,
+        blocking_sweep,
+    ));
 
-    let plan = SweepPlan::for_panel(PanelGeometry::WAVESHARE_18_V1, STRIPE_HEIGHT)
-        .expect("admitted one-row plan");
-    let mut demand = FrameDemand::new(0, plan);
-    demand.request();
-    let mut sweep = demand
-        .begin_sweep(Tick(0), ())
-        .expect("requested sweep starts");
-
-    // The target-bound public entry point moves the actual first transfer and
-    // the distinct spare into InFlight, so this is not an unused generic probe.
-    let first_target = sweep.next_target().expect("first stripe target");
-    let mut first_flight =
-        match first_target.start_flight(spare, Spi2RegionStart { spi, buffer: sent }) {
-            Ok(flight) => flight,
-            Err(failure) => observe_start_failure(failure),
-        };
-    let first_settled = poll_to_settlement(&mut first_flight);
-    let (spi, sent, mut spare, first_witness) = first_settled.into_parts();
-
-    if spare.as_slice().as_ptr() != spare_identity {
-        panic!("outer spare identity changed during first transfer");
-    }
-    if sent.as_slice().as_ptr() != sent_identity {
-        panic!("sent buffer identity changed during first transfer");
-    }
-    if sweep.settle(first_witness) != Ok(TransferOutcome::Completed) {
-        panic!("first transfer did not settle completed");
-    }
-
-    // Reuse the recovered driver for a second real half-duplex transfer. Rotate
-    // the two recovered buffers so the former sent buffer is now the outer
-    // spare, then cancel-and-recover it through the current trait contract.
-    spare.as_mut_slice().fill(0xa5);
-    spare.set_length(STRIPE_BYTES);
-    let second_target = sweep.next_target().expect("second stripe target");
-    let mut second_flight =
-        match second_target.start_flight(sent, Spi2RegionStart { spi, buffer: spare }) {
-            Ok(flight) => flight,
-            Err(failure) => observe_start_failure(failure),
-        };
-    second_flight.begin_drain();
-    let second_settled = poll_to_settlement(&mut second_flight);
-    let second_outcome = second_settled.outcome();
-    let (spi, second_sent, second_spare, second_witness) = second_settled.into_parts();
-
-    if second_spare.as_slice().as_ptr() != sent_identity
-        || second_sent.as_slice().as_ptr() != spare_identity
-    {
-        panic!("buffer identity changed during second transfer");
-    }
-    if sweep.settle(second_witness) != Ok(second_outcome) {
-        panic!("second settlement witness mismatch");
-    }
-
-    // Keep the fully recovered ownership graph observable in the linked image.
-    core::hint::black_box(spi);
-    core::hint::black_box(second_sent);
-    core::hint::black_box(second_spare);
-    core::hint::black_box(second_outcome);
+    // Function-pointer coercion, not a zero-sized function item, makes both
+    // unexecuted evidence hooks reachable to the linker. Neither is called.
+    let reactor_hook: AsyncReactorHook = linked_async_reactor_paths;
+    let drop_hook: AsyncDropHook = linked_async_drop_path;
+    core::hint::black_box(reactor_hook);
+    core::hint::black_box(drop_hook);
 
     loop {
         core::hint::spin_loop();

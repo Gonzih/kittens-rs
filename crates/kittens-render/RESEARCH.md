@@ -10,9 +10,10 @@
   audit that informed SPEC revision 11's additive single-payload adapter.
 - Status: research record for the embedded rendering/interaction profile.
   SPEC revision 10's blocking row is closed with host + exact-Xtensa-link
-  scope. Revision 11 selects the concrete async-region design, whose
-  implementation evidence remains gated until its exact host and target matrix
-  runs.
+  scope. Revision 11's concrete async-region design is implemented and its
+  evidence row is closed with host + exact-Xtensa-reactor-link scope after the
+  exact host and target matrix passed. Target execution, silicon behavior, and
+  the generic capability freeze remain separate gates.
 - Parent evidence: root [`RESEARCH.md`](../../RESEARCH.md) sections 20/20B; [`crates/kittens-tui/SPEC.md`](../kittens-tui/SPEC.md) section 10; [`crates/kittens/src/source/mod.rs`](../kittens/src/source/mod.rs) (the sealed kernel source contract, which section 5 shows is itself a constraint here)
 - Labels: **Fact** / **Observation** / **Hypothesis** / **Recommendation**; unresolved questions are `**Gap: ...**`
 
@@ -77,9 +78,20 @@ pub struct StripeInFlight<C, B> { completion: C /* pin before polling */, spare:
 
 ## 5. The kernel is a constraint here, and that is a finding about the kernel
 
-**Fact (finding 2):** DMA completion cannot currently be a reactor source. `ReactorSource` is sealed and `Unpin` with `&mut self` polling; `Latched` is locally armed only, with no concurrent arming handle and no ISR wake. The HAL's completion future borrows the owned transfer and is generally `!Unpin`. Reconstructing that future per poll is invalid (dropping it removes the completion listener).
+**Superseded fact (finding 2, resolved by SPEC revisions 9 and 11):** DMA
+completion could not then be a reactor source. `ReactorSource` was sealed and
+`Unpin` with `&mut self` polling; `Latched` was locally armed only, with no
+concurrent arming handle and no ISR wake. The HAL's completion future borrows
+the owned transfer and is generally `!Unpin`; reconstructing it per poll would
+drop its listener.
 
-**Recommendation:** this graduates from profile problem to **kernel feasibility gate (K2R-0A)**: either the kernel admits pinned no-std sources (`poll_next(self: Pin<&mut Self>, ...)` — the pin-boundary comparison root SPEC 37.6 explicitly reserved), or the profile explicitly admits a named Embassy task/channel boundary for completion delivery. Neither is hidden behind an abstraction; the K0 report's provisional pin/`Unpin` row anticipated exactly this pressure.
+**Observation:** the selected resolution does not reconstruct that HAL future
+or unseal `ReactorSource`. The kernel now admits the sealed, inline,
+rearmable `OptionalInlineOneShot<F>` for `F: Future + Unpin`; render's
+conditionally-`Unpin` owning `InFlight` retains one reviewed SPI2 completion
+slot future across polls. The real-reactor host/portable row and the branded
+adapter's host + exact-Xtensa-reactor-link row are closed with their named
+scopes. Target execution and silicon interrupt truth remain gated.
 
 **Fact (finding 9):** the FT3168 path has the same shape: a one-bit latch cleared after a multi-transaction I²C read loses or fabricates input under IRQ interleavings. **Recommendation:** ISR-side wake-aware *generation* latch; task-side single contiguous register snapshot; parse count/event/ID from that snapshot; drain while INT is asserted; restore pending state on I²C failure; and the source declares itself as *latest-state-with-coalescing* or *lossless-transitions* — one latch cannot promise both.
 

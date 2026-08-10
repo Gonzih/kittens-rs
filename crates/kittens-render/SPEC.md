@@ -3,8 +3,9 @@
 - Status: revision 11, 2026-08-09 (the additive, non-freezing async-region
   contract selects one profile-owned, board-branded ESP32-S3/SH8601 adapter
   before implementation. One accepted flight emits the exact window and one
-  owning RAMWR payload of at most 16,380 bytes; its host + exact-Xtensa-reactor-
-  link evidence row remains **OPEN** until the matrix below passes. Generic
+  owning RAMWR payload of at most 16,380 bytes; its evidence row is now
+  **CLOSED WITH HOST + EXACT-XTENSA-REACTOR-LINK SCOPE** after the host matrix,
+  exact-HAL target Clippy/link, and source/symbol inspections passed. Generic
   `FlightStarter`/`OwnedTransfer` sealing remains reserved for the breaking
   freeze boundary). Revision 10's blocking-region contract selected one sealed,
   profile-owned ESP32-S3/SH8601 adapter and its exact command/failure matrix
@@ -35,11 +36,11 @@
   no-allocation, and no-self-reference feasibility, not behavior on silicon.
   The kernel-carrier gate is separately closed with host + portable-link scope.
   The revision-10 blocking `write_region` row is separately closed with host +
-  exact-Xtensa-link scope. The revision-11 concrete async adapter row is open
-  pending host + exact-Xtensa-reactor-link evidence. Bilateral seam co-sign,
-  published-registry Xtensa consumption, board HIL and silicon interrupt
-  delivery, target-side reactor execution, and async capability sealing remain
-  separately named gates below.
+  exact-Xtensa-link scope. The revision-11 concrete async adapter row is
+  separately closed with host + exact-Xtensa-reactor-link scope. Bilateral seam
+  co-sign, published-registry Xtensa consumption, board HIL and silicon
+  interrupt delivery, target-side reactor execution, and async capability
+  sealing remain separately named gates below.
 
 ## 1. One-sentence definition
 
@@ -397,10 +398,10 @@ Enforcement layers: private sweep/target provenance plus constructor admission
 for pairing and exact length; ordinary Rust borrowing for exclusive buffer
 access; deterministic draw-target tests for packing, translation, clipping,
 and global bounds; and the section-8 real-witness-chain pixel oracles for epoch
-reconstruction. This host integration does **not** prove the future physical
-transport adapter's byte ordering, panel `MADCTL` color order, physical color
-fidelity, TE behavior, or scene-replay cost. Those remain exact-adapter,
-board-HIL, and measurement gates.
+reconstruction. This host integration does **not** prove the target adapter's
+physical byte/channel interpretation or delivery, panel `MADCTL` color order,
+physical color fidelity, TE behavior, or scene-replay cost. Those remain exact-
+adapter, board-HIL, and measurement gates.
 
 ### 6.7 Blocking SH8601 region transport
 
@@ -418,9 +419,10 @@ This supersedes RESEARCH section 3's provisional open
 `BlockingRegionWrite<B>` spelling. Structural sealing and the dispatch permit
 serve different checks: the seal rejects unreviewed success reporters, while
 the permit prevents even an admitted writer from being dispatched outside the
-consuming target operation. The async traits remain open only because their
-experiment models and downstream probe implementations have not yet migrated
-to profile-owned admitted types.
+consuming target operation. The async traits remain open by the explicit non-
+freezing experiment contract; test models and the dishonest-starter negative
+control deliberately exercise that openness until a separately authorized
+breaking freeze seals the reviewed integration set.
 
 The complete public shape (under `kittens_render::blocking`, except for the
 target module named below) is:
@@ -1159,6 +1161,15 @@ pass. This reviews one additive implementation under the open traits. It does
 not seal them, authorize a 0.2.0 version change, prove a target executor, or
 close full K2R-0A.
 
+That matrix now passes for the named adapter: the host protocol, failure,
+scratch-admission, completion-slot, cancellation, recovery, reuse, and drop
+oracles execute; the three exact-singleton target failures and one Parts
+roundtrip control reach their intended diagnostics; and direct target-library
+Clippy plus the locked optimized fixture link, exact HAL source, empty
+undefined table, allocator-symbol absence, and retained reactor/poll/drop
+symbols pass. The scoped row is therefore closed. None of those observations
+execute the retained target hooks or broaden the exclusions above.
+
 TE measured behavior, panel initialization/command acceptance, physical region
 placement, RAMWRC interpretation, RGB565 channel/byte fidelity, visible
 output, tearing, latency, and per-backend measured peak memory/bandwidth remain
@@ -1318,3 +1329,14 @@ and drop-symbol scope, dependency boundary, and non-guarantees. Its changelog
 P3 was adopted; its two implementation watch items remain pinned above. The
 retained review is
 `reviews/2026-08-09-async-region-spec-precommit-claude.md`.
+
+Revision-11 implementation review, 2026-08-09: Claude Code 2.1.224
+`claude-opus-4-8` at maximum effort reported **SOUND, zero P0–P2 defects**
+after tracing the exact pinned-HAL API, protocol/preflight ordering,
+acceptance-atomic start, concrete-Waker register/recheck/cancel/drop races,
+resource recovery, singleton controls, generated-reactor/drop hooks, and CI
+enforcement. The host suite and exact target link/symbol/source matrix close
+only the named adapter's host + exact-Xtensa-reactor-link row; generic sealing,
+async RAMWRC, target execution, arbitrary-executor waker behavior, publication,
+the bilateral seam, and silicon remain open. The retained review is
+`reviews/2026-08-09-async-region-implementation-precommit-claude.md`.
